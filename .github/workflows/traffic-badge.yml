@@ -1,0 +1,55 @@
+name: Traffic Badge
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: traffic-badge-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update traffic badge
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'quuxio'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Fetch repository traffic
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { printf 'TRAFFIC_TOKEN is required.\n' >&2; exit 1; }
+          mkdir -p .badges
+          gh api "repos/${GITHUB_REPOSITORY}/traffic/views" > /tmp/otelc-traffic.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          traffic = json.loads(Path('/tmp/otelc-traffic.json').read_text())
+          badge = {
+              'schemaVersion': 1,
+              'label': 'traffic',
+              'message': f"{traffic['uniques']:,} unique / {traffic['count']:,} views / 14d",
+              'color': 'blue',
+          }
+          Path('.badges/traffic.json').write_text(json.dumps(badge, separators=(',', ':')) + '\n')
+          PY
+      - name: Commit the updated badge
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .badges/traffic.json; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .badges/traffic.json
+          git commit -m 'chore: update traffic badge'
+          git push

@@ -1,0 +1,25 @@
+name: Design or feature proposal
+description: Propose a concrete native instrumentation contract.
+title: '[Design]: '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and intended behaviour
+      description: Link the relevant design document or milestone.
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Design and alternatives
+      description: Explain compiler/runtime boundaries, compatibility, and telemetry semantics.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Validation and acceptance
+      description: Describe the tests, platforms, and evidence needed to call this supported.
+    validations:
+      required: true

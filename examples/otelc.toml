@@ -1,0 +1,40 @@
+# Proposed schema; the product parser and runtime are not implemented yet.
+schema_version = 1
+
+[build]
+backend = "callbacks"
+include = ["src/**/*.c", "src/**/*.cpp"]
+exclude = ["third_party/**", "vendor/**", "generated/**"]
+
+[functions]
+include = ["Trading::*", "OrderBook::*", "FixSession::*"]
+exclude = ["std::*", "otelc_*", "__cyg_profile_*", "*::operator*"]
+
+[runtime]
+max_functions = 4096
+max_threads = 128
+stack_depth = 256
+queue_capacity = 4096
+shutdown_timeout_ms = 2000
+
+[metrics]
+enabled = true
+histogram_boundaries_seconds = [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1.0]
+
+[traces]
+# Requires the later LLVM backend; callbacks reject enabled tracing.
+enabled = false
+root_sample_ratio = 0.01
+max_active_traces = 512
+max_spans_per_trace = 1024
+
+[export]
+protocol = "http/protobuf"
+endpoint = "http://localhost:4318"
+interval_ms = 5000
+timeout_ms = 1000
+max_queued_batches = 8
+
+[resource]
+service_name = "matching-engine"
+service_version = "development"
