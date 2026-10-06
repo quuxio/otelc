@@ -276,15 +276,22 @@ impl CommonConfig {
             if self.traces.enabled {
                 unavailable.push("Python span export is not implemented".into());
             }
-        } else if language == Language::JavaScript {
-            if backend != "loader" {
-                unavailable.push("JavaScript requires the loader backend".into());
+        } else if matches!(language, Language::JavaScript | Language::TypeScript) {
+            let required = if language == Language::TypeScript {
+                "source"
+            } else {
+                "loader"
+            };
+            if backend != required {
+                unavailable.push(format!("{language} requires the {required} backend"));
             }
             if self.lifetimes.enabled {
-                unavailable.push("automatic JavaScript lifetimes are not implemented".into());
+                unavailable.push(format!(
+                    "automatic {language} lifetimes are not implemented"
+                ));
             }
             if self.traces.enabled {
-                unavailable.push("JavaScript span export is not implemented".into());
+                unavailable.push(format!("{language} span export is not implemented"));
             }
         } else if !matches!(language, Language::C | Language::Cpp) {
             unavailable.push(format!("{language} adapter is not implemented"));

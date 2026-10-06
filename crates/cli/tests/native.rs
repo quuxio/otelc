@@ -652,6 +652,7 @@ fn common_configuration_inspection_and_capability_rejection() {
                 || language == "cpp"
                 || language == "python"
                 || language == "javascript"
+                || language == "typescript"
         );
     }
     success(cli(
@@ -769,52 +770,65 @@ fn common_configuration_native_c_and_exception_enabled_cpp() {
 }
 
 #[test]
-fn javascript_adapter_preserves_source_and_exports_decodable_sdk_metrics() {
-    let root = tempfile::tempdir().unwrap();
-    let source = "function selected(n){if(n<0)throw new Error('escaping');return n*2;}\n// otelc.instrument\nfunction annotated(){return 3;}\nconsole.log(selected(3)+annotated());try{selected(-1);}catch(error){if(error.message!=='escaping')throw error;}\n";
-    std::fs::write(root.path().join("app.cjs"), source).unwrap();
-    let (port, listener) = receiver();
-    std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['javascript']\n[sources]\ninclude=['*.cjs']\n[functions]\ninclude=['app.selected']\n[annotations]\nread_existing=true\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\ntimeout_ms=500\n")).unwrap();
-    let baseline = success(
-        Command::new("node")
-            .arg("app.cjs")
-            .current_dir(root.path())
-            .output()
-            .unwrap(),
-    );
-    let server = start_receiver(listener);
-    let instrumented = success(cli(&["node", "app.cjs"], root.path()));
-    assert_eq!(baseline.stdout, instrumented.stdout);
-    assert_eq!(
-        source.as_bytes(),
-        std::fs::read(root.path().join("app.cjs")).unwrap()
-    );
-    let request = server.join().unwrap();
-    assert_eq!(
-        counter(&request, "otelc.function.calls", Some("app.selected")),
-        2
-    );
-    assert_eq!(
-        counter(&request, "otelc.function.calls", Some("app.annotated")),
-        1
-    );
-    assert_eq!(
-        counter(&request, "otelc.function.unwinds", Some("app.selected")),
-        1
-    );
-    success(cli(&["--language", "javascript", "doctor"], root.path()));
-    let inspected = success(cli(
-        &["--language", "javascript", "inspect", "app.cjs", "--json"],
-        root.path(),
-    ));
-    let inventory: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
-    assert_eq!(inventory["functions"].as_array().unwrap().len(), 2);
-    for args in [
-        vec!["node"],
-        vec!["node", "--eval", "1"],
-        vec!["--language", "python", "node", "app.cjs"],
-    ] {
-        assert!(!cli(&args, root.path()).status.success());
+fn node_adapters_preserve_source_and_export_decodable_sdk_metrics() {
+    for (language, command, extension) in
+        [("javascript", "node", "cjs"), ("typescript", "ts", "cts")]
+    {
+        let root = tempfile::tempdir().unwrap();
+        let source = "function selected(n){if(n<0)throw new Error('escaping');return n*2;}\n// otelc.instrument\nfunction annotated(){return 3;}\nconsole.log(selected(3)+annotated());try{selected(-1);}catch(error){if(error.message!=='escaping')throw error;}\n";
+        let source = if language == "typescript" {
+            source
+                .replace("selected(n)", "selected(n:number)")
+                .replace("annotated()", "annotated():number")
+                .replace("+annotated():number", "+annotated()")
+        } else {
+            source.to_owned()
+        };
+        let filename = format!("app.{extension}");
+        std::fs::write(root.path().join(&filename), &source).unwrap();
+        let (port, listener) = receiver();
+        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['{language}']\n[sources]\ninclude=['*.{extension}']\n[functions]\ninclude=['app.selected']\n[annotations]\nread_existing=true\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\ntimeout_ms=500\n")).unwrap();
+        let baseline = success(
+            Command::new("node")
+                .arg(&filename)
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        let server = start_receiver(listener);
+        let instrumented = success(cli(&[command, &filename], root.path()));
+        assert_eq!(baseline.stdout, instrumented.stdout);
+        assert_eq!(
+            source.as_bytes(),
+            std::fs::read(root.path().join(&filename)).unwrap()
+        );
+        let request = server.join().unwrap();
+        assert_eq!(
+            counter(&request, "otelc.function.calls", Some("app.selected")),
+            2
+        );
+        assert_eq!(
+            counter(&request, "otelc.function.calls", Some("app.annotated")),
+            1
+        );
+        assert_eq!(
+            counter(&request, "otelc.function.unwinds", Some("app.selected")),
+            1
+        );
+        success(cli(&["--language", language, "doctor"], root.path()));
+        let inspected = success(cli(
+            &["--language", language, "inspect", &filename, "--json"],
+            root.path(),
+        ));
+        let inventory: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+        assert_eq!(inventory["functions"].as_array().unwrap().len(), 2);
+        for args in [
+            vec![command],
+            vec![command, "--eval", "1"],
+            vec!["--language", "python", command, &filename],
+        ] {
+            assert!(!cli(&args, root.path()).status.success());
+        }
     }
 }
 

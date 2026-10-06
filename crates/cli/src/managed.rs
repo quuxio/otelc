@@ -12,6 +12,7 @@ pub fn run(
     let target = match command {
         "python" => Language::Python,
         "node" => Language::JavaScript,
+        "ts" => Language::TypeScript,
         _ => bail!("unknown language adapter command"),
     };
     if language.is_some_and(|l| l != target) {
@@ -27,7 +28,7 @@ pub fn run(
     let root = std::env::var_os("OTELC_ADAPTER_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters"));
-    if target == Language::JavaScript {
+    if matches!(target, Language::JavaScript | Language::TypeScript) {
         let launcher = root.join("node/register.mjs");
         if !launcher.is_file() {
             bail!("Node adapter not found; set OTELC_ADAPTER_ROOT");

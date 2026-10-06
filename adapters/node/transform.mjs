@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const probes = fileURLToPath(new URL('./probes.cjs', import.meta.url));
 
 export const MARKER = '@quux.otelc.generated';
+export const IDENTITY = '@quux.otelc.identity ';
 function localName(path) {
   const node = path.node;
   if (node.id?.name) return node.id.name;
@@ -38,16 +39,18 @@ function annotation(path) {
   }
   return result;
 }
-export function transform(source, filename, sourceName, plan, runtime) {
+export function transform(source, filename, sourceName, plan, runtime, prepared = null) {
   if (source.includes(MARKER)) throw new Error('source is already instrumented');
   const selection = new Selection(plan.function_matchers);
   const inventory = [];
   let helper;
+  let format;
   let instrumented = false;
   const result = transformSync(source, {
-    filename, configFile: false, babelrc: false, sourceType: 'unambiguous', sourceMaps: true,
-    sourceFileName: filename, parserOpts: { allowReturnOutsideFunction: true },
+    filename, configFile: false, babelrc: false, sourceType: prepared?.format === 'module' ? 'module' : prepared?.format === 'commonjs' ? 'script' : 'unambiguous', sourceMaps: true,
+    sourceFileName: filename, inputSourceMap: prepared?.map, parserOpts: { allowReturnOutsideFunction: true },
     plugins: [() => ({ visitor: { Program: { enter(path) {
+      format = path.node.sourceType === 'module' ? 'module' : 'commonjs';
       helper = path.scope.generateUidIdentifier('otelc_probes');
     }, exit(path) {
       if (!instrumented) return;
@@ -58,10 +61,14 @@ export function transform(source, filename, sourceName, plan, runtime) {
       }
     } }, Function: { exit(path) {
       if (!path.node.body) return;
-      const name = displayName(path, sourceName);
-      const tag = plan.annotations.read_existing ? annotation(path) : null;
+      const identityComments = [...(path.node.leadingComments ?? []), ...((path.parentPath.isExportNamedDeclaration() || path.parentPath.isExportDefaultDeclaration()) ? path.parentPath.node.leadingComments ?? [] : [])];
+      const identity = identityComments.find(comment => comment.value.startsWith(IDENTITY));
+      if (prepared && !identity) return;
+      const metadata = identity ? JSON.parse(Buffer.from(identity.value.slice(IDENTITY.length), 'base64').toString()) : null;
+      const name = metadata?.name ?? displayName(path, sourceName);
+      const tag = plan.annotations.read_existing ? metadata ? metadata.annotation : annotation(path) : null;
       const selected = tag !== 'otelc.exclude' && selection.accepts(name, tag === 'otelc.instrument');
-      inventory.push({ name, selected, line: path.node.loc.start.line });
+      inventory.push({ name, selected, line: metadata?.line ?? path.node.loc.start.line });
       if (!selected || !runtime.register(name)) return;
       instrumented = true;
       path.traverse({ CallExpression(call) {
@@ -81,5 +88,5 @@ export function transform(source, filename, sourceName, plan, runtime) {
       path.node.expression = false;
     } } } })]
   });
-  return { code: result.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(result.map)).toString('base64'), functions: inventory };
+  return { code: result.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(result.map)).toString('base64'), functions: inventory, format };
 }

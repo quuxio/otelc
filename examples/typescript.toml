@@ -1,0 +1,23 @@
+schema_version = 2
+languages = ["typescript"]
+
+[sources]
+include = ["examples/apps/typescript*.*"]
+
+[functions]
+include = ["examples.apps.typescript_app.*", "examples.apps.typescript_annotated.configured"]
+exclude = ["*.excluded", "*.main"]
+
+[annotations]
+read_existing = true
+
+[resource]
+service_name = "otelc-typescript-example"
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 100
+timeout_ms = 300
+
+[adapters.typescript]
+backend = "source"

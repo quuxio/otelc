@@ -28,9 +28,9 @@ make scan
 | `lint` | Lint all repository Markdown |
 | `test` | Run deterministic tooling/benchmark tests with 90% coverage and produce XML |
 | `check` | Run Markdown lint, tooling tests/coverage and native/Python/Node product quality gates |
-| `node-check` | Validate in-memory JavaScript instrumentation and enforce 80% adapter coverage |
+| `node-check` | Validate in-memory JavaScript/TypeScript instrumentation and enforce 80% adapter coverage |
 | `python-check` | Validate unchanged Python instrumentation and enforce 80% adapter coverage |
-| `benchmark-language` | Same-process metrics-off/on comparison for `LANGUAGE=python` or `javascript` |
+| `benchmark-language` | Same-process metrics-off/on comparison for `LANGUAGE=python`, `javascript` or `typescript` |
 | `build` | Build the LLVM pass, Rust CLI and native runtime archive |
 | `examples` | Build callback, exception and lifetime apps in `build/native/` |
 | `developer-examples` | Build the configuration-only, annotated and live-control tutorial apps |
