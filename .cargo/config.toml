@@ -1,0 +1,3 @@
+# Match the native shim and TLS dependencies to the locally validated deployment target.
+[env]
+MACOSX_DEPLOYMENT_TARGET = { value = "26.0", force = false }

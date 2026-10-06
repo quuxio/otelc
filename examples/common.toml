@@ -1,0 +1,79 @@
+# One policy document for every target-language adapter.
+# C/C++ function timing can execute now; other language adapters remain TODO.
+schema_version = 2
+languages = ["c", "cpp", "rust", "typescript", "javascript", "java", "python", "go"]
+
+[sources]
+include = ["src/**", "tests/fixtures/**"]
+exclude = ["vendor/**", "third_party/**", "generated/**"]
+
+[functions]
+include = ["*selected_*", "OrderBook::*"]
+exclude = ["otelc_*", "__cyg_profile_*", "*::operator*"]
+
+[annotations]
+# Existing Clang function annotations can be read with LLVM.
+# Generated annotation injection remains unsupported.
+read_existing = false
+inject_generated = false
+
+[lifetimes]
+# Automatic lifetime support is required; the manual guard is not a schema-2 fallback.
+enabled = false
+boundary = "object"
+include = ["*OrderBook*"]
+exclude = []
+
+[runtime]
+max_functions = 4096
+max_live_lifetimes = 4096
+shutdown_timeout_ms = 2000
+
+[metrics]
+enabled = true
+histogram_boundaries_seconds = [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1.0]
+
+[traces]
+enabled = false
+root_sample_ratio = 0.01
+max_active_traces = 512
+max_spans_per_trace = 1024
+
+[export]
+protocol = "http/protobuf"
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 1000
+timeout_ms = 1000
+max_queued_batches = 8
+
+[resource]
+service_name = "otelc-common-example"
+service_version = "development"
+
+[adapters.c]
+backend = "llvm"
+[adapters.c.native]
+max_threads = 32
+stack_depth = 128
+queue_capacity = 65536
+
+[adapters.cpp]
+backend = "llvm"
+[adapters.cpp.native]
+max_threads = 32
+stack_depth = 128
+queue_capacity = 65536
+
+# Backend preferences are validated, but do not install or implement an adapter.
+[adapters.rust]
+backend = "compiler"
+[adapters.typescript]
+backend = "source"
+[adapters.javascript]
+backend = "loader"
+[adapters.java]
+backend = "aspectj"
+[adapters.python]
+backend = "import"
+[adapters.go]
+backend = "compile"

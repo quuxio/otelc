@@ -42,7 +42,7 @@
 
 ## 007: use one versioned TOML configuration
 
-**Decision:** share one schema for build selection, bounded runtime policy, and export settings. Use an explicit schema version, reject unknown keys, and make exclusions win.
+**Decision:** share one schema for source/function/lifetime selection, bounded runtime policy and export settings across all language adapters. Schema 2 and its JSON resolver are implemented; schema 1 remains the legacy native format. Language-specific backend settings belong under `adapters.<language>`. Use an explicit schema version, reject unknown keys, and make exclusions win.
 
 **Tradeoff:** additions must preserve schema compatibility. TOML fits the Rust tooling and the mainly scalar/list configuration without requiring YAML semantics or configuration scripting.
 
@@ -57,3 +57,21 @@
 **Decision:** start with AGPL-3.0 and the SonarQube/traffic badge set from `fixdecoder_rs`. Require project-level Previous version new-code policy and use the full commit SHA as each scan's project version.
 
 **Tradeoff:** the license contains no special runtime exception. Review the intended runtime distribution model before its first release. Quality badges currently describe repository validation tooling; they must not be presented as runtime correctness or performance evidence.
+
+## 010: require instrumentation without application source edits
+
+**Decision:** all target languages use external selection/configuration and compiler, loader or agent adapters. Users do not need to add application imports, annotations, decorators, macro attributes, guard members or manual probe calls. A language-aware pre-parser may inject code and annotations into generated copies or in-memory compiler input and may read existing source annotations as optional metadata. External configuration works for unannotated source. In-memory or out-of-tree generated transforms may inject telemetry while preserving original source files. Acceptance includes before/after source hashes and selected application-function coverage.
+
+**Tradeoff:** each language needs its own validated adapter and lifetime semantics. Standard library auto-instrumentation does not prove application-function coverage. The existing C++ guard remains an opt-in prototype; automatic class lifetimes are an open requirement. See the [source-free contract](design.md#source-free-instrumentation-contract).
+
+## 011: separate policy validation from adapter execution
+
+**Decision:** validate one schema-2 document and resolve it for an enabled language. Common selection, annotation/lifetime intent, telemetry, limits and resource/export settings survive resolution. Language-specific backend/buffer settings are separate. Provide resolved JSON for tooling outside Rust and an explicit support check.
+
+**Tradeoff:** valid future settings may lack an executable adapter. Report those capabilities as unavailable and reject execution rather than ignore the request or replace automatic lifetimes with manual guards. See [common configuration](common-configuration.md).
+
+## 012: consume semantic function annotations and toggle metrics admission
+
+**Decision:** read optional `otelc.instrument` and `otelc.exclude` function annotations from Clang LLVM metadata, preserve unrelated annotations, and retain annotation selection in object markers/manifests. Opt-outs and external exclusions win. Provide an opt-in owner-only native LLVM metrics control socket; changes affect future entries, while already admitted tokens finish normally.
+
+**Tradeoff:** general annotation injection, other language adapters, callback live controls and live function-filter updates remain separate work. Off-state probes/runtime threads remain present, so a plain baseline is still required when measuring total instrumentation overhead.

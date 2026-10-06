@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/config", "crates/symbols", "crates/export", "crates/runtime", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+libc = "0.2"
+toml = "0.9"
+object = { version = "0.39", features = ["read"] }
+cpp_demangle = "0.5"
+globset = "0.4"
+prost = "0.14"
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "metrics"] }
+ureq = "3.4"
+url = "2"
+percent-encoding = "2"
+cc = "1.2"

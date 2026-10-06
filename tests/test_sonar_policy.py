@@ -19,6 +19,30 @@ class PolicyTests(unittest.TestCase):
     def test_explicit_previous_version_is_accepted(self) -> None:
         policy.validate_policy({"settings": [{"key": policy.POLICY_KEY, "value": "previous_version"}]})
 
+    def test_explicit_non_inherited_previous_version_is_accepted(self) -> None:
+        policy.validate_policy({"settings": [{
+            "key": policy.POLICY_KEY,
+            "value": "previous_version",
+            "inherited": False,
+        }]})
+
+    def test_inherited_previous_version_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            policy.validate_policy({"settings": [{
+                "key": policy.POLICY_KEY,
+                "value": "previous_version",
+                "inherited": True,
+            }]})
+
+    def test_malformed_inheritance_marker_is_rejected(self) -> None:
+        for inherited in (None, 0, "false"):
+            with self.subTest(inherited=inherited), self.assertRaises(ValueError):
+                policy.validate_policy({"settings": [{
+                    "key": policy.POLICY_KEY,
+                    "value": "previous_version",
+                    "inherited": inherited,
+                }]})
+
     def test_missing_inherited_rolling_or_duplicate_policy_is_rejected(self) -> None:
         invalid = [
             {},

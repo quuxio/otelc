@@ -2,15 +2,15 @@
 
 ## Purpose and status
 
-otelc will provide compiler-assisted observability for native applications, starting with C and C++. Developers will select application functions, rebuild through their normal compiler, and send timing metrics and supported traces to an OTLP-compatible Collector. The project belongs to quux and is independent of the OpenTelemetry project.
+otelc will provide observability without application source edits across C, C++, Rust, TypeScript/JavaScript, Java, Python and Go, starting with compiler-assisted C and C++. Developers will select application functions, activate a language-specific build or launch adapter, and send timing metrics and supported traces to an OTLP-compatible Collector. The project belongs to quux and is independent of the OpenTelemetry project.
 
-This document is the initial architecture proposal. Repository validation and SonarQube integration exist; product components are planned. The first implementation must deliver a working vertical slice rather than empty crate scaffolding.
+This document specifies the architecture. The [local implementation](local-implementation.md) delivers callback and LLVM function timing, including exception-aware C++, plus an opt-in lifetime guard. Automatic class lifetime instrumentation, traces, additional language adapters and live filter updates remain planned. Existing Clang function annotations and an opt-in owner-only LLVM metrics control socket are implemented locally.
 
 ## Goals
 
 - Preserve application source, return values, calling conventions, and observable control flow.
 - Make function selection explicit and inspectable before running the application.
-- Keep steady-state probes free of heap allocation, locks, symbol resolution, serialization, and network I/O.
+- Keep native steady-state probes free of heap allocation, locks, symbol resolution, serialization, and network I/O.
 - Bound runtime memory, cardinality, export queues, and shutdown time.
 - Expose lost observations and unsupported control flow rather than manufacture accurate-looking telemetry.
 - Export standard OTLP and integrate with existing Collectors and backends.
@@ -18,7 +18,41 @@ This document is the initial architecture proposal. Repository validation and So
 
 Initial non-goals are instrumenting existing binaries without rebuilding, modifying third-party libraries automatically, recording arguments or return values, interpreting business errors, distributed context propagation without an adapter, asynchronous language semantics, and continuous profiling.
 
-## Architecture
+## Source-free instrumentation contract
+
+All target-language adapters must instrument configured application functions and supported object/resource lifetimes without editing application or dependency source files. Selection, export settings and supported lifetime boundaries belong in external configuration. Users may install instrumentation tooling and SDK/runtime packages, rebuild through a wrapper, or change compiler options, environment variables and launch commands. Requiring users to add source imports, annotations, decorators, macro attributes, guard members or manual entry/exit calls does not meet this contract. A processor may inject these automatically into generated input where language and ABI semantics allow. Existing annotations or opt-in metadata may guide processing; external configuration must remain sufficient when none are present.
+
+Transforms may change compiler IR, loaded bytecode, in-memory modules or generated copies in a separate build directory. Original source files must remain byte-for-byte unchanged. A common selection and OTLP configuration is the product interface; each language has its own compiler, loader or agent adapter. Managed-language adapters use their appropriate SDK and task/context model rather than the native runtime's thread-slot ABI.
+
+A language-aware pre-parser is an allowed implementation route: read original source and configuration, build a syntax/semantic model, resolve selection and existing annotations, then emit instrumented copies or compiler input in an isolated build directory. The normal compiler/transpiler consumes that generated input. The processor can inject runtime imports, function entry/exit code or annotations consumed by a downstream pass. Generated code is an instrumentation artefact, not a patch users must apply to their application.
+
+The proposed source-processing path is:
+
+```mermaid
+flowchart LR
+    Source[Original source and existing annotations] --> Parser[Language-aware parser and selection]
+    Config[External configuration] --> Parser
+    Parser --> Generated[Generated input and metadata]
+    Generated --> Backend[Compiler, transpiler or runtime loader]
+    Backend --> Probes[Instrumented application]
+    Probes --> Collector[OTLP Collector]
+```
+
+For C/C++, [Clang LibTooling](https://clang.llvm.org/docs/LibTooling.html) provides a basis for a standalone parser using the application's compilation arguments, while [Clang plugins](https://clang.llvm.org/docs/ClangPlugins.html) provide a frontend route for metadata and annotations. The specific injection and lifetime lowering remain implementation work.
+
+Preserve include/module resolution, preprocessing conditions, macro expansion, comments used as metadata, templates, source maps/debug locations and build-cache identity. Use the original compilation arguments and language parser rather than regex substitution. Native tooling may expose generated input through a compiler/VFS adapter so relative includes and original diagnostic locations remain meaningful. The native LLVM pass remains a supported function-timing route; the pre-parser is an additional proposed route for metadata and language-specific injection.
+
+External exclusions always win. Annotations may supply opt-in selection, opt-out or naming hints only after their meaning is declared by the adapter; missing annotations must not prevent external selection. Resolve conflicting metadata visibly, preserve unrelated annotations and detect existing instrumentation to avoid double probes. Parsing failures and constructs whose semantics cannot be preserved must produce inspectable diagnostics.
+
+The intended coverage includes selected application functions, not only known HTTP/database libraries. Stock OpenTelemetry auto-instrumentation can provide library coverage, but cannot by itself be treated as proof of arbitrary application-function coverage. See the [OpenTelemetry zero-code scope](https://opentelemetry.io/docs/concepts/instrumentation/zero-code/) and the [language adapter TODOs](roadmap.md#todo-language-adapters).
+
+Native C/C++ function timing meets the source-edit requirement locally. The current `ObjectLifetime` guard requires application changes and is an interim opt-in prototype. Automatic C++ class lifetime support may use a language-aware pre-parser with a Clang frontend/code-generation adapter, with construction failure, destructor cleanup, copies/moves, inheritance and storage reuse qualified explicitly. It must also avoid changing the application's class layout or copy/move behaviour.
+
+Lifetime semantics are language-specific. A C++ object lifetime, a Rust value's initialisation/move/drop and a managed resource's close operation cannot share an assumed destructor boundary. Garbage collection is distinct from explicit close/dispose; allocation-to-collection is a separate capability where observable. Adapters must declare their measured boundaries and visibly report unsupported cases instead of substituting a manual source API.
+
+Every adapter is accepted only when an internal fixture's source hashes match before and after instrumentation, selected application functions emit expected telemetry, unselected functions remain excluded, and application results and supported exception/panic/async behaviour match the plain build. The same unchanged fixture must supply plain-versus-instrumented benchmark evidence and loss accounting. Required manual probes fail acceptance even if their telemetry is correct.
+
+## Native architecture
 
 ```mermaid
 flowchart TB
@@ -37,7 +71,7 @@ flowchart TB
     Exporter --> Collector[OpenTelemetry Collector]
 ```
 
-The callback backend uses the existing `__cyg_profile_func_enter` and `__cyg_profile_func_exit` ABI. A later LLVM pass uses [otelc's descriptor/token ABI](abi.md). Both feed the same runtime and telemetry pipeline, but their capabilities are reported separately.
+The callback backend uses the existing `__cyg_profile_func_enter` and `__cyg_profile_func_exit` ABI. The local LLVM pass uses an interim address/token interface; the [descriptor/token ABI](abi.md) remains a proposal. Both feed the same runtime and telemetry pipeline, but their capabilities are reported separately.
 
 ## Components and ownership
 
@@ -52,9 +86,9 @@ The callback backend uses the existing `__cyg_profile_func_enter` and `__cyg_pro
 | OTLP exporter | Batch, serialize, send, retry within a bounded budget, and report export loss | Rust OpenTelemetry ecosystem |
 | LLVM pass | Select functions at compile time and emit descriptors and correct exit probes | C++, matched to a tested LLVM major |
 
-The product's initial Cargo workspace is intended to contain `quux-otelc-cli`, `quux-otelc-config`, `quux-otelc-symbols`, `quux-otelc-runtime`, and `quux-otelc-export`. Introduce a crate only when it has an implemented boundary. Keep LLVM integration under `compiler/llvm/` and native fixtures under `tests/fixtures/` when those milestones begin. Dependency versions and the Rust minimum supported version will be pinned with the first implementation.
+The Cargo workspace contains `quux-otelc-cli`, `quux-otelc-config`, `quux-otelc-symbols`, `quux-otelc-runtime`, and `quux-otelc-export`. Introduce a crate only when it has an implemented boundary. Keep LLVM integration under `native/llvm/` and native fixtures under `tests/fixtures/` when those milestones begin. Cargo.lock pins dependencies; the current Rust minimum is 1.98.
 
-## End-to-end contract
+## Native end-to-end contract
 
 1. Validate configuration and the selected compiler's capabilities before compilation.
 2. Instrument only explicitly included application translation units. Leave other compiler invocations untouched.
@@ -75,7 +109,7 @@ Monotonic time measures duration. Wall time supplies OTLP timestamps through a w
 
 ## Selection and accuracy
 
-Translation-unit selection is build-time selection. Function-name selection is runtime admission with the callback backend, so excluded functions can still pay for injected callbacks. The LLVM backend will omit excluded probes entirely. See [instrumentation](instrumentation.md).
+Translation-unit selection is build-time selection. Function-name selection is runtime admission with the callback backend, so excluded functions can still pay for injected callbacks. The LLVM backend omits excluded probes entirely. See [instrumentation](instrumentation.md).
 
 The callback milestone supports synchronous normal returns only. Its supported C++ lane requires selected code to be compiled with `-fno-exceptions`; the wrapper must not add that flag to an existing application silently. C `longjmp`, thread cancellation, coroutines, and dynamically unloaded instrumented code are outside that lane.
 

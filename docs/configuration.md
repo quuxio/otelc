@@ -1,10 +1,10 @@
-# Configuration proposal
+# Configuration
 
 ## Format and status
 
-The proposed format is TOML, shared by build-time selection and runtime policy. [examples/otelc.toml](../examples/otelc.toml) is the complete draft example. There is no configuration parser or installed CLI yet.
+The common format is TOML. [Schema 2](common-configuration.md) supplies one policy for every target-language adapter, implemented in the shared resolver and the native C/C++ wrapper. Start with [examples/common.toml](../examples/common.toml). The schema-1 native configuration described below remains accepted for existing fixtures; [examples/otelc.toml](../examples/otelc.toml) illustrates it. See [local usage](local-implementation.md).
 
-`schema_version = 1` is required. Unknown keys, unsupported backend features, invalid values, and patterns selecting more functions than the configured bound are errors. Environment interpolation is limited to specifically documented OTLP settings; arbitrary shell expansion and executable configuration hooks are excluded.
+For the legacy format below, `schema_version = 1` is required. Unknown keys, unsupported backend features, invalid values, and patterns selecting more functions than the configured bound are errors. Environment interpolation is limited to specifically documented OTLP settings; arbitrary shell expansion and executable configuration hooks are excluded.
 
 ## Selection rules
 
@@ -12,6 +12,7 @@ The proposed format is TOML, shared by build-time selection and runtime policy. 
 | --- | --- |
 | `build` | Choose a backend and supported application source paths |
 | `functions` | Select demangled function names from the build manifest |
+| `objects` | Admit exact names for the interim manual lifetime guard |
 | `runtime` | Set capacity and shutdown budgets |
 | `metrics` | Configure aggregation and histogram boundaries |
 | `traces` | Enable a supported trace backend and coherent sampling |
@@ -24,7 +25,7 @@ Default runtime exclusions cover runtime functions, the exporter, and non-applic
 
 Configuration loading uses, in order, defaults, the selected TOML file, and documented environment overrides. `--config` chooses the file; otherwise the wrapper uses `otelc.toml` at the project root. Runtime launch receives an explicit configuration and manifest path. No implicit network configuration lookup occurs.
 
-## Draft defaults and validation
+## Native defaults and validation
 
 | Setting | Default | Validation |
 | --- | --- | --- |
@@ -36,7 +37,7 @@ Configuration loading uses, in order, defaults, the selected TOML file, and docu
 | Shutdown deadline | 2000 ms | Positive and bounded |
 | Metrics | Enabled | Completed observations independent of trace sampling |
 | Export interval | 5000 ms | Positive |
-| Traces | Disabled | Callback backend rejects `enabled = true` |
+| Traces | Disabled | Current native backends reject `enabled = true` |
 | Root sample ratio | 0.01 | Between 0 and 1; applied to whole traces |
 | Maximum active traces | 512 | Positive; only allocated when supported tracing is enabled |
 | Maximum spans per trace | 1024 | Positive; exceeding it discards the trace with diagnostics |
@@ -53,21 +54,22 @@ The runtime will recognize `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, `OTE
 
 Authentication headers are supplied through the supported OTLP environment or secret-file integration when implemented. They never appear in manifests, `inspect` output, logs, example configuration, or metric attributes. Avoid committing secret-bearing environment files. Invalid credentials affect export diagnostics, not application execution.
 
-## Planned CLI
+## CLI and milestones
 
 | Command | Contract | Milestone |
 | --- | --- | --- |
+| `config` | Validate/resolve schema 2 for `--language`, optionally emit JSON or require support | Local shared contract |
 | `doctor` | Report compiler, target, backend capabilities, clocks, and runtime availability | M1 |
 | `clang` / `clang++` wrapper | Preserve normal driver behaviour while adding supported instrumentation | M1 |
 | `inspect <binary>` | Verify manifest identity and show selected functions and limits | M1 |
 | `run <binary>` | Supply configuration/manifest paths and run with normal signal/exit behaviour | M1 |
 | `build` | Integrate a tested build system, starting with CMake | M3 |
-| `status` / `enable` / `disable` | Inspect or change admission policy on an already instrumented process | M3 |
+| `status` / `enable` / `disable` | Inspect/toggle metrics on a configured LLVM runtime using `--socket PATH` | Local metrics control; filter changes remain M3 |
 
-The released executable is intended to be called `quux-otelc`. These are proposed commands; `make help` describes the commands actually available in this repository today.
+The released executable is intended to be called `quux-otelc`. `config`, `doctor`, compiler wrapping, `inspect` and `run` are implemented locally. `status`, `enable` and `disable` are implemented for the opt-in LLVM metrics control socket. Live function-filter updates and the product `build` command remain planned; `make build` builds the repository tools.
 
 ## Runtime updates
 
-M1 configuration is immutable for a process lifetime. M3 may publish a new immutable admission generation over an owner-only local control socket. Each accepted frame retains its entry policy until it leaves, so disabling a function does not orphan its open frames. Rejected entries remain rejected even if a new policy enables that function before their exit.
+Configuration and function selection remain immutable for a process lifetime. The implemented LLVM control socket can toggle metrics admission, initially set by `metrics.enabled`, without restarting or rebuilding. Set `runtime.control_socket` to opt in and create its owner-only mode-0700 parent directory first. See [tested live commands](developer-101.md#turn-metrics-offon-without-restarting). M3 may additionally publish immutable function-filter generations. Each accepted frame retains its entry policy until it leaves, so disabling a function does not orphan its open frames. Rejected entries remain rejected even if a new policy enables that function before their exit.
 
-Runtime enable/disable only affects probes compiled into the executable. It cannot add missing probes. Callback overhead remains when telemetry admission is off; dynamic machine-code patching is not part of the initial control design.
+Runtime enable/disable only affects probes compiled into the executable. It cannot add missing probes. Compiled-probe and runtime overhead remain when telemetry admission is off; dynamic machine-code patching is not part of the initial control design.

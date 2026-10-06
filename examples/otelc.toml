@@ -1,4 +1,4 @@
-# Proposed schema; the product parser and runtime are not implemented yet.
+# Callback configuration. Adjust source and function rules for your application.
 schema_version = 1
 
 [build]

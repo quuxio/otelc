@@ -1,0 +1,21 @@
+[package]
+name = "quux-otelc-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+[lib]
+crate-type = ["staticlib", "rlib"]
+[dependencies]
+anyhow.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+quux-otelc-config = { path = "../config" }
+quux-otelc-symbols = { path = "../symbols" }
+quux-otelc-export = { path = "../export" }
+loom = { version = "0.7", optional = true }
+[build-dependencies]
+cc.workspace = true
+[features]
+loom-tests = ["dep:loom"]

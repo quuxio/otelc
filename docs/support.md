@@ -2,20 +2,25 @@
 
 ## Current state
 
-No product platform is supported yet: the runtime and compiler wrapper are not implemented. The tables describe intended rollout, not successful end-to-end tests. The only compiler evidence currently recorded is the focused macOS ARM64 callback check in [research.md](research.md).
+The local callback and LLVM 22 backends have passed native C/C++ and OTLP checks on macOS ARM64. The LLVM lane handles Itanium C++ exception unwinding; the opt-in lifetime guard supports bounded object metrics but requires source edits. Automatic source-free lifetime instrumentation remains TODO. There is no supported release yet. The tables retain rollout requirements; Linux and other platforms still require native qualification. See [current implementation and evidence](local-implementation.md).
+
+All target languages must meet the [source-free contract](design.md#source-free-instrumentation-contract). The following routes describe current behaviour and planned adapters separately.
 
 ## Languages
 
 | Language | Initial route | Planned support |
 | --- | --- | --- |
 | C | Clang callbacks | M1: synchronous normal-return functions |
-| C++ | Clang callbacks, then LLVM pass | M1: selected `-fno-exceptions` code; M2: validated exception-enabled code and traces |
+| C++ | Clang callbacks, then LLVM pass | Local callbacks: selected `-fno-exceptions` code; local LLVM: exception-enabled timing; traces planned |
 | Objective-C / Objective-C++ | Clang with language-specific fixtures | Later: method names, exceptions, blocks, ARC, and messaging boundaries |
 | Swift | Matched compiler integration or Swift-specific pass | Later: begin with synchronous native functions; async requires a separate adapter |
-| Rust | Rust compiler integration and matched LLVM | Later: monomorphization, panic, inlining, and async need Rust-specific evidence |
+| Rust | Cargo/rustc wrapper; compiler/MIR investigation | Target TODO: source-free selected functions and typed lifetime boundaries; no required macro attributes |
 | Fortran / Zig | Validated compiler adapter | Exploratory; no current support commitment |
-| Go | Existing Go compile-time ecosystem | Outside initial scope |
-| Java / .NET / Python / JavaScript | Existing runtime/agent ecosystems | Outside native compiler scope |
+| Go | External compile-time adapter | Target TODO: source-free application-function rules, goroutines and panic/recover |
+| Java | External AspectJ weaving or Java agent | Target TODO: selected methods/constructors without annotations |
+| Python | Launch/import hook or interpreter adapter | Target TODO: selected functions without source decorators/imports |
+| TypeScript / JavaScript | Build or module-loader transform | Target TODO: selected functions with unchanged source and source maps |
+| .NET | Runtime/agent ecosystem | Exploratory; outside the current target-language list |
 
 Using LLVM somewhere in a compiler pipeline does not imply that it accepts our plugin, shares the same LLVM ABI, or preserves the required language semantics. Every new language must supply its own build and control-flow fixtures.
 

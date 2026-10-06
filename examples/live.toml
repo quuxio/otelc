@@ -1,0 +1,28 @@
+schema_version = 2
+languages = ["cpp"]
+
+[sources]
+include = ["examples/apps/live-latency.cpp"]
+
+[functions]
+include = ["process_order*", "held_order*"]
+
+[runtime]
+control_socket = "build/control/metrics.sock"
+
+[metrics]
+enabled = false
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 1000
+
+[resource]
+service_name = "otelc-live-example"
+
+[adapters.cpp]
+backend = "llvm"
+[adapters.cpp.native]
+max_threads = 8
+stack_depth = 128
+queue_capacity = 65536

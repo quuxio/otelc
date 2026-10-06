@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths-ignore: ['.badges/**']
   pull_request:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -32,11 +32,25 @@ jobs:
           python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
           npm ci --ignore-scripts --prefix ci/markdownlint
       - name: Validate documents and tooling
-        run: make check PYTHON=python3
+        run: make lint test PYTHON=python3
+
+  native:
+    name: Native macOS ARM64 and 80% coverage
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Install Rust and matching coverage tools
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
+          rustup default 1.98.1
+          brew install llvm@22
+          cargo install cargo-llvm-cov --version 0.8.7 --locked
+      - name: Validate native runtime and coverage
+        run: make rust-check model-check rust-coverage PYTHON=python3
 
   sonar:
     name: SonarQube
-    needs: quality
+    needs: [quality, native]
     if: >-
       github.actor != 'dependabot[bot]' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
