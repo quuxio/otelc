@@ -9,9 +9,9 @@ Each additional language lands separately on `master` after its unchanged-source
 | 2 | JavaScript | Node in-memory transform and JavaScript SDK; implemented |
 | 3 | TypeScript | TypeScript compiler and in-memory Node probes; implemented |
 | 4 | Java | Java agent and method bytecode instrumentation; implemented |
-| 5 | Go | External build adapter with generated probes; planned |
+| 5 | Go | Go compiler overlays and Go SDK; implemented |
 | 6 | Rust | External Cargo/source adapter with generated probes; planned |
 
 The common TOML policy remains the configuration entry point. Existing annotations are optional. The adapter must reject capabilities it cannot execute; a language implementation does not imply support for spans, every framework or every lifetime boundary. Automatic C++ lifetimes remain separate from the current explicit guard prototype.
 
-See the [common configuration](common-configuration.md), [Python guide](python.md), [JavaScript guide](javascript.md), [TypeScript guide](typescript.md), [Java guide](java.md), [developer 101](developer-101.md) and [support matrix](support.md).
+See the [common configuration](common-configuration.md), [Python guide](python.md), [JavaScript guide](javascript.md), [TypeScript guide](typescript.md), [Java guide](java.md), [Go guide](go.md), [developer 101](developer-101.md) and [support matrix](support.md).

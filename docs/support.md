@@ -16,7 +16,7 @@ All target languages must meet the [source-free contract](design.md#source-free-
 | Swift | Matched compiler integration or Swift-specific pass | Later: begin with synchronous native functions; async requires a separate adapter |
 | Rust | Cargo/rustc wrapper; compiler/MIR investigation | Target TODO: source-free selected functions and typed lifetime boundaries; no required macro attributes |
 | Fortran / Zig | Validated compiler adapter | Exploratory; no current support commitment |
-| Go | External compile-time adapter | Target TODO: source-free application-function rules, goroutines and panic/recover |
+| Go | Go 1.26+ compiler overlays and Go SDK | Implemented unchanged files/module projects, functions/methods/callbacks, goroutines, defer/panic/recover and live controls; workspaces/cgo, lifetimes/traces unavailable |
 | Java | JDK 21+ agent and ASM bytecode body probes | Implemented selected methods/constructors, exceptions, recursion, executor threads, optional annotations and live controls; lifetimes/traces unavailable |
 | Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation and live control; lifetimes/traces remain unavailable |
 | JavaScript | Node 24.11+ in-memory loader transform, JavaScript SDK | Implemented ESM/CommonJS function timing, async/generators, constructors, exceptions and live controls; lifetimes/traces unavailable |

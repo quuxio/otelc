@@ -654,6 +654,7 @@ fn common_configuration_inspection_and_capability_rejection() {
                 || language == "javascript"
                 || language == "typescript"
                 || language == "java"
+                || language == "go"
         );
     }
     success(cli(
@@ -661,11 +662,13 @@ fn common_configuration_inspection_and_capability_rejection() {
         root.path(),
     ));
     let unavailable = cli(
-        &["--language", "go", "config", "--require-supported"],
+        &["--language", "rust", "config", "--require-supported"],
         root.path(),
     );
     assert!(!unavailable.status.success());
-    assert!(String::from_utf8_lossy(&unavailable.stdout).contains("go adapter is not implemented"));
+    assert!(
+        String::from_utf8_lossy(&unavailable.stdout).contains("rust adapter is not implemented")
+    );
     for args in [
         vec!["config"],
         vec!["--language", "scala", "config"],
@@ -884,6 +887,56 @@ fn java_agent_preserves_original_sources_and_exports_typed_sdk_metrics() {
     let parsed: serde_json::Value = serde_json::from_slice(&inventory.stdout).unwrap();
     assert_eq!(parsed["functions"].as_array().unwrap().len(), 4);
     for args in [vec!["java"], vec!["--language", "python", "java", "App"]] {
+        assert!(!cli(&args, root.path()).status.success());
+    }
+}
+
+#[test]
+fn go_overlay_preserves_sources_recovery_and_decodable_sdk_counters() {
+    let root = tempfile::tempdir().unwrap();
+    let source = "package main\nimport \"fmt\"\nfunc selected(n int)int{if n<0{panic(\"escaping\")};return n*2}\n// otelc.instrument\nfunc annotated()int{return 3}\nfunc main(){fmt.Println(selected(3)+annotated());func(){defer func(){if recover()!=\"escaping\"{panic(\"changed\")}}();selected(-1)}()}\n";
+    std::fs::write(root.path().join("app.go"), source).unwrap();
+    let (port, listener) = receiver();
+    std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['go']\n[sources]\ninclude=['*.go']\n[functions]\ninclude=['app.selected']\n[annotations]\nread_existing=true\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\ntimeout_ms=500\n")).unwrap();
+    let baseline = success(
+        Command::new("go")
+            .args(["run", "app.go"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let server = start_receiver(listener);
+    let measured = success(cli(&["go", "app.go"], root.path()));
+    assert_eq!(baseline.stdout, measured.stdout);
+    assert_eq!(
+        source.as_bytes(),
+        std::fs::read(root.path().join("app.go")).unwrap()
+    );
+    let request = server.join().unwrap();
+    assert_eq!(
+        counter(&request, "otelc.function.calls", Some("app.selected")),
+        2
+    );
+    assert_eq!(
+        counter(&request, "otelc.function.calls", Some("app.annotated")),
+        1
+    );
+    assert_eq!(
+        counter(&request, "otelc.function.unwinds", Some("app.selected")),
+        1
+    );
+    success(cli(&["--language", "go", "doctor"], root.path()));
+    let inventory = success(cli(
+        &["--language", "go", "inspect", "app.go", "--json"],
+        root.path(),
+    ));
+    let parsed: serde_json::Value = serde_json::from_slice(&inventory.stdout).unwrap();
+    assert!(parsed["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|f| f["name"] == "app.annotated" && f["selected"] == true));
+    for args in [vec!["go"], vec!["--language", "python", "go", "app.go"]] {
         assert!(!cli(&args, root.path()).status.success());
     }
 }

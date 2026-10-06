@@ -14,6 +14,7 @@ pub fn run(
         "node" => Language::JavaScript,
         "ts" => Language::TypeScript,
         "java" => Language::Java,
+        "go" => Language::Go,
         _ => bail!("unknown language adapter command"),
     };
     if language.is_some_and(|l| l != target) {
@@ -29,6 +30,18 @@ pub fn run(
     let root = std::env::var_os("OTELC_ADAPTER_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters"));
+    if target == Language::Go {
+        let adapter = root.join("go/build/otelc-go");
+        if !adapter.is_file() {
+            bail!("Go adapter not found; build with make go-build or set OTELC_ADAPTER_ROOT");
+        }
+        let status = Command::new(adapter)
+            .arg(plan.path())
+            .args(args)
+            .status()
+            .context("launch Go instrumentation")?;
+        return Ok(status.code().unwrap_or(1));
+    }
     if target == Language::Java {
         let agent = root.join("java/target/java-agent-0.1.0-agent.jar");
         if !agent.is_file() {

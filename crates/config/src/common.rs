@@ -303,6 +303,16 @@ impl CommonConfig {
             if self.traces.enabled {
                 unavailable.push("Java span export is not implemented".into());
             }
+        } else if language == Language::Go {
+            if backend != "compile" {
+                unavailable.push("Go requires the compile backend".into());
+            }
+            if self.lifetimes.enabled {
+                unavailable.push("automatic Go lifetimes are not implemented".into());
+            }
+            if self.traces.enabled {
+                unavailable.push("Go span export is not implemented".into());
+            }
         } else if !matches!(language, Language::C | Language::Cpp) {
             unavailable.push(format!("{language} adapter is not implemented"));
         } else {

@@ -1,0 +1,17 @@
+schema_version = 2
+languages = ["go"]
+[sources]
+include = ["examples/apps/go_*.go"]
+[functions]
+include = ["examples.apps.go_app.*", "examples.apps.go_annotated.configured"]
+exclude = ["*.main", "*.excluded", "*.<anonymous>:*"]
+[annotations]
+read_existing = true
+[resource]
+service_name = "otelc-go-example"
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 100
+timeout_ms = 300
+[adapters.go]
+backend = "compile"

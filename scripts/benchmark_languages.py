@@ -20,7 +20,7 @@ except ModuleNotFoundError:
 def run(root, output, iterations, runs, language="python", endpoint=None):
     if not 1 <= iterations <= 1000000 or not 2 <= runs <= 100:
         raise ValueError("iterations must be 1..1000000 and runs 2..100")
-    if language not in ("python", "javascript", "typescript", "java"):
+    if language not in ("python", "javascript", "typescript", "java", "go"):
         raise ValueError("language benchmark adapter is not implemented")
     root, output = Path(root).resolve(), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -32,6 +32,9 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
     if language == "java":
         adapter, interpreter = "java", os.environ.get("OTELC_JAVA", shutil.which("java") or "java")
         source = root / "examples/apps/JavaLatency.java"
+    elif language == "go":
+        adapter, interpreter = "go", os.environ.get("OTELC_GO", shutil.which("go") or "go")
+        source = root / "examples/apps/go_latency.go"
     original = source.read_bytes()
     config.write_text((root / f"examples/{language}.toml").read_text().replace(f"examples.apps.{language}_app.*", f"examples.apps.{language}_latency.process_order").replace('[resource]', '[metrics]\nenabled = false\n\n[runtime]\ncontrol_socket = ' + json.dumps(str(socket)) + '\n\n[resource]'))
     if language == "java":
@@ -42,13 +45,17 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
     report_path = output / "runtime.json"
     environment = {k: v for k, v in os.environ.items() if not k.startswith(("OTEL_", "OTELC_"))}
     environment.update(OTELC_PYTHON=sys.executable, OTELC_REPORT_PATH=str(report_path))
-    if language == "java":
+    if language == "go":
+        environment["OTELC_GO"] = interpreter
+    elif language == "java":
         environment["OTELC_JAVA"] = interpreter
     elif language != "python":
         environment["OTELC_NODE"] = interpreter
     processes = []
     try:
         plain_command = [interpreter, str(source)] if language != "typescript" else [interpreter, "--import", str(root / "adapters/node/plain.mjs"), str(source)]
+        if language == "go":
+            plain_command = [interpreter, "run", str(source)]
         for command in (plain_command, [str(cli), "--config", str(config), adapter, str(source)]):
             process = subprocess.Popen(command, cwd=root, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
             processes.append(process)
@@ -69,7 +76,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
         complete = telemetry["export_finished"] and not telemetry["export_loss"] and not any(telemetry["losses"].values()) and telemetry["function_calls"] == 1000 + iterations * runs
         if not complete or source.read_bytes() != original:
             raise ValueError("Incomplete telemetry or modified source")
-        toolchain = sys.version.split()[0] if language == "python" else subprocess.check_output([interpreter, "--version"], text=True).strip()
+        toolchain = sys.version.split()[0] if language == "python" else subprocess.check_output([interpreter, "version" if language == "go" else "--version"], text=True).strip()
         report = {"language": language, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
@@ -85,7 +92,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--language", choices=["python", "javascript", "typescript", "java"], required=True)
+    parser.add_argument("--language", choices=["python", "javascript", "typescript", "java", "go"], required=True)
     parser.add_argument("--iterations", type=int, default=10000)
     parser.add_argument("--runs", type=int, default=8)
     parser.add_argument("--output", type=Path, default=Path("build/benchmarks/python"))

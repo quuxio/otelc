@@ -76,3 +76,15 @@ class LanguageBenchmarkTests(unittest.TestCase):
             self.assertIn("JavaLatency.java", launch.call_args_list[0].args[0][-1])
             self.assertIn("java", launch.call_args_list[1].args[0])
             self.assertIn("examples.apps.JavaLatency.process_order(*)", (output / "policy.toml").read_text())
+
+    def test_go_baseline_runs_original_source_with_live_adapter_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = self.fixture(directory)
+            (root / "examples/apps/go_latency.go").write_text("unchanged Go application")
+            (root / "examples/go.toml").write_text('[functions]\ninclude=["examples.apps.go_app.*"]\n[resource]\nservice_name="test"\n')
+            samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 10}] * 2 for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
+            with patch.object(benchmark.platform, "platform", return_value="test"), patch.object(benchmark.platform, "machine", return_value="arm64"), patch.object(benchmark.subprocess, "Popen", side_effect=lambda *a, **k: Process()) as launch, patch.object(benchmark, "read_line", return_value="ready"), patch.object(benchmark, "batch"), patch.object(benchmark.subprocess, "check_output", side_effect=['{"pid":42}', 'go version go1.27.1']), patch.object(benchmark, "measure", return_value=samples):
+                report = benchmark.run(root, output, 10, 2, "go")
+            self.assertEqual(report["language"], "go")
+            self.assertEqual(launch.call_args_list[0].args[0][1], "run")
+            self.assertIn("examples.apps.go_latency.process_order", (output / "policy.toml").read_text())
