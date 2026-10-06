@@ -1,0 +1,23 @@
+schema_version = 2
+languages = ["java"]
+
+[sources]
+include = ["examples/apps/Java*.java"]
+
+[functions]
+include = ["examples.apps.JavaApp*.*", "examples.apps.JavaAnnotated.configured(*)"]
+exclude = ["*.main(*)", "*.excluded(*)"]
+
+[annotations]
+read_existing = true
+
+[resource]
+service_name = "otelc-java-example"
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 100
+timeout_ms = 300
+
+[adapters.java]
+backend = "agent"

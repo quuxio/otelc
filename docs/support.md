@@ -17,7 +17,7 @@ All target languages must meet the [source-free contract](design.md#source-free-
 | Rust | Cargo/rustc wrapper; compiler/MIR investigation | Target TODO: source-free selected functions and typed lifetime boundaries; no required macro attributes |
 | Fortran / Zig | Validated compiler adapter | Exploratory; no current support commitment |
 | Go | External compile-time adapter | Target TODO: source-free application-function rules, goroutines and panic/recover |
-| Java | External AspectJ weaving or Java agent | Target TODO: selected methods/constructors without annotations |
+| Java | JDK 21+ agent and ASM bytecode body probes | Implemented selected methods/constructors, exceptions, recursion, executor threads, optional annotations and live controls; lifetimes/traces unavailable |
 | Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation and live control; lifetimes/traces remain unavailable |
 | JavaScript | Node 24.11+ in-memory loader transform, JavaScript SDK | Implemented ESM/CommonJS function timing, async/generators, constructors, exceptions and live controls; lifetimes/traces unavailable |
 | TypeScript | TypeScript 6.0.3 compiler emit and Node in-memory probes | Implemented typed functions, enums/namespaces, decorators, exceptions, original source maps and live metrics; lifetimes/traces unavailable |

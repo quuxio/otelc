@@ -23,7 +23,7 @@ fn main() {
 fn run() -> Result<i32> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
-        println!("quux-otelc [--config PATH] [--language ID] status|enable|disable --socket PATH | config [--json] [--require-supported]|doctor|inspect BINARY [--all|--json]|run BINARY [ARGS...]|clang [ARGS...]|clang++ [ARGS...]\nNative function timing and interim opt-in lifetime metrics. Python 3.12+ function timing is available with python SCRIPT or python -m MODULE; JavaScript function timing is available with node SCRIPT; TypeScript function timing is available with ts SCRIPT; other adapters remain planned. LLVM backend supports C++ exceptions; callbacks require existing -fno-exceptions.\nBuild the CLI and static runtime together with make build.");
+        println!("quux-otelc [--config PATH] [--language ID] status|enable|disable --socket PATH | config [--json] [--require-supported]|doctor|inspect BINARY [--all|--json]|run BINARY [ARGS...]|clang [ARGS...]|clang++ [ARGS...]\nNative function timing and interim opt-in lifetime metrics. Python 3.12+ function timing is available with python SCRIPT or python -m MODULE; JavaScript function timing is available with node SCRIPT; TypeScript function timing is available with ts SCRIPT; Java function timing is available with java CLASS, SOURCE.java or -jar JAR; Go and Rust remain planned. LLVM backend supports C++ exceptions; callbacks require existing -fno-exceptions.\nBuild the CLI and static runtime together with make build.");
         return Ok(0);
     }
     let mut config_path = PathBuf::from("otelc.toml");
@@ -72,7 +72,15 @@ fn run() -> Result<i32> {
             }
             Ok(0)
         }
-        "python" | "node" | "ts" => managed::run(&command, &args, &config_path, language),
+        "python" | "node" | "ts" | "java" => managed::run(&command, &args, &config_path, language),
+        "doctor" if language == Some(Language::Java) => {
+            managed::run("java", &["--doctor".into()], &config_path, language)
+        }
+        "inspect" if language == Some(Language::Java) => {
+            let mut options = vec!["--inspect".into()];
+            options.extend(args);
+            managed::run("java", &options, &config_path, language)
+        }
         "doctor" if matches!(language, Some(Language::JavaScript | Language::TypeScript)) => {
             let command = if language == Some(Language::TypeScript) {
                 "ts"

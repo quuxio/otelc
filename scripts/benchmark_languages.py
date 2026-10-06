@@ -20,7 +20,7 @@ except ModuleNotFoundError:
 def run(root, output, iterations, runs, language="python", endpoint=None):
     if not 1 <= iterations <= 1000000 or not 2 <= runs <= 100:
         raise ValueError("iterations must be 1..1000000 and runs 2..100")
-    if language not in ("python", "javascript", "typescript"):
+    if language not in ("python", "javascript", "typescript", "java"):
         raise ValueError("language benchmark adapter is not implemented")
     root, output = Path(root).resolve(), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -29,15 +29,22 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
     config = output / "policy.toml"
     extension, adapter, interpreter = ("py", "python", sys.executable) if language == "python" else ("mts" if language == "typescript" else "mjs", "ts" if language == "typescript" else "node", os.environ.get("OTELC_NODE", shutil.which("node") or "node"))
     source = root / f"examples/apps/{language}_latency.{extension}"
+    if language == "java":
+        adapter, interpreter = "java", os.environ.get("OTELC_JAVA", shutil.which("java") or "java")
+        source = root / "examples/apps/JavaLatency.java"
     original = source.read_bytes()
     config.write_text((root / f"examples/{language}.toml").read_text().replace(f"examples.apps.{language}_app.*", f"examples.apps.{language}_latency.process_order").replace('[resource]', '[metrics]\nenabled = false\n\n[runtime]\ncontrol_socket = ' + json.dumps(str(socket)) + '\n\n[resource]'))
+    if language == "java":
+        config.write_text(config.read_text().replace("examples.apps.JavaApp*.*", "examples.apps.JavaLatency.process_order(*)"))
     if endpoint:
         config.write_text(config.read_text().replace("http://127.0.0.1:4318", endpoint))
     cli = root / "target/debug/quux-otelc"
     report_path = output / "runtime.json"
     environment = {k: v for k, v in os.environ.items() if not k.startswith(("OTEL_", "OTELC_"))}
     environment.update(OTELC_PYTHON=sys.executable, OTELC_REPORT_PATH=str(report_path))
-    if language != "python":
+    if language == "java":
+        environment["OTELC_JAVA"] = interpreter
+    elif language != "python":
         environment["OTELC_NODE"] = interpreter
     processes = []
     try:
@@ -78,7 +85,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--language", choices=["python", "javascript", "typescript"], required=True)
+    parser.add_argument("--language", choices=["python", "javascript", "typescript", "java"], required=True)
     parser.add_argument("--iterations", type=int, default=10000)
     parser.add_argument("--runs", type=int, default=8)
     parser.add_argument("--output", type=Path, default=Path("build/benchmarks/python"))

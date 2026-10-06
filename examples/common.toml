@@ -72,7 +72,7 @@ backend = "source"
 [adapters.javascript]
 backend = "loader"
 [adapters.java]
-backend = "aspectj"
+backend = "agent"
 [adapters.python]
 backend = "profile"
 [adapters.go]

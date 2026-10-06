@@ -62,3 +62,17 @@ class LanguageBenchmarkTests(unittest.TestCase):
         with patch.object(benchmark.sys, "argv", ["benchmark", "--language", "python"]), patch.object(benchmark, "run", return_value={"summary": {"complete": True}}), contextlib.redirect_stdout(io.StringIO()) as output:
             benchmark.main()
         self.assertIn("complete", output.getvalue())
+
+    def test_java_launch_uses_same_source_and_external_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = self.fixture(directory)
+            (root / "examples/apps/JavaLatency.java").write_text("unchanged Java application")
+            (root / "examples/java.toml").write_text('[functions]\ninclude=["examples.apps.JavaApp*.*"]\n[resource]\nservice_name="test"\n')
+            samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 10}] * 2 for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
+            with patch.object(benchmark.platform, "platform", return_value="test"), patch.object(benchmark.platform, "machine", return_value="arm64"), patch.object(benchmark.subprocess, "Popen", side_effect=lambda *a, **k: Process()) as launch, patch.object(benchmark, "read_line", return_value="ready"), patch.object(benchmark, "batch"), patch.object(benchmark.subprocess, "check_output", side_effect=['{"pid":42}', 'openjdk 21']), patch.object(benchmark, "measure", return_value=samples):
+                report = benchmark.run(root, output, 10, 2, "java")
+            self.assertEqual(report["language"], "java")
+            self.assertEqual(report["toolchain"], "openjdk 21")
+            self.assertIn("JavaLatency.java", launch.call_args_list[0].args[0][-1])
+            self.assertIn("java", launch.call_args_list[1].args[0])
+            self.assertIn("examples.apps.JavaLatency.process_order(*)", (output / "policy.toml").read_text())

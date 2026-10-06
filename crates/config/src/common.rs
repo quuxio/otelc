@@ -293,6 +293,16 @@ impl CommonConfig {
             if self.traces.enabled {
                 unavailable.push(format!("{language} span export is not implemented"));
             }
+        } else if language == Language::Java {
+            if backend != "agent" {
+                unavailable.push("Java requires the agent backend".into());
+            }
+            if self.lifetimes.enabled {
+                unavailable.push("automatic Java lifetimes are not implemented".into());
+            }
+            if self.traces.enabled {
+                unavailable.push("Java span export is not implemented".into());
+            }
         } else if !matches!(language, Language::C | Language::Cpp) {
             unavailable.push(format!("{language} adapter is not implemented"));
         } else {

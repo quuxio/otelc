@@ -315,7 +315,7 @@ class PythonAdapterTests(unittest.TestCase):
                     result = benchmark_languages.run(ROOT, Path(directory) / "benchmark", 40, 2, endpoint=f"http://127.0.0.1:{server.server_port}")
                 self.assertTrue(result["complete_telemetry"])
                 self.assertEqual(result["runtime"]["function_calls"], 1080)
-                for iterations, runs, language in ((0, 2, "python"), (1, 1, "python"), (1, 2, "java")):
+                for iterations, runs, language in ((0, 2, "python"), (1, 1, "python"), (1, 2, "unknown")):
                     with self.assertRaises(ValueError):
                         benchmark_languages.run(ROOT, Path(directory), iterations, runs, language)
                 with patch.object(sys, "argv", ["benchmark_languages.py", "--language", "python"]), patch.object(benchmark_languages, "run", return_value=result), contextlib.redirect_stdout(io.StringIO()):

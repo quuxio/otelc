@@ -52,6 +52,12 @@ jobs:
           node-version: '24'
       - name: Install Node adapter dependencies
         run: npm ci --ignore-scripts --prefix adapters/node
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Build Java adapter
+        run: make java-build
       - name: Install Rust and matching coverage tools
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
@@ -59,7 +65,7 @@ jobs:
           brew install llvm@22
           cargo install cargo-llvm-cov --version 0.8.7 --locked
       - name: Validate native runtime and coverage
-        run: make rust-check model-check rust-coverage python-check node-check PYTHON=python3
+        run: make rust-check model-check rust-coverage python-check node-check java-check PYTHON=python3
 
   sonar:
     name: SonarQube

@@ -13,6 +13,7 @@ pub fn run(
         "python" => Language::Python,
         "node" => Language::JavaScript,
         "ts" => Language::TypeScript,
+        "java" => Language::Java,
         _ => bail!("unknown language adapter command"),
     };
     if language.is_some_and(|l| l != target) {
@@ -28,6 +29,31 @@ pub fn run(
     let root = std::env::var_os("OTELC_ADAPTER_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters"));
+    if target == Language::Java {
+        let agent = root.join("java/target/java-agent-0.1.0-agent.jar");
+        if !agent.is_file() {
+            bail!("Java agent not found; build with make java-check or set OTELC_ADAPTER_ROOT");
+        }
+        if args.is_empty() {
+            bail!("java requires CLASS, SOURCE.java or -jar JAR [ARGS...]");
+        }
+        let java = std::env::var_os("OTELC_JAVA").unwrap_or_else(|| "java".into());
+        let mut child = Command::new(java);
+        if args[0] == "--doctor" || args[0] == "--inspect" {
+            child.arg("-jar").arg(&agent).arg(plan.path());
+        } else {
+            child.arg(format!(
+                "-javaagent:{}={}",
+                agent.display(),
+                plan.path().display()
+            ));
+        }
+        let status = child
+            .args(args)
+            .status()
+            .context("launch Java instrumentation")?;
+        return Ok(status.code().unwrap_or(1));
+    }
     if matches!(target, Language::JavaScript | Language::TypeScript) {
         let launcher = root.join("node/register.mjs");
         if !launcher.is_file() {

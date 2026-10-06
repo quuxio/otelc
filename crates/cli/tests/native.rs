@@ -653,6 +653,7 @@ fn common_configuration_inspection_and_capability_rejection() {
                 || language == "python"
                 || language == "javascript"
                 || language == "typescript"
+                || language == "java"
         );
     }
     success(cli(
@@ -660,13 +661,11 @@ fn common_configuration_inspection_and_capability_rejection() {
         root.path(),
     ));
     let unavailable = cli(
-        &["--language", "java", "config", "--require-supported"],
+        &["--language", "go", "config", "--require-supported"],
         root.path(),
     );
     assert!(!unavailable.status.success());
-    assert!(
-        String::from_utf8_lossy(&unavailable.stdout).contains("java adapter is not implemented")
-    );
+    assert!(String::from_utf8_lossy(&unavailable.stdout).contains("go adapter is not implemented"));
     for args in [
         vec!["config"],
         vec!["--language", "scala", "config"],
@@ -829,6 +828,63 @@ fn node_adapters_preserve_source_and_export_decodable_sdk_metrics() {
         ] {
             assert!(!cli(&args, root.path()).status.success());
         }
+    }
+}
+
+#[test]
+fn java_agent_preserves_original_sources_and_exports_typed_sdk_metrics() {
+    let root = tempfile::tempdir().unwrap();
+    let source = "public class App { public static int selected(int n){if(n<0)throw new IllegalArgumentException(\"escaping\");return n*2;} @OtelcInstrument public static int annotated(){return 3;} public static void main(String[] args){System.out.println(selected(3)+annotated());try{selected(-1);}catch(IllegalArgumentException error){if(!error.getMessage().equals(\"escaping\"))throw error;}} } @interface OtelcInstrument {}";
+    std::fs::write(root.path().join("App.java"), source).unwrap();
+    success(
+        Command::new("javac")
+            .args(["-g", "App.java"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let (port, listener) = receiver();
+    std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['java']\n[sources]\ninclude=['*.java']\n[functions]\ninclude=['App.selected(*)']\n[annotations]\nread_existing=true\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\ntimeout_ms=500\n")).unwrap();
+    let baseline = success(
+        Command::new("java")
+            .arg("App")
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let server = start_receiver(listener);
+    let measured = success(cli(&["java", "App"], root.path()));
+    assert_eq!(baseline.stdout, measured.stdout);
+    assert_eq!(
+        source.as_bytes(),
+        std::fs::read(root.path().join("App.java")).unwrap()
+    );
+    let request = server.join().unwrap();
+    assert_eq!(
+        counter(&request, "otelc.function.calls", Some("App.selected(int)")),
+        2
+    );
+    assert_eq!(
+        counter(&request, "otelc.function.calls", Some("App.annotated()")),
+        1
+    );
+    assert_eq!(
+        counter(
+            &request,
+            "otelc.function.unwinds",
+            Some("App.selected(int)")
+        ),
+        1
+    );
+    success(cli(&["--language", "java", "doctor"], root.path()));
+    let inventory = success(cli(
+        &["--language", "java", "inspect", "App.class", "--json"],
+        root.path(),
+    ));
+    let parsed: serde_json::Value = serde_json::from_slice(&inventory.stdout).unwrap();
+    assert_eq!(parsed["functions"].as_array().unwrap().len(), 4);
+    for args in [vec!["java"], vec!["--language", "python", "java", "App"]] {
+        assert!(!cli(&args, root.path()).status.success());
     }
 }
 
