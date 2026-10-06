@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/config", "crates/symbols", "crates/export", "crates/runtime", "crates/cli"]
+members = ["crates/config", "crates/symbols", "crates/export", "crates/runtime", "crates/cli", "crates/rust-probes", "crates/rust-adapter"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,3 +23,5 @@ ureq = "3.4"
 url = "2"
 percent-encoding = "2"
 cc = "1.2"
+opentelemetry = { version = "=0.32.0", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "=0.32.1", default-features = false, features = ["metrics", "experimental_metrics_custom_reader"] }

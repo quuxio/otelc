@@ -29,6 +29,7 @@ fn one_document_resolves_all_languages_with_shared_policy() {
                     | Language::TypeScript
                     | Language::Java
                     | Language::Go
+                    | Language::Rust
             )
         );
         assert_eq!(language.to_string().parse::<Language>().unwrap(), *language);

@@ -2,7 +2,7 @@
 
 ## Implemented contract and current support
 
-Use one TOML document with `schema_version = 2` for C, C++, Rust, TypeScript, JavaScript, Java, Python and Go. [`examples/common.toml`](../examples/common.toml) is a validated example. The shared Rust configuration library implements parsing, defaults, validation and per-language resolution. The native C/C++ compiler wrapper and runtime consume this schema now; Python consumes the resolved policy through its monitoring adapter; the remaining adapters are being implemented one at a time. A valid policy does not imply that every requested language or feature is executable.
+Use one TOML document with `schema_version = 2` for C, C++, Rust, TypeScript, JavaScript, Java, Python and Go. [`examples/common.toml`](../examples/common.toml) is a validated example. The shared Rust configuration library implements parsing, defaults, validation and per-language resolution. The native C/C++ compiler wrapper and runtime consume this schema now; Python consumes the resolved policy through its monitoring adapter; JavaScript/TypeScript use generated in-memory compiler input, Java uses bytecode probes, Go uses compiler overlays and Rust uses generated source plus a Cargo wrapper. A valid policy does not imply that every requested language or feature is executable.
 
 All adapters must consume this common policy, either through the shared library or the CLI's resolved JSON. They must preserve its selection, precedence, limits and telemetry semantics rather than introduce independent policy files. A language-specific backend may need additional typed settings as it is implemented; those settings belong under `adapters.<language>` and must be validated by the common schema.
 
@@ -50,7 +50,7 @@ make build
 
 Defaults include empty source/function selections, annotation processing off, automatic lifetimes off, metrics on and traces off. Shared limits are 4096 selected functions, 4096 active managed-language calls, 4096 live lifetimes and a 2000 ms shutdown deadline. `runtime.max_active_calls` bounds pending Python observations, including suspended generators and coroutines; it does not alter native stack limits. Native defaults are 128 admitted threads, depth 256 and 4096 queue slots per thread. Unknown keys, duplicate/empty language lists, adapter sections for disabled languages, invalid backend choices, inappropriate native settings and invalid capacity/transport/resource values fail validation.
 
-The default backend preferences are LLVM for C/C++, compiler integration for Rust, source processing for TypeScript, a loader for JavaScript, an agent for Java, a monitoring/profile adapter for Python and compile-time integration for Go. They are deterministic preferences, not automatic installation or a claim that those adapters exist. The example selects the implemented Java agent. AspectJ remains an unavailable alternative.
+The default backend preferences are LLVM for C/C++, compiler integration for Rust, source processing for TypeScript, a loader for JavaScript, an agent for Java, a monitoring/profile adapter for Python and compile-time integration for Go. They select the implemented function-metrics backends; they do not install dependencies automatically. The example selects the implemented Java agent. AspectJ remains an unavailable alternative.
 
 ## Use the same file with native C/C++
 

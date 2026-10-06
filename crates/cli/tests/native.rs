@@ -621,6 +621,52 @@ fn common_config(root: &Path, port: u16) {
     std::fs::write(root.join("otelc.toml"), text).unwrap();
 }
 #[test]
+fn rust_generated_sources_preserve_examples_and_export_sdk_metrics() {
+    for (file, source, result, calls, unwind) in [
+        (
+            "rust_app.rs",
+            include_str!("../../../examples/apps/rust_app.rs"),
+            "72",
+            10,
+            1,
+        ),
+        (
+            "rust_annotated.rs",
+            include_str!("../../../examples/apps/rust_annotated.rs"),
+            "30",
+            2,
+            0,
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (port, listener) = receiver();
+        std::fs::write(root.path().join(file), source).unwrap();
+        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['rust']\n[sources]\ninclude=['*.rs']\n[functions]\ninclude=['rust_app.*','rust_annotated.configured']\nexclude=['*.main','*.excluded']\n[annotations]\nread_existing=true\ninject_generated=true\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\ntimeout_ms=1000\n")).unwrap();
+        let server = start_receiver(listener);
+        let output = success(cli(&["rust", file], root.path()));
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), result);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join(file)).unwrap(),
+            source
+        );
+        let request = server.join().unwrap();
+        assert_eq!(counter(&request, "otelc.function.calls", None), calls);
+        assert_eq!(counter(&request, "otelc.function.unwinds", None), unwind);
+        assert_eq!(
+            counter(&request, "otelc.runtime.dropped_observations", None),
+            0
+        );
+        assert_eq!(counter(&request, "otelc.export.dropped_batches", None), 0);
+        success(cli(&["--language", "rust", "doctor"], root.path()));
+        let inspect = success(cli(
+            &["--language", "rust", "inspect", file, "--json"],
+            root.path(),
+        ));
+        let value: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+        assert_eq!(value["language"], "rust");
+    }
+}
+#[test]
 fn common_configuration_inspection_and_capability_rejection() {
     let root = setup("");
     common_config(root.path(), 4318);
@@ -655,20 +701,17 @@ fn common_configuration_inspection_and_capability_rejection() {
                 || language == "typescript"
                 || language == "java"
                 || language == "go"
+                || language == "rust"
         );
     }
     success(cli(
         &["--language", "cpp", "config", "--require-supported"],
         root.path(),
     ));
-    let unavailable = cli(
+    success(cli(
         &["--language", "rust", "config", "--require-supported"],
         root.path(),
-    );
-    assert!(!unavailable.status.success());
-    assert!(
-        String::from_utf8_lossy(&unavailable.stdout).contains("rust adapter is not implemented")
-    );
+    ));
     for args in [
         vec!["config"],
         vec!["--language", "scala", "config"],

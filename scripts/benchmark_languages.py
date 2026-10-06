@@ -20,7 +20,7 @@ except ModuleNotFoundError:
 def run(root, output, iterations, runs, language="python", endpoint=None):
     if not 1 <= iterations <= 1000000 or not 2 <= runs <= 100:
         raise ValueError("iterations must be 1..1000000 and runs 2..100")
-    if language not in ("python", "javascript", "typescript", "java", "go"):
+    if language not in ("python", "javascript", "typescript", "java", "go", "rust"):
         raise ValueError("language benchmark adapter is not implemented")
     root, output = Path(root).resolve(), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -35,6 +35,9 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
     elif language == "go":
         adapter, interpreter = "go", os.environ.get("OTELC_GO", shutil.which("go") or "go")
         source = root / "examples/apps/go_latency.go"
+    elif language == "rust":
+        adapter, interpreter = "rust", os.environ.get("OTELC_RUSTC", shutil.which("rustc") or "rustc")
+        source = root / "examples/apps/rust_latency.rs"
     original = source.read_bytes()
     config.write_text((root / f"examples/{language}.toml").read_text().replace(f"examples.apps.{language}_app.*", f"examples.apps.{language}_latency.process_order").replace('[resource]', '[metrics]\nenabled = false\n\n[runtime]\ncontrol_socket = ' + json.dumps(str(socket)) + '\n\n[resource]'))
     if language == "java":
@@ -47,6 +50,8 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
     environment.update(OTELC_PYTHON=sys.executable, OTELC_REPORT_PATH=str(report_path))
     if language == "go":
         environment["OTELC_GO"] = interpreter
+    elif language == "rust":
+        environment["OTELC_RUSTC"] = interpreter
     elif language == "java":
         environment["OTELC_JAVA"] = interpreter
     elif language != "python":
@@ -56,6 +61,10 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
         plain_command = [interpreter, str(source)] if language != "typescript" else [interpreter, "--import", str(root / "adapters/node/plain.mjs"), str(source)]
         if language == "go":
             plain_command = [interpreter, "run", str(source)]
+        elif language == "rust":
+            plain_binary = output / "plain-rust"
+            subprocess.run([interpreter, "--edition=2024", "-O", "-g", str(source), "-o", str(plain_binary)], check=True, env=environment)
+            plain_command = [str(plain_binary)]
         for command in (plain_command, [str(cli), "--config", str(config), adapter, str(source)]):
             process = subprocess.Popen(command, cwd=root, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
             processes.append(process)
@@ -92,7 +101,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--language", choices=["python", "javascript", "typescript", "java", "go"], required=True)
+    parser.add_argument("--language", choices=["python", "javascript", "typescript", "java", "go", "rust"], required=True)
     parser.add_argument("--iterations", type=int, default=10000)
     parser.add_argument("--runs", type=int, default=8)
     parser.add_argument("--output", type=Path, default=Path("build/benchmarks/python"))

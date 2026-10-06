@@ -25,6 +25,21 @@ class Process:
 
 
 class LanguageBenchmarkTests(unittest.TestCase):
+    def test_rust_compiles_unchanged_baseline_and_runs_live_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = self.fixture(directory)
+            (root / "examples/apps/rust_latency.rs").write_text("unchanged Rust application")
+            (root / "examples/rust.toml").write_text('[functions]\ninclude=["examples.apps.rust_app.*"]\n[resource]\nservice_name="test"\n')
+            samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 10}] * 2 for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
+            with patch.object(benchmark.platform, "platform", return_value="test"), patch.object(benchmark.platform, "machine", return_value="arm64"), patch.object(benchmark.subprocess, "run") as compile_app, patch.object(benchmark.subprocess, "Popen", side_effect=lambda *a, **k: Process()) as launch, patch.object(benchmark, "read_line", return_value="ready"), patch.object(benchmark, "batch"), patch.object(benchmark.subprocess, "check_output", side_effect=['{"pid":42}', 'rustc 1.98.1']), patch.object(benchmark, "measure", return_value=samples):
+                report = benchmark.run(root, output, 10, 2, "rust")
+            self.assertEqual(report["language"], "rust")
+            self.assertEqual(report["toolchain"], "rustc 1.98.1")
+            self.assertIn("--edition=2024", compile_app.call_args.args[0])
+            self.assertEqual(launch.call_args_list[0].args[0], [str(output.resolve() / "plain-rust")])
+            self.assertIn("rust", launch.call_args_list[1].args[0])
+            self.assertIn("examples.apps.rust_latency.process_order", (output / "policy.toml").read_text())
+
     def fixture(self, directory, valid=True):
         root = Path(directory)
         (root / "examples/apps").mkdir(parents=True)

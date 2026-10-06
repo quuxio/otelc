@@ -734,6 +734,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "quux-otelc-rust"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "opentelemetry",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost",
+ "quux-otelc-config",
+ "quux-otelc-export",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "quux-otelc-rust-adapter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "proc-macro2",
+ "quote",
+ "quux-otelc-config",
+ "quux-otelc-rust",
+ "serde",
+ "serde_json",
+ "syn 3.0.6",
+ "tempfile",
+]
+
+[[package]]
 name = "quux-otelc-symbols"
 version = "0.1.0"
 dependencies = [

@@ -2,13 +2,13 @@
 
 ## What you can run today
 
-This guide uses the locally tested macOS ARM64 C/C++ LLVM backend. It instruments application functions without editing original files, reads optional existing Clang function annotations, preserves C++ exceptions and can turn metrics admission on/off in a running process. Rust, TypeScript/JavaScript, Java, Python and Go share the configuration contract; their execution adapters remain TODO. Automatic object lifetimes and trace export remain TODO.
+This guide uses the locally tested macOS ARM64 C/C++ LLVM backend. It instruments application functions without editing original files, reads optional existing Clang function annotations, preserves C++ exceptions and can turn metrics admission on/off in a running process. Rust, TypeScript/JavaScript, Java, Python and Go have implemented function-metrics adapters using the same configuration contract. Their language-specific build, source and annotation examples are in the [language guides](languages.md). Automatic object lifetimes and trace export remain TODO.
 
 The compiler wrapper adds probes in LLVM IR and links the native runtime. The runtime aggregates completed function counts and inclusive duration histograms, then sends OTLP/HTTP protobuf to the Collector. Prometheus stores the scraped data; Grafana displays it. Application arguments and return values are not exported.
 
 ## Prepare the tools and metrics viewer
 
-Run from the repository root. On this Mac the checkout is `/Users/sclarke/github/otelc`. Requirements are Rust 1.98+, Homebrew LLVM 22, a Docker engine and Docker Compose.
+Run from the repository root. On this Mac the checkout is `/Users/sclarke/github/otelc`. The qualified local requirements are Rust 1.98.1, Homebrew LLVM 22, a Docker engine and Docker Compose.
 
 ```sh
 cd /Users/sclarke/github/otelc
@@ -248,7 +248,7 @@ After `ready`, enter `batch 50000` as application input. It prints body elapsed 
 
 Run another `batch 50000` in Terminal 1 after each toggle. Status returns the same PID, enablement and worker-observed completed function count. No rebuild, restart or source change is involved. Enter `quit` to exit; normal shutdown removes the socket.
 
-Off stops admission of new measurements. Already admitted calls retain their token and complete normally, even if they throw while off. Calls started while off remain unmeasured if enabled before their return. Queued/in-flight measurements drain and may produce a final export after off; historical counters do not reset. Once drained, periodic encoding/export stops while off. The worker/control threads and compiled entry/exit probes still exist, so off retains some overhead. Live control is currently LLVM-only and cannot add probes, change function filters, enable traces or reload configuration. For short-lived apps, configure the desired startup state.
+Off stops admission of new measurements. Already admitted calls retain their token and complete normally, even if they throw while off. Calls started while off remain unmeasured if enabled before their return. Queued/in-flight measurements drain and may produce a final export after off; historical counters do not reset. Once drained, periodic encoding/export stops while off. The worker/control threads and compiled entry/exit probes still exist, so off retains some overhead. Native live control requires LLVM; Python, JavaScript, TypeScript, Java, Go and Rust also provide their language-runtime controls. Live control and cannot add probes, change function filters, enable traces or reload configuration. For short-lived apps, configure the desired startup state.
 
 ## Measure the added latency
 

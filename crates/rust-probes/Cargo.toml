@@ -1,0 +1,20 @@
+[package]
+name = "quux-otelc-rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+prost.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-proto.workspace = true
+quux-otelc-config = { path = "../config" }
+quux-otelc-export = { path = "../export" }
+[dev-dependencies]
+tempfile = "3"
+toml.workspace = true

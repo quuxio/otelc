@@ -9,6 +9,7 @@ Use Go 1.26+; the local and CI qualification uses Go 1.27.1. Install the pinned 
 ```sh
 go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
 go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+export PATH="$(go env GOPATH)/bin:$PATH"
 make build go-check
 ./target/debug/quux-otelc --config examples/go.toml --language go doctor
 ./target/debug/quux-otelc --config examples/go.toml --language go inspect examples/apps/go_app.go --json

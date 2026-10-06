@@ -82,7 +82,7 @@ def write_reports(environment):
     merged = build / "rust-coverage.profdata"
     subprocess.run([environment.get("LLVM_PROFDATA", "llvm-profdata"), "merge", "-sparse", *map(str, profiles), "-o", str(merged)], check=True, env=environment)
     objects = [path for path in (target / "debug/deps").iterdir() if path.is_file() and path.suffix == "" and os.access(path, os.X_OK)]
-    objects.append(target / "debug/quux-otelc")
+    objects.extend([target / "debug/quux-otelc", target / "debug/otelc-rust-adapter"])
     native = list(Path(environment["OTELC_COVERAGE_BIN_DIR"]).glob("*"))
     native.extend((target / "debug").glob("libotelc_pass.*"))
     command = [environment.get("LLVM_COV", "llvm-cov"), "export", "--format=lcov", "--instr-profile=" + str(merged), "--ignore-filename-regex=/tests/|build.rs|/.cargo/registry/|/rustlib/src/|/opt/homebrew/.*/include/|/Library/Developer/|/\\.tmp[^/]+/"]
@@ -100,6 +100,23 @@ def write_reports(environment):
     print(f"Rust/native line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
     if percentage < 80:
         raise ValueError("Rust/native line coverage is below 80%")
+    enforce_rust_adapter_coverage(report)
+
+
+def enforce_rust_adapter_coverage(report):
+    """Prevent older native code from masking an untested Rust language adapter."""
+    for crate in ("rust-adapter", "rust-probes"):
+        selected = []
+        include = False
+        for line in report.splitlines():
+            if line.startswith("SF:"):
+                include = f"/crates/{crate}/src/" in line
+            if include:
+                selected.append(line)
+        percentage = line_coverage("\n".join(selected))
+        print(f"Rust {crate} line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
+        if percentage < 80:
+            raise ValueError(f"Rust {crate} line coverage is below 80%")
 
 
 def main():
@@ -110,7 +127,7 @@ def main():
     for binary in Path(environment["OTELC_COVERAGE_BIN_DIR"]).glob("*"):
         binary.unlink()
     # Remove old workspace maps while retaining cached third-party dependencies.
-    subprocess.run(["cargo", "clean", "-p", "quux-otelc-cli", "-p", "quux-otelc-config", "-p", "quux-otelc-symbols", "-p", "quux-otelc-runtime", "-p", "quux-otelc-export"], env=environment, check=True)
+    subprocess.run(["cargo", "clean", "-p", "quux-otelc-cli", "-p", "quux-otelc-config", "-p", "quux-otelc-symbols", "-p", "quux-otelc-runtime", "-p", "quux-otelc-export", "-p", "quux-otelc-rust", "-p", "quux-otelc-rust-adapter"], env=environment, check=True)
     environment["OTELC_PLUGIN_DIR"] = str(Path(environment["CARGO_TARGET_DIR"]) / "debug")
     subprocess.run(["python3", "ci/build_llvm_plugin.py"], env=environment, check=True)
     for command in (

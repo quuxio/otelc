@@ -15,6 +15,7 @@ pub fn run(
         "ts" => Language::TypeScript,
         "java" => Language::Java,
         "go" => Language::Go,
+        "rust" => Language::Rust,
         _ => bail!("unknown language adapter command"),
     };
     if language.is_some_and(|l| l != target) {
@@ -27,6 +28,21 @@ pub fn run(
     let mut plan = tempfile::NamedTempFile::new()?;
     serde_json::to_writer(&mut plan, &resolved)?;
     plan.flush()?;
+    if target == Language::Rust {
+        let adapter = std::env::current_exe()?
+            .parent()
+            .context("CLI directory")?
+            .join("otelc-rust-adapter");
+        if !adapter.is_file() {
+            bail!("Rust adapter not found; build with make build");
+        }
+        let status = Command::new(adapter)
+            .arg(plan.path())
+            .args(args)
+            .status()
+            .context("launch Rust instrumentation")?;
+        return Ok(status.code().unwrap_or(1));
+    }
     let root = std::env::var_os("OTELC_ADAPTER_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters"));

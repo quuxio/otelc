@@ -232,7 +232,7 @@ impl CommonConfig {
                 bail!("invalid backend for {language}");
             }
             if let Some(native) = &adapter.native {
-                if !matches!(language, Language::C | Language::Cpp | Language::Rust) {
+                if !matches!(language, Language::C | Language::Cpp) {
                     bail!("native buffer settings are not applicable to {language}");
                 }
                 self.native_template(native.clone()).validate()?;
@@ -260,7 +260,7 @@ impl CommonConfig {
         } else {
             adapter.backend
         };
-        let native = matches!(language, Language::C | Language::Cpp | Language::Rust)
+        let native = matches!(language, Language::C | Language::Cpp)
             .then(|| adapter.native.unwrap_or_default());
         let mut unavailable = Vec::new();
         if language == Language::Python {
@@ -313,8 +313,16 @@ impl CommonConfig {
             if self.traces.enabled {
                 unavailable.push("Go span export is not implemented".into());
             }
-        } else if !matches!(language, Language::C | Language::Cpp) {
-            unavailable.push(format!("{language} adapter is not implemented"));
+        } else if language == Language::Rust {
+            if backend != "compiler" {
+                unavailable.push("Rust requires the compiler backend".into());
+            }
+            if self.lifetimes.enabled {
+                unavailable.push("automatic Rust lifetimes are not implemented".into());
+            }
+            if self.traces.enabled {
+                unavailable.push("Rust span export is not implemented".into());
+            }
         } else {
             if backend == "source" {
                 unavailable.push("source-processing backend is not implemented".into());
