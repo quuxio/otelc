@@ -74,6 +74,6 @@ backend = "loader"
 [adapters.java]
 backend = "aspectj"
 [adapters.python]
-backend = "import"
+backend = "profile"
 [adapters.go]
 backend = "compile"

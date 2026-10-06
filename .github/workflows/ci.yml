@@ -23,13 +23,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: '24'
       - name: Install validation tools
         run: |
           python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python3 -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
           npm ci --ignore-scripts --prefix ci/markdownlint
       - name: Validate documents and tooling
         run: make lint test PYTHON=python3
@@ -39,6 +40,13 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install Python adapter and coverage dependencies
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python3 -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
       - name: Install Rust and matching coverage tools
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
@@ -46,7 +54,7 @@ jobs:
           brew install llvm@22
           cargo install cargo-llvm-cov --version 0.8.7 --locked
       - name: Validate native runtime and coverage
-        run: make rust-check model-check rust-coverage PYTHON=python3
+        run: make rust-check model-check rust-coverage python-check PYTHON=python3
 
   sonar:
     name: SonarQube
@@ -62,10 +70,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install coverage tooling
         run: |
           python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python3 -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
       - name: Produce coverage report
         run: make test PYTHON=python3
       - name: Verify remote new-code policy

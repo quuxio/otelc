@@ -27,3 +27,5 @@ The [common TOML](../examples/common.toml) provides schema 2 for every target la
 Local workflows: [metrics viewer](observability-stack.md), [paired benchmarks](benchmarks.md), [object lifetimes](object-lifetimes.md), and [language adapter TODOs](roadmap.md#todo-language-adapters).
 
 For complete tested source and commands, start with the [developer 101 guide](developer-101.md).
+
+See [language adapters](languages.md) for sequential implementation status and [Python instrumentation](python.md) for the first additional language.

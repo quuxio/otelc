@@ -51,6 +51,7 @@ config_section!(Lifetimes {
 });
 config_section!(SharedRuntime {
     max_functions: usize = 4096,
+    max_active_calls: usize = 4096,
     max_live_lifetimes: usize = 4096,
     shutdown_timeout_ms: u64 = 2000,
     control_socket: Option<String> = None
@@ -91,12 +92,28 @@ pub struct CommonConfig {
     pub adapters: BTreeMap<Language, Adapter>,
 }
 #[derive(Debug, Serialize)]
+pub struct Matchers {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+impl Matchers {
+    fn new(selection: &Functions, paths: bool) -> Result<Self> {
+        Ok(Self {
+            include: Selection::regexes(&selection.include, paths)?,
+            exclude: Selection::regexes(&selection.exclude, paths)?,
+        })
+    }
+}
+#[derive(Debug, Serialize)]
 pub struct ResolvedConfig {
     pub schema_version: u32,
     pub language: Language,
     pub backend: String,
     pub sources: Functions,
     pub functions: Functions,
+    pub source_matchers: Matchers,
+    pub function_matchers: Matchers,
+    pub lifetime_matchers: Matchers,
     pub lifetimes: Lifetimes,
     pub annotations: Annotations,
     pub runtime: SharedRuntime,
@@ -170,6 +187,9 @@ impl CommonConfig {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        if self.runtime.max_active_calls == 0 || self.runtime.max_active_calls > 65536 {
+            bail!("max_active_calls must be between 1 and 65536");
+        }
         if self.schema_version != 2 || self.languages.is_empty() {
             bail!("common configuration requires schema_version=2 and nonempty languages");
         }
@@ -233,7 +253,7 @@ impl CommonConfig {
                 Language::TypeScript => "source",
                 Language::JavaScript => "loader",
                 Language::Java => "agent",
-                Language::Python => "import",
+                Language::Python => "profile",
                 Language::Go => "compile",
             }
             .into()
@@ -243,7 +263,20 @@ impl CommonConfig {
         let native = matches!(language, Language::C | Language::Cpp | Language::Rust)
             .then(|| adapter.native.unwrap_or_default());
         let mut unavailable = Vec::new();
-        if !matches!(language, Language::C | Language::Cpp) {
+        if language == Language::Python {
+            if backend != "profile" {
+                unavailable.push("Python requires the profile backend".into());
+            }
+            if self.annotations.inject_generated {
+                unavailable.push("Python monitoring does not inject annotations".into());
+            }
+            if self.lifetimes.enabled {
+                unavailable.push("automatic Python lifetimes are not implemented".into());
+            }
+            if self.traces.enabled {
+                unavailable.push("Python span export is not implemented".into());
+            }
+        } else if !matches!(language, Language::C | Language::Cpp) {
             unavailable.push(format!("{language} adapter is not implemented"));
         } else {
             if backend == "source" {
@@ -272,6 +305,15 @@ impl CommonConfig {
             native,
             sources: self.sources.clone(),
             functions: self.functions.clone(),
+            source_matchers: Matchers::new(&self.sources, true)?,
+            function_matchers: Matchers::new(&self.functions, false)?,
+            lifetime_matchers: Matchers::new(
+                &Functions {
+                    include: self.lifetimes.include.clone(),
+                    exclude: self.lifetimes.exclude.clone(),
+                },
+                false,
+            )?,
             lifetimes: self.lifetimes.clone(),
             annotations: self.annotations.clone(),
             runtime: self.runtime.clone(),

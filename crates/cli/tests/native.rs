@@ -71,11 +71,15 @@ fn compile(root: &Path, cpp: bool) {
         std::fs::copy(root.join("app"), directory.join(root.file_name().unwrap())).unwrap();
     }
 }
-fn receiver() -> (u16, thread::JoinHandle<ExportMetricsServiceRequest>) {
+fn receiver() -> (u16, TcpListener) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    (port, listener)
+}
+fn start_receiver(listener: TcpListener) -> thread::JoinHandle<ExportMetricsServiceRequest> {
+    // Start the telemetry deadline after compilation, which can be slow in CI.
     listener.set_nonblocking(true).unwrap();
-    let handle = thread::spawn(move || {
+    thread::spawn(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut stream = loop {
             match listener.accept() {
@@ -116,8 +120,7 @@ fn receiver() -> (u16, thread::JoinHandle<ExportMetricsServiceRequest>) {
         let request = ExportMetricsServiceRequest::decode(body.as_slice()).unwrap();
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
         request
-    });
-    (port, handle)
+    })
 }
 fn run_metrics(settings: &str, cpp: bool, args: &[&str]) -> ExportMetricsServiceRequest {
     let (port, server) = receiver();
@@ -125,6 +128,7 @@ fn run_metrics(settings: &str, cpp: bool, args: &[&str]) -> ExportMetricsService
         "{settings}\n[export]\nendpoint=\"http://127.0.0.1:{port}\"\ninterval_ms=60000\n"
     ));
     compile(root.path(), cpp);
+    let server = start_receiver(server);
     let mut command = vec!["run", "./app"];
     command.extend_from_slice(args);
     let output = success(cli(&command, root.path()));
@@ -435,6 +439,7 @@ fn llvm_case(
         )
         .unwrap();
     }
+    let server = start_receiver(server);
     let mut run = vec!["run", "./app"];
     run.extend_from_slice(args);
     success(
@@ -643,7 +648,7 @@ fn common_configuration_inspection_and_capability_rejection() {
         assert_eq!(policy["resource"]["service_name"], "otelc-common-example");
         assert_eq!(
             policy["execution_available"],
-            language == "c" || language == "cpp"
+            language == "c" || language == "cpp" || language == "python"
         );
     }
     success(cli(
@@ -719,6 +724,7 @@ fn common_configuration_native_c_and_exception_enabled_cpp() {
             .unwrap();
         }
         assert_eq!(before, std::fs::read(root.path().join(source)).unwrap());
+        let server = start_receiver(server);
         success(cli(&["--language", language, "run", "./app"], root.path()));
         let request = server.join().unwrap();
         assert_eq!(
@@ -833,6 +839,7 @@ fn tutorial_config_and_existing_annotations_preserve_source_and_plain_results() 
                         && f["reason"] == "included by annotation"));
             }
             let language = if cpp { "cpp" } else { "c" };
+            let server = start_receiver(server);
             assert_eq!(
                 success(cli(&["--language", language, "run", "./app"], root.path())).stdout,
                 expected
@@ -925,6 +932,7 @@ fn live_metrics_toggle_preserves_inflight_calls_and_exception_tokens() {
     ));
     retain_native(root.path(), "live-control");
     let report = root.path().join("report.json");
+    let server = start_receiver(server);
     let mut child = Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
         .args(["--language", "cpp", "run", "./app"])
         .env_remove("OTELC_LANGUAGE")

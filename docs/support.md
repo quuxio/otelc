@@ -18,7 +18,7 @@ All target languages must meet the [source-free contract](design.md#source-free-
 | Fortran / Zig | Validated compiler adapter | Exploratory; no current support commitment |
 | Go | External compile-time adapter | Target TODO: source-free application-function rules, goroutines and panic/recover |
 | Java | External AspectJ weaving or Java agent | Target TODO: selected methods/constructors without annotations |
-| Python | Launch/import hook or interpreter adapter | Target TODO: selected functions without source decorators/imports |
+| Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation and live control; lifetimes/traces remain unavailable |
 | TypeScript / JavaScript | Build or module-loader transform | Target TODO: selected functions with unchanged source and source maps |
 | .NET | Runtime/agent ecosystem | Exploratory; outside the current target-language list |
 

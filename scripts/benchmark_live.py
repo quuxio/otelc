@@ -49,7 +49,7 @@ def compare(samples, iterations):
             "total_instrumentation_ns_per_call": (medians["metrics_on"] - medians["baseline"]) / iterations}
 
 
-def measure(cli, socket, plain, instrumented, iterations, runs):
+def measure(cli, socket, plain, instrumented, iterations, runs, application_pid=None):
     """Alternate off/on ordering and keep both applications alive for every sample."""
     samples = {name: [] for name in ("baseline", "metrics_off", "metrics_on")}
     expected = None
@@ -61,7 +61,7 @@ def measure(cli, socket, plain, instrumented, iterations, runs):
         phases = ("metrics_off", "metrics_on") if index % 2 == 0 else ("metrics_on", "metrics_off")
         for phase in phases:
             enabled = phase == "metrics_on"
-            state = control(cli, socket, "enable" if enabled else "disable", instrumented.pid)
+            state = control(cli, socket, "enable" if enabled else "disable", application_pid or instrumented.pid)
             if state["metrics_enabled"] != enabled:
                 raise ValueError("Metrics toggle was not applied")
             result = batch(instrumented, iterations)

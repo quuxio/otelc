@@ -1,5 +1,6 @@
 mod compiler;
 mod control;
+mod managed;
 use anyhow::{bail, Context, Result};
 use quux_otelc_config::{
     common::{CommonConfig, Language},
@@ -22,7 +23,7 @@ fn main() {
 fn run() -> Result<i32> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
-        println!("quux-otelc [--config PATH] [--language ID] status|enable|disable --socket PATH | config [--json] [--require-supported]|doctor|inspect BINARY [--all|--json]|run BINARY [ARGS...]|clang [ARGS...]|clang++ [ARGS...]\nNative function timing and interim opt-in lifetime metrics. Common schema 2 resolves all target languages; other adapters remain planned. LLVM backend supports C++ exceptions; callbacks require existing -fno-exceptions.\nBuild the CLI and static runtime together with make build.");
+        println!("quux-otelc [--config PATH] [--language ID] status|enable|disable --socket PATH | config [--json] [--require-supported]|doctor|inspect BINARY [--all|--json]|run BINARY [ARGS...]|clang [ARGS...]|clang++ [ARGS...]\nNative function timing and interim opt-in lifetime metrics. Python 3.12+ function timing is available with python SCRIPT or python -m MODULE; other adapters remain planned. LLVM backend supports C++ exceptions; callbacks require existing -fno-exceptions.\nBuild the CLI and static runtime together with make build.");
         return Ok(0);
     }
     let mut config_path = PathBuf::from("otelc.toml");
@@ -71,6 +72,10 @@ fn run() -> Result<i32> {
             }
             Ok(0)
         }
+        "python" => managed::run(&command, &args, &config_path, language),
+        "doctor" if language == Some(Language::Python) => {
+            managed::run("python", &["--doctor".into()], &config_path, language)
+        }
         "doctor" => {
             if !args.is_empty() {
                 bail!("doctor takes no arguments");
@@ -113,6 +118,11 @@ fn run() -> Result<i32> {
                 );
             }
             Ok(if output.status.success() { 0 } else { 1 })
+        }
+        "inspect" if language == Some(Language::Python) => {
+            let mut options = vec!["--inspect".into()];
+            options.extend(args);
+            managed::run("python", &options, &config_path, language)
         }
         "inspect" => {
             let binary = Path::new(args.first().context("inspect requires an executable")?);

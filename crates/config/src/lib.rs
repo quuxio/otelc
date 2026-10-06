@@ -75,6 +75,30 @@ pub struct Selection {
     exclude: GlobSet,
 }
 impl Selection {
+    pub fn regexes(values: &[String], paths: bool) -> Result<Vec<String>> {
+        values
+            .iter()
+            .map(|value| {
+                let pattern = if paths {
+                    value.clone()
+                } else {
+                    value
+                        .chars()
+                        .map(|c| match c {
+                            '[' | '{' | '}' | ']' | '\\' => format!("\\{c}"),
+                            _ => c.to_string(),
+                        })
+                        .collect()
+                };
+                Ok(GlobBuilder::new(&pattern)
+                    .literal_separator(paths)
+                    .backslash_escape(true)
+                    .build()?
+                    .regex()
+                    .to_owned())
+            })
+            .collect()
+    }
     pub fn new(include: &[String], exclude: &[String], paths: bool) -> Result<Self> {
         fn compile(values: &[String], paths: bool) -> Result<GlobSet> {
             let mut builder = GlobSetBuilder::new();

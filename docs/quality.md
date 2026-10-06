@@ -2,13 +2,13 @@
 
 ## Current scope
 
-This checkout contains a native instrumentation prototype, native fixtures, architecture documents, GitHub workflows and Python validation helpers. Python CI helpers and the benchmark runner are repository tooling; product code lives in the Cargo workspace, `native/llvm/` and `include/otelc/`.
+This checkout contains a native instrumentation prototype, native fixtures, architecture documents, GitHub workflows and Python validation helpers. Python CI helpers and the benchmark runner are repository tooling; product code lives in the Cargo workspace, `native/llvm/`, `include/otelc/` and `adapters/`.
 
 The SonarQube analysis covers Python CI helpers, their tests, and GitHub workflows. Rust and native product coverage is generated separately and enforced by the 80% product quality gate; it is not included in the published SonarQube badges. Markdown is checked by markdownlint. The badge metrics must be interpreted within this scope.
 
 ## Local workflow
 
-Requirements: Rust 1.98+, LLVM 22/Clang, Python 3.11+, Node.js 24+, Make, and Git. `sonar-scanner` is needed only for local scanning. `make setup` creates a local virtual environment and installs coverage from hash-verified binary wheels, then installs `markdownlint-cli` 0.49.1 and its dependencies from the committed npm lockfile with package scripts disabled.
+Requirements: Rust 1.98+, LLVM 22/Clang, Python 3.12+, Node.js 24+, Make, and Git. `sonar-scanner` is needed only for local scanning. `make setup` creates a local virtual environment and installs coverage from hash-verified binary wheels, then installs `markdownlint-cli` 0.49.1 and its dependencies from the committed npm lockfile with package scripts disabled.
 
 The npm overrides pin patched `js-yaml`, KaTeX, and `smol-toml` releases while retaining the current Markdown CLI. Check for dependency advisories with `npm audit --prefix ci/markdownlint` when updating the lockfile.
 
@@ -27,7 +27,9 @@ make scan
 | `setup` | Create `.venv` and install validation dependencies |
 | `lint` | Lint all repository Markdown |
 | `test` | Run deterministic tooling/benchmark tests with 90% coverage and produce XML |
-| `check` | Run Markdown lint, Python tests/coverage and the Rust quality gate |
+| `check` | Run Markdown lint, tooling tests/coverage and native/Python product quality gates |
+| `python-check` | Validate unchanged Python instrumentation and enforce 80% adapter coverage |
+| `benchmark-language` | Same-process metrics-off/on comparison for `LANGUAGE=python` |
 | `build` | Build the LLVM pass, Rust CLI and native runtime archive |
 | `examples` | Build callback, exception and lifetime apps in `build/native/` |
 | `developer-examples` | Build the configuration-only, annotated and live-control tutorial apps |

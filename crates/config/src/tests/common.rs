@@ -20,7 +20,7 @@ fn one_document_resolves_all_languages_with_shared_policy() {
         assert_eq!(resolved.resource.service_name, config.resource.service_name);
         assert_eq!(
             resolved.execution_available,
-            matches!(language, Language::C | Language::Cpp)
+            matches!(language, Language::C | Language::Cpp | Language::Python)
         );
         assert_eq!(language.to_string().parse::<Language>().unwrap(), *language);
     }
@@ -49,7 +49,7 @@ fn defaults_and_backend_preferences_are_deterministic() {
         (Language::TypeScript, "source"),
         (Language::JavaScript, "loader"),
         (Language::Java, "agent"),
-        (Language::Python, "import"),
+        (Language::Python, "profile"),
         (Language::Go, "compile"),
     ] {
         assert_eq!(config.resolve(language).unwrap().backend, backend);
