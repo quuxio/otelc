@@ -29,11 +29,11 @@
 
 ## What is otelc?
 
-otelc provides a local native timing prototype for automatic function telemetry in native applications. Rebuild selected application code with compiler probes, link a bounded Rust runtime, and export function timing and, later, traces through OpenTelemetry Protocol (OTLP). The product goal is instrumentation without application source edits across C, C++, Rust, TypeScript/JavaScript, Java, Python and Go. Native and Python function timing already follow this model; the current opt-in C++ lifetime guard requires source edits and does not yet meet the automatic lifetime requirement. Rebuilding/linking or changing the launch command may be required. See the [source-free contract](docs/design.md#source-free-instrumentation-contract).
+otelc provides a local native timing prototype for automatic function telemetry in native applications. Rebuild selected application code with compiler probes, link a bounded Rust runtime, and export function timing and, later, traces through OpenTelemetry Protocol (OTLP). The product goal is instrumentation without application source edits across C, C++, Rust, TypeScript/JavaScript, Java, Python and Go. Native, Python and JavaScript function timing already follow this model; the current opt-in C++ lifetime guard requires source edits and does not yet meet the automatic lifetime requirement. Rebuilding/linking or changing the launch command may be required. See the [source-free contract](docs/design.md#source-free-instrumentation-contract).
 
 The first target is synchronous C and C++ on macOS ARM64 and Linux x86-64/ARM64. The architecture separates compiler integration, a language-neutral probe ABI, a bounded runtime, and telemetry export so additional native languages can be added through validated adapters.
 
-**Current status: local native prototype, validated on macOS ARM64.** The compiler wrapper, manifest inspection, bounded runtime, OTLP/HTTP metrics, exception-aware LLVM pass and explicit C++ object lifetime guard are implemented locally. Existing Clang function annotations, live LLVM metrics on/off controls and unchanged-source Python function timing are also implemented. Python uses CPython 3.12+ monitoring and the Python OpenTelemetry SDK. See the [language adapters](docs/languages.md). Traces, live filter changes and additional platform qualification remain planned. Published quality badges cover the repository-tooling SonarQube analysis; native coverage is enforced separately by the product quality gate. See the [local implementation and validation](docs/local-implementation.md).
+**Current status: local native prototype, validated on macOS ARM64.** The compiler wrapper, manifest inspection, bounded runtime, OTLP/HTTP metrics, exception-aware LLVM pass and explicit C++ object lifetime guard are implemented locally. Existing Clang function annotations, live LLVM metrics on/off controls and unchanged-source Python function timing are also implemented. Python uses CPython 3.12+ monitoring and the Python OpenTelemetry SDK. JavaScript uses an in-memory Node module transform and the JavaScript SDK; see its [101 guide](docs/javascript.md). See the [language adapters](docs/languages.md). Traces, live filter changes and additional platform qualification remain planned. Published quality badges cover the repository-tooling SonarQube analysis; native coverage is enforced separately by the product quality gate. See the [local implementation and validation](docs/local-implementation.md).
 
 ## How it will work
 
@@ -85,7 +85,7 @@ Start with the [documentation index](docs/README.md) or [system design](docs/des
 
 ## Working on this repository
 
-The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98+, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24+ and Make, then run:
+The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98+, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24.11+ and Make, then run:
 
 ```sh
 make setup
@@ -93,7 +93,7 @@ make check
 make help
 ```
 
-`make check` lints Markdown, tests repository tooling with a minimum 90% line coverage, and runs Rust formatting, Clippy, unit tests, native integration tests, queue model checking and 80% native and Python product line-coverage gates. `make scan` verifies the remote new-code policy and scans a clean Git commit when `SONAR_TOKEN` is available. See [quality setup](docs/quality.md) for the current analysis scope and local Rust coverage workflow.
+`make check` lints Markdown, tests repository tooling with a minimum 90% line coverage, and runs Rust formatting, Clippy, unit tests, native integration tests, queue model checking and 80% native, Python and Node product line-coverage gates. `make scan` verifies the remote new-code policy and scans a clean Git commit when `SONAR_TOKEN` is available. See [quality setup](docs/quality.md) for the current analysis scope and local Rust coverage workflow.
 
 ## Contributing
 
@@ -110,5 +110,5 @@ Released under [AGPL-3.0](LICENSE). No separate runtime linking exception is gra
 - [Object lifetime prototype and automatic lifetime requirement](docs/object-lifetimes.md): the current guard is opt-in; source-free class instrumentation remains TODO.
 - [Paired benchmarks](docs/benchmarks.md): `make benchmark`, retaining plain, disabled-probe and active timing samples with loss evidence.
 - [Developer 101](docs/developer-101.md): complete source, configuration, build/run commands, existing annotations, live metrics control and added-latency measurements.
-- [Common configuration](docs/common-configuration.md): one schema-2 policy, validated and resolved for every target language; native C/C++ consume it now.
+- [Common configuration](docs/common-configuration.md): one schema-2 policy, validated and resolved for every target language; native C/C++, Python and JavaScript consume it now.
 - [Language adapter TODOs](docs/roadmap.md#todo-language-adapters): Rust, TypeScript/JavaScript, Java/AspectJ, Python and Go integration.

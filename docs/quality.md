@@ -8,7 +8,7 @@ The SonarQube analysis covers Python CI helpers, their tests, and GitHub workflo
 
 ## Local workflow
 
-Requirements: Rust 1.98+, LLVM 22/Clang, Python 3.12+, Node.js 24+, Make, and Git. `sonar-scanner` is needed only for local scanning. `make setup` creates a local virtual environment and installs coverage from hash-verified binary wheels, then installs `markdownlint-cli` 0.49.1 and its dependencies from the committed npm lockfile with package scripts disabled.
+Requirements: Rust 1.98+, LLVM 22/Clang, Python 3.12+, Node.js 24.11+, Make, and Git. `sonar-scanner` is needed only for local scanning. `make setup` creates a local virtual environment and installs coverage from hash-verified binary wheels, then installs `markdownlint-cli` 0.49.1 and its dependencies from the committed npm lockfile with package scripts disabled.
 
 The npm overrides pin patched `js-yaml`, KaTeX, and `smol-toml` releases while retaining the current Markdown CLI. Check for dependency advisories with `npm audit --prefix ci/markdownlint` when updating the lockfile.
 
@@ -27,9 +27,10 @@ make scan
 | `setup` | Create `.venv` and install validation dependencies |
 | `lint` | Lint all repository Markdown |
 | `test` | Run deterministic tooling/benchmark tests with 90% coverage and produce XML |
-| `check` | Run Markdown lint, tooling tests/coverage and native/Python product quality gates |
+| `check` | Run Markdown lint, tooling tests/coverage and native/Python/Node product quality gates |
+| `node-check` | Validate in-memory JavaScript instrumentation and enforce 80% adapter coverage |
 | `python-check` | Validate unchanged Python instrumentation and enforce 80% adapter coverage |
-| `benchmark-language` | Same-process metrics-off/on comparison for `LANGUAGE=python` |
+| `benchmark-language` | Same-process metrics-off/on comparison for `LANGUAGE=python` or `javascript` |
 | `build` | Build the LLVM pass, Rust CLI and native runtime archive |
 | `examples` | Build callback, exception and lifetime apps in `build/native/` |
 | `developer-examples` | Build the configuration-only, annotated and live-control tutorial apps |

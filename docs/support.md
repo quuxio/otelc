@@ -19,7 +19,8 @@ All target languages must meet the [source-free contract](design.md#source-free-
 | Go | External compile-time adapter | Target TODO: source-free application-function rules, goroutines and panic/recover |
 | Java | External AspectJ weaving or Java agent | Target TODO: selected methods/constructors without annotations |
 | Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation and live control; lifetimes/traces remain unavailable |
-| TypeScript / JavaScript | Build or module-loader transform | Target TODO: selected functions with unchanged source and source maps |
+| JavaScript | Node 24.11+ in-memory loader transform, JavaScript SDK | Implemented ESM/CommonJS function timing, async/generators, constructors, exceptions and live controls; lifetimes/traces unavailable |
+| TypeScript | Language-aware Node transform | Next: typed functions with unchanged source and source maps |
 | .NET | Runtime/agent ecosystem | Exploratory; outside the current target-language list |
 
 Using LLVM somewhere in a compiler pipeline does not imply that it accepts our plugin, shares the same LLVM ABI, or preserves the required language semantics. Every new language must supply its own build and control-flow fixtures.

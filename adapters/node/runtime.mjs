@@ -1,0 +1,124 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import net from 'node:net';
+import { MeterProvider, PeriodicExportingMetricReader, AggregationType } from '@opentelemetry/sdk-metrics';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { ValueType } from '@opentelemetry/api';
+import { Exporter } from './exporter.mjs';
+
+export const RUNTIME = Symbol.for('quux.otelc.runtime');
+export class Runtime {
+  constructor(plan) {
+    this.plan = plan;
+    this.enabled = plan.metrics.enabled;
+    this.functions = new Map();
+    this.pending = new Map();
+    this.next = 1;
+    this.losses = { function_capacity: 0, active_call_capacity: 0, incomplete: 0, invalid: 0 };
+    this.exportLoss = 0;
+    this.timeoutMs = Math.min(plan.export.timeout_ms, plan.runtime.shutdown_timeout_ms, plan.export.interval_ms);
+    this.closed = false;
+    this.exportFinished = false;
+    this.server = null;
+    this.socketInode = null;
+    this.exporter = new Exporter(this);
+    this.reader = new PeriodicExportingMetricReader({ exporter: this.exporter, exportIntervalMillis: plan.export.interval_ms, exportTimeoutMillis: this.timeoutMs });
+    const capacity = plan.runtime.max_functions + 1;
+    this.provider = new MeterProvider({
+      resource: resourceFromAttributes({ 'service.name': plan.resource.service_name, 'service.version': plan.resource.service_version, 'service.instance.id': String(process.pid), ...plan.resource.attributes }),
+      readers: [this.reader], views: [
+        ...['otelc.function.calls', 'otelc.function.unwinds'].map(instrumentName => ({ instrumentName, aggregationCardinalityLimit: capacity })),
+        { instrumentName: 'otelc.function.duration', aggregationCardinalityLimit: capacity, aggregation: { type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM, options: { boundaries: plan.metrics.histogram_boundaries_seconds } } }
+      ]
+    });
+    const meter = this.provider.getMeter('quux.otelc', '0.1.0');
+    this.calls = meter.createCounter('otelc.function.calls', { unit: '{call}', valueType: ValueType.INT });
+    this.unwinds = meter.createCounter('otelc.function.unwinds', { unit: '{observation}', valueType: ValueType.INT });
+    this.duration = meter.createHistogram('otelc.function.duration', { unit: 's' });
+    meter.createObservableCounter('otelc.runtime.dropped_observations', { unit: '{observation}', valueType: ValueType.INT }).addCallback(observer => {
+      for (const [reason, count] of Object.entries(this.losses)) observer.observe(count, { reason });
+    });
+    meter.createObservableCounter('otelc.export.dropped_batches', { unit: '{batch}', valueType: ValueType.INT }).addCallback(observer => observer.observe(this.exportLoss));
+  }
+  register(name) {
+    if (this.functions.has(name)) return true;
+    if (this.functions.size >= this.plan.runtime.max_functions || Buffer.byteLength(name) > 1024) { this.losses.function_capacity++; return false; }
+    this.functions.set(name, { count: 0, unwinds: 0, attributes: { 'code.function.name': name } });
+    return true;
+  }
+  enter(name) {
+    if (!this.enabled || this.closed) return 0;
+    if (!this.functions.has(name) && !this.register(name)) return 0;
+    if (this.pending.size >= this.plan.runtime.max_active_calls) { this.losses.active_call_capacity++; return 0; }
+    if (this.next >= Number.MAX_SAFE_INTEGER) { this.losses.invalid++; return 0; }
+    const token = this.next++;
+    this.pending.set(token, { name, start: process.hrtime.bigint() });
+    return token;
+  }
+  exit(token, unwound) {
+    if (!token) return;
+    const end = process.hrtime.bigint();
+    const frame = this.pending.get(token);
+    if (!frame) return;
+    this.pending.delete(token);
+    const value = this.functions.get(frame.name);
+    value.count++;
+    value.unwinds += Number(unwound);
+    try {
+      this.calls.add(1, value.attributes);
+      this.duration.record(Number(end - frame.start) / 1e9, value.attributes);
+      if (unwound) this.unwinds.add(1, value.attributes);
+    } catch { this.losses.invalid++; }
+  }
+  async bindControl() {
+    const filename = this.plan.runtime.control_socket;
+    if (!filename) return;
+    const parent = path.dirname(filename);
+    const metadata = fs.lstatSync(parent);
+    if (parent === '.' || !metadata.isDirectory() || metadata.uid !== process.getuid() || metadata.mode & 0o077) throw new Error('control directory must be owned by this user with mode 0700');
+    const server = net.createServer(connection => {
+      connection.unref();
+      connection.setTimeout(200, () => connection.end('{"error":"invalid or incomplete control request"}\n'));
+      let request = '';
+      let finished = false;
+      connection.on('error', () => {});
+      connection.on('data', data => {
+        if (finished) return;
+        request += data.toString();
+        if (!request.includes('\n') && request.length <= 16) return;
+        finished = true;
+        const command = request.trimEnd();
+        if (request.length > 17 || !['status', 'enable', 'disable'].includes(command)) { connection.end('{"error":"invalid or incomplete control request"}\n'); return; }
+        if (command !== 'status') this.enabled = command === 'enable';
+        connection.end(JSON.stringify({ schema_version: 1, pid: process.pid, metrics_enabled: this.enabled, function_calls: [...this.functions.values()].reduce((sum, value) => sum + value.count, 0) }) + '\n');
+      });
+    });
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(filename, resolve); });
+    this.socketInode = fs.lstatSync(filename).ino;
+    fs.chmodSync(filename, 0o600);
+    server.unref();
+    this.server = server;
+  }
+  report() {
+    const result = { schema_version: 1, language: this.plan.language, pid: process.pid, export_finished: this.exportFinished, function_calls: [...this.functions.values()].reduce((sum, value) => sum + value.count, 0), functions: Object.fromEntries([...this.functions].map(([name, value]) => [name, { count: value.count, unwinds: value.unwinds }])), losses: { ...this.losses, incomplete: this.losses.incomplete + this.pending.size }, export_loss: this.exportLoss };
+    if (process.env.OTELC_REPORT_PATH) fs.writeFileSync(process.env.OTELC_REPORT_PATH, JSON.stringify(result, null, 2) + '\n');
+    return result;
+  }
+  async close() {
+    if (this.closed) return this.report();
+    this.closed = true;
+    this.losses.incomplete += this.pending.size;
+    this.pending.clear();
+    if (this.server) {
+      await new Promise(resolve => this.server.close(resolve));
+      const filename = this.plan.runtime.control_socket;
+      if (fs.existsSync(filename) && fs.lstatSync(filename).ino === this.socketInode) fs.unlinkSync(filename);
+    }
+    let timer;
+    try {
+      await Promise.race([this.provider.shutdown().then(() => { this.exportFinished = true; }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('shutdown deadline')), this.plan.runtime.shutdown_timeout_ms); })]);
+    } catch { this.exportLoss++; await this.exporter.shutdown(); }
+    finally { clearTimeout(timer); }
+    return this.report();
+  }
+}

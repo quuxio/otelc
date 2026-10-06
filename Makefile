@@ -2,16 +2,17 @@ PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 MARKDOWNLINT ?= $(if $(wildcard ci/markdownlint/node_modules/.bin/markdownlint),ci/markdownlint/node_modules/.bin/markdownlint,markdownlint)
 SONAR_SCANNER ?= sonar-scanner
 
-.PHONY: help setup lint test check build examples benchmark benchmark-live benchmark-language python-check developer-examples stack-up stack-down rust-check model-check rust-coverage sonar-policy scan
+.PHONY: help setup lint test check build examples benchmark benchmark-live benchmark-language python-check node-check developer-examples stack-up stack-down rust-check model-check rust-coverage sonar-policy scan
 
 help:
-	@printf '%s\n' 'setup         Install local validation dependencies' 'lint          Lint all Markdown' 'test          Run offline tests and enforce 90% coverage' 'check         Run all local quality and coverage gates' 'sonar-policy  Verify the remote Previous version policy' 'scan          Analyze a clean commit and wait for its quality gate' 'build         Build the local Rust CLI and native runtime' 'examples      Build the instrumented C and C++ example apps' 'benchmark     Paired plain/probes-disabled/metrics benchmark' 'benchmark-live Same-process metrics-off/on latency comparison' 'developer-examples Build unchanged/annotated/live developer examples' 'python-check  Validate Python adapter with 80% product coverage' 'benchmark-language Live metrics comparison for LANGUAGE=python' 'stack-up      Start the local Docker metrics stack' 'stack-down    Stop/remove stack containers, keep data' 'rust-check    Rust format, Clippy, unit and native integration tests' 'model-check   Model-check runtime queue publication with Loom' 'rust-coverage Enforce 80% Rust and native-runtime line coverage'
+	@printf '%s\n' 'setup         Install local validation dependencies' 'lint          Lint all Markdown' 'test          Run offline tests and enforce 90% coverage' 'check         Run all local quality and coverage gates' 'sonar-policy  Verify the remote Previous version policy' 'scan          Analyze a clean commit and wait for its quality gate' 'build         Build the local Rust CLI and native runtime' 'examples      Build the instrumented C and C++ example apps' 'benchmark     Paired plain/probes-disabled/metrics benchmark' 'benchmark-live Same-process metrics-off/on latency comparison' 'developer-examples Build unchanged/annotated/live developer examples' 'python-check  Validate Python adapter with 80% product coverage' 'node-check    Validate Node adapter with 80% product coverage' 'benchmark-language Live metrics comparison for LANGUAGE=python|javascript' 'stack-up      Start the local Docker metrics stack' 'stack-down    Stop/remove stack containers, keep data' 'rust-check    Rust format, Clippy, unit and native integration tests' 'model-check   Model-check runtime queue publication with Loom' 'rust-coverage Enforce 80% Rust and native-runtime line coverage'
 
 setup:
 	python3 -m venv .venv
 	.venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
 	.venv/bin/python -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
 	npm ci --ignore-scripts --prefix ci/markdownlint
+	npm ci --ignore-scripts --prefix adapters/node
 
 lint:
 	$(MARKDOWNLINT) '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore '.scannerwork/**'
@@ -22,7 +23,7 @@ test:
 	$(PYTHON) -m coverage report --fail-under=90
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 
-check: build lint test rust-check model-check rust-coverage python-check
+check: build lint test rust-check model-check rust-coverage python-check node-check
 
 sonar-policy:
 	$(PYTHON) ci/verify_sonar_policy.py
@@ -82,3 +83,7 @@ python-check:
 
 benchmark-language: build
 	$(PYTHON) scripts/benchmark_languages.py --language $(LANGUAGE) $(LANGUAGE_BENCHMARK_ARGS)
+
+node-check:
+	cargo build -p quux-otelc-cli --locked
+	npm test --prefix adapters/node

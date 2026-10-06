@@ -47,6 +47,11 @@ jobs:
         run: |
           python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
           python3 -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: '24'
+      - name: Install Node adapter dependencies
+        run: npm ci --ignore-scripts --prefix adapters/node
       - name: Install Rust and matching coverage tools
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
@@ -54,7 +59,7 @@ jobs:
           brew install llvm@22
           cargo install cargo-llvm-cov --version 0.8.7 --locked
       - name: Validate native runtime and coverage
-        run: make rust-check model-check rust-coverage python-check PYTHON=python3
+        run: make rust-check model-check rust-coverage python-check node-check PYTHON=python3
 
   sonar:
     name: SonarQube

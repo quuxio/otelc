@@ -1,0 +1,187 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import http from 'node:http';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { Selection, sourceName } from '../policy.mjs';
+import { transform, MARKER } from '../transform.mjs';
+import { Runtime, RUNTIME } from '../runtime.mjs';
+import { install } from '../register.mjs';
+import { inspect } from '../cli.mjs';
+import { Exporter, headers } from '../exporter.mjs';
+
+const root = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
+const require = createRequire(import.meta.url);
+const plan = endpoint => ({ language: 'javascript', execution_available: true, metrics_endpoint: endpoint,
+  annotations: { read_existing: true, inject_generated: false },
+  source_matchers: { include: ['(?-u).*'], exclude: [] }, function_matchers: { include: ['(?-u).*'], exclude: ['(?-u).*excluded'] },
+  metrics: { enabled: true, histogram_boundaries_seconds: [0.001, 0.01, 1] },
+  resource: { service_name: 'node-test', service_version: '1', attributes: {} },
+  export: { interval_ms: 100, timeout_ms: 300 },
+  runtime: { max_functions: 64, max_active_calls: 64, shutdown_timeout_ms: 500, control_socket: null } });
+
+async function receiver(handler) {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    const chunks = [];
+    request.on('data', chunk => chunks.push(chunk));
+    request.on('end', () => { requests.push({ body: Buffer.concat(chunks), headers: request.headers, url: request.url }); if (handler) handler(response); else response.end(); });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { requests, endpoint: `http://127.0.0.1:${server.address().port}/v1/metrics`, close: () => new Promise(resolve => server.close(resolve)) };
+}
+async function control(filename, command) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(filename); let result = '';
+    socket.on('connect', () => socket.write(command));
+    socket.on('error', reject); socket.on('data', value => { result += value; });
+    socket.on('end', () => resolve(JSON.parse(result)));
+  });
+}
+async function child(command, args, environment = {}) {
+  return new Promise((resolve, reject) => {
+    const process = spawn(command, args, { cwd: root, env: { ...globalThis.process.env, ...environment } });
+    let stdout = '', stderr = '';
+    process.stdout.on('data', data => { stdout += data; }); process.stderr.on('data', data => { stderr += data; });
+    process.on('error', reject); process.on('close', status => resolve({ status, stdout, stderr }));
+  });
+}
+
+test('selection uses authoritative UTF-8 byte globs and exclusion precedence', () => {
+  const selection = new Selection({ include: ['(?-u).*'], exclude: ['(?-u)blocked'] });
+  assert.equal(selection.accepts('blocked', true), false);
+  assert.equal(selection.accepts('hello\n'), true);
+  assert.equal(new Selection({ include: ['(?-u).'], exclude: [] }).accepts('é'), false);
+  assert.equal(new Selection({ include: ['(?-u)\\xc3\\xa9'], exclude: [] }).accepts('é'), true);
+  assert.equal(sourceName('/tmp/project/node_modules/a.js', '/tmp/project'), null);
+  assert.equal(sourceName('/tmp/other/app.js', '/tmp/project'), null);
+});
+
+test('in-memory bodies preserve signatures, recursion, throws, generators, constructors and shadows', async () => {
+  const r = await receiver(); const runtime = new Runtime(plan(r.endpoint)); globalThis[RUNTIME] = runtime;
+  try {
+    const source = `function f(globalThis, Symbol, process) { 'use strict'; if (globalThis < 0) throw Symbol; return globalThis + process; }
+      function recursive(n) { return n ? recursive(n-1)+1 : 0; }
+      function* generator() { yield 1; yield 2; }
+      async function a() { await Promise.resolve(); throw 'async-error'; }
+      class Base { constructor(n) { this.n=n; } }
+      class Derived extends Base { constructor(n) { super(n); } get value() { return this.n; } }
+      const arrow = (value) => value+1;
+      module.exports={f, recursive, generator, a, Derived, arrow};`;
+    const output = transform(source, '/tmp/application.cjs', 'application.cjs', runtime.plan, runtime);
+    const module = { exports: {} }; new Function('require', 'module', output.code)(require, module);
+    const api = module.exports;
+    assert.equal(api.f.length, 3); assert.equal(api.f(2, 8, 5), 7);
+    assert.throws(() => api.f(-1, new Error('same'), 5), /same/);
+    assert.equal(api.recursive(3), 3); assert.equal(api.arrow(2), 3);
+    const iterator = api.generator(); assert.equal(iterator.next().value, 1); iterator.return();
+    await assert.rejects(api.a(), error => error === 'async-error');
+    assert.equal(new api.Derived(7).value, 7);
+    assert.equal(runtime.report().function_calls, 12);
+    assert.equal(runtime.report().functions['application.f'].unwinds, 1);
+    assert.equal(runtime.report().functions['application.a'].unwinds, 1);
+    assert.ok(output.code.includes('sourceMappingURL'));
+    assert.throws(() => transform(MARKER, '/tmp/a.js', 'a.js', runtime.plan, runtime), /already instrumented/);
+    assert.throws(() => transform('function f(){eval("1")}', '/tmp/a.js', 'a.js', runtime.plan, runtime), /direct eval/);
+    assert.throws(() => transform('const require=1; function f(){}', '/tmp/a.cjs', 'a.cjs', runtime.plan, runtime), /require shadowing/);
+  } finally { await runtime.close(); delete globalThis[RUNTIME]; await r.close(); }
+});
+
+test('annotations opt in, exclusion wins, and unknown annotations fail clearly', () => {
+  const p = plan('http://127.0.0.1:1/v1/metrics'); p.function_matchers.include = ['(?-u)never'];
+  const source = '// otelc.instrument\nfunction selected() {}\n// otelc.instrument\nfunction excluded() {}\nfunction plain() {}';
+  const output = transform(source, '/tmp/a.js', 'a.js', p, { register: () => true });
+  assert.deepEqual(output.functions.map(value => value.selected), [true, false, false]);
+  assert.throws(() => transform('// otelc.unknown\nfunction f(){}', '/tmp/a.js', 'a.js', p, { register: () => true }), /unsupported otelc annotation/);
+  p.annotations.read_existing = false;
+  assert.equal(transform(source, '/tmp/a.js', 'a.js', p, { register: () => true }).functions.some(value => value.selected), false);
+});
+
+test('real ESM and CommonJS hooks keep original files intact and export bounded SDK metrics', async () => {
+  const r = await receiver(); const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otelc-node-test-'));
+  const esm = path.join(directory, 'app.mjs'), cjs = path.join(directory, 'helper.cjs');
+  fs.writeFileSync(cjs, 'module.exports = function helper(n){return n*2;}');
+  const source = "import helper from './helper.cjs'; export function run(n){return helper(n)+1;}";
+  fs.writeFileSync(esm, source);
+  const application = await install(plan(r.endpoint), directory);
+  try {
+    await assert.rejects(install(plan(r.endpoint), directory), /already installed/);
+    const module = await import(pathToFileURL(esm).href);
+    assert.equal(module.run(5), 11); assert.equal(application.runtime.report().function_calls, 2);
+    assert.equal(fs.readFileSync(esm, 'utf8'), source);
+    const collected = await application.runtime.reader.collect();
+    const metrics = collected.resourceMetrics.scopeMetrics.flatMap(scope => scope.metrics);
+    assert.equal(metrics.find(metric => metric.descriptor.name === 'otelc.function.calls').dataPoints.reduce((sum, point) => sum + point.value, 0), 2);
+    assert.equal(metrics.find(metric => metric.descriptor.name === 'otelc.function.duration').dataPoints[0].value.count, 1);
+    await application.close();
+    assert.equal(application.runtime.report().export_finished, true);
+    assert.ok(r.requests.some(request => request.body.length > 0 && request.headers['content-type'] === 'application/x-protobuf' && request.url === '/v1/metrics'));
+    assert.equal(inspect(esm, plan(r.endpoint), directory).functions[0].name, 'app.run');
+    const skipped = plan(r.endpoint); skipped.source_matchers.include = ['(?-u)never'];
+    assert.deepEqual(inspect(esm, skipped, directory).functions, []);
+  } finally { await application.close(); await r.close(); fs.rmSync(directory, { recursive: true }); }
+  await assert.rejects(install({ ...plan(r.endpoint), execution_available: false }), /executable/);
+});
+
+test('live control keeps admitted calls, rejects malformed requests, and enforces capacity', async () => {
+  const r = await receiver(); const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otelc-node-control-'));
+  fs.chmodSync(directory, 0o700);
+  const p = plan(r.endpoint); p.runtime.control_socket = path.join(directory, 'metrics.sock'); p.runtime.max_functions = 1; p.runtime.max_active_calls = 1;
+  const runtime = new Runtime(p);
+  try {
+    await runtime.bindControl(); assert.equal(fs.statSync(p.runtime.control_socket).mode & 0o777, 0o600);
+    assert.equal((await control(p.runtime.control_socket, 'status\n')).pid, process.pid);
+    const token = runtime.enter('a'); assert.equal(runtime.enter('a'), 0); assert.equal(runtime.enter('b'), 0);
+    await control(p.runtime.control_socket, 'disable\n'); assert.equal(runtime.enter('a'), 0); runtime.exit(token, true);
+    assert.equal(runtime.report().function_calls, 1);
+    assert.equal((await control(p.runtime.control_socket, 'enable\n')).metrics_enabled, true);
+    assert.ok((await control(p.runtime.control_socket, 'wrong\n')).error);
+    assert.ok((await control(p.runtime.control_socket, 'x'.repeat(20))).error);
+    assert.ok((await control(p.runtime.control_socket, 'incomplete')).error);
+    runtime.enter('a'); assert.equal(runtime.report().losses.incomplete, 1);
+    const report = await runtime.close(); assert.equal(report.losses.incomplete, 1); assert.equal(report.losses.active_call_capacity, 1); assert.equal(report.losses.function_capacity, 1);
+    assert.equal(fs.existsSync(p.runtime.control_socket), false);
+    const occupied = new Runtime(p); fs.writeFileSync(p.runtime.control_socket, 'occupied');
+    await assert.rejects(occupied.bindControl()); await occupied.close(); assert.equal(fs.readFileSync(p.runtime.control_socket, 'utf8'), 'occupied');
+    fs.chmodSync(directory, 0o755); const insecure = new Runtime(p); await assert.rejects(insecure.bindControl(), /0700/); await insecure.close();
+  } finally { await runtime.close(); await r.close(); fs.rmSync(directory, { recursive: true }); }
+});
+
+test('OTLP headers, partial success, invalid responses and failed transport are accounted for', async () => {
+  assert.deepEqual(headers({ OTEL_EXPORTER_OTLP_HEADERS: 'x-a=hello%20world' }), { 'x-a': 'hello world' });
+  assert.deepEqual(headers({ OTEL_EXPORTER_OTLP_HEADERS: 'x-a=old', OTEL_EXPORTER_OTLP_METRICS_HEADERS: 'x-b=new' }), { 'x-b': 'new' });
+  assert.throws(() => headers({ OTEL_EXPORTER_OTLP_HEADERS: 'invalid' }), /invalid/);
+  assert.throws(() => headers({ OTEL_EXPORTER_OTLP_HEADERS: 'x=%0d' }), /invalid/);
+  for (const handler of [response => { response.statusCode = 503; response.end(); }, response => response.end(Buffer.from([10, 2, 8, 1])), response => response.end(Buffer.from([255])), response => response.end(Buffer.alloc(65537)), () => {}]) {
+    const r = await receiver(handler); const runtime = new Runtime(plan(r.endpoint));
+    const token = runtime.enter('selected'); runtime.exit(token, false);
+    await runtime.close(); assert.ok(runtime.exportLoss >= 1);
+    await r.close();
+  }
+  const runtime = new Runtime(plan('http://127.0.0.1:1/v1/metrics')); runtime.enter('a'); await runtime.close(); assert.ok(runtime.exportLoss >= 1);
+});
+
+test('external Node entry point runs untouched and annotated apps; doctor and inspect work', async () => {
+  const cli = path.join(root, 'target/debug/quux-otelc');
+  assert.ok(fs.existsSync(cli), 'build the CLI before node-check');
+  const r = await receiver(); const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otelc-node-launch-'));
+  const config = path.join(directory, 'policy.toml');
+  fs.writeFileSync(config, fs.readFileSync(path.join(root, 'examples/javascript.toml'), 'utf8').replace('http://127.0.0.1:4318', r.endpoint.replace('/v1/metrics', '')));
+  try {
+    for (const [filename, expected, calls] of [['javascript_app.mjs', '70', 17], ['javascript_annotated.cjs', '30', 2]]) {
+      const source = path.join(root, 'examples/apps', filename), original = fs.readFileSync(source);
+      const report = path.join(directory, 'report.json');
+      const result = await child(cli, ['--config', config, 'node', source], { OTELC_REPORT_PATH: report });
+      assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout.trim(), expected);
+      const metrics = JSON.parse(fs.readFileSync(report)); assert.equal(metrics.function_calls, calls); assert.equal(metrics.export_loss, 0); assert.equal(metrics.export_finished, true);
+      assert.deepEqual(fs.readFileSync(source), original);
+    }
+    const doctor = await child(cli, ['--config', config, '--language', 'javascript', 'doctor']); assert.equal(doctor.status, 0, doctor.stderr); assert.match(doctor.stdout, /OTLP/);
+    const inventory = await child(cli, ['--config', config, '--language', 'javascript', 'inspect', 'examples/apps/javascript_annotated.cjs', '--json']); assert.equal(inventory.status, 0, inventory.stderr); assert.equal(JSON.parse(inventory.stdout).functions.filter(value => value.selected).length, 2);
+  } finally { await r.close(); fs.rmSync(directory, { recursive: true }); }
+});

@@ -1,0 +1,42 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { registerHooks } from 'node:module';
+import { Runtime, RUNTIME } from './runtime.mjs';
+import { Selection, sourceName } from './policy.mjs';
+import { transform } from './transform.mjs';
+
+export async function install(plan, root = process.cwd()) {
+  root = fs.realpathSync(root);
+  if (plan.language !== 'javascript' || !plan.execution_available) throw new Error('Node adapter requires an executable JavaScript policy');
+  if (globalThis[RUNTIME]) throw new Error('Node instrumentation is already installed');
+  const runtime = new Runtime(plan);
+  try { await runtime.bindControl(); }
+  catch (error) { await runtime.close(); throw error; }
+  Object.defineProperty(globalThis, RUNTIME, { value: runtime, configurable: true });
+  const sources = new Selection(plan.source_matchers);
+  const protectedRoot = path.dirname(fileURLToPath(import.meta.url));
+  const hook = registerHooks({ load(url, context, nextLoad) {
+    const result = nextLoad(url, context);
+    if (!url.startsWith('file:')) return result;
+    const filename = fs.realpathSync(fileURLToPath(url));
+    const name = sourceName(filename, root);
+    if (!name || filename.startsWith(protectedRoot + path.sep) || !sources.accepts(name) || !/\.(?:mjs|cjs|js)$/.test(filename)) return result;
+    const source = result.source === null || result.source === undefined ? fs.readFileSync(filename, 'utf8') : result.source.toString();
+    return { ...result, source: transform(source, filename, name, plan, runtime).code };
+  } });
+  const close = async () => { hook.deregister(); await runtime.close(); delete globalThis[RUNTIME]; };
+  return { runtime, close };
+}
+if (process.env.OTELC_NODE_PLAN) {
+  const plan = JSON.parse(fs.readFileSync(process.env.OTELC_NODE_PLAN, 'utf8'));
+  delete process.env.OTELC_NODE_PLAN;
+  const application = await install(plan);
+  let closing = false;
+  process.on('beforeExit', () => {
+    if (closing) return;
+    closing = true;
+    void application.close().catch(() => { application.runtime.exportLoss++; application.runtime.report(); });
+  });
+  process.on('exit', () => application.runtime.report());
+}

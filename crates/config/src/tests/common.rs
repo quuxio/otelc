@@ -20,7 +20,10 @@ fn one_document_resolves_all_languages_with_shared_policy() {
         assert_eq!(resolved.resource.service_name, config.resource.service_name);
         assert_eq!(
             resolved.execution_available,
-            matches!(language, Language::C | Language::Cpp | Language::Python)
+            matches!(
+                language,
+                Language::C | Language::Cpp | Language::Python | Language::JavaScript
+            )
         );
         assert_eq!(language.to_string().parse::<Language>().unwrap(), *language);
     }

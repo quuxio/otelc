@@ -9,13 +9,15 @@ pub fn run(
     config: &Path,
     language: Option<Language>,
 ) -> Result<i32> {
-    if command != "python" {
-        bail!("unknown language adapter command");
+    let target = match command {
+        "python" => Language::Python,
+        "node" => Language::JavaScript,
+        _ => bail!("unknown language adapter command"),
+    };
+    if language.is_some_and(|l| l != target) {
+        bail!("{command} requires --language {target}");
     }
-    if language.is_some_and(|l| l != Language::Python) {
-        bail!("python requires --language python");
-    }
-    let resolved = CommonConfig::load(config, true)?.resolve(Language::Python)?;
+    let resolved = CommonConfig::load(config, true)?.resolve(target)?;
     if !resolved.execution_available {
         bail!("{}", resolved.unavailable.join("; "));
     }
@@ -25,6 +27,34 @@ pub fn run(
     let root = std::env::var_os("OTELC_ADAPTER_ROOT")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters"));
+    if target == Language::JavaScript {
+        let launcher = root.join("node/register.mjs");
+        if !launcher.is_file() {
+            bail!("Node adapter not found; set OTELC_ADAPTER_ROOT");
+        }
+        if args.is_empty() {
+            bail!("node requires SCRIPT [ARGS...]");
+        }
+        let node = std::env::var_os("OTELC_NODE").unwrap_or_else(|| "node".into());
+        let mut child = Command::new(node);
+        if args[0] == "--doctor" || args[0] == "--inspect" {
+            child.arg(root.join("node/cli.mjs")).arg(plan.path());
+        } else {
+            if args[0].starts_with('-') {
+                bail!("node requires a script path; Node flags are not accepted");
+            }
+            child
+                .arg("--enable-source-maps")
+                .arg("--import")
+                .arg(launcher);
+            child.env("OTELC_NODE_PLAN", plan.path());
+        }
+        let status = child
+            .args(args)
+            .status()
+            .context("launch Node instrumentation")?;
+        return Ok(status.code().unwrap_or(1));
+    }
     let launcher = root.join("python/launch.py");
     if !launcher.is_file() {
         bail!("Python adapter not found; set OTELC_ADAPTER_ROOT");
