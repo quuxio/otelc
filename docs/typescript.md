@@ -85,4 +85,12 @@ The JavaScript boundaries for direct eval, top-level CommonJS require shadowing,
 
 Function identities distinguish object bindings, getter/setter methods and same-line anonymous callbacks by their original source position. Returned promises follow the same completion rules as the JavaScript adapter.
 
-Unmeasured async calls and primitive results retain original microtask ordering. Admitted async calls returning objects or functions add an `await` to observe possible Promise/thenable settlement, so applications that depend on ordering relative to queued microtasks need qualification with metrics enabled.
+Async functions preserve original Promise adoption, getter access, cleanup, rejection identity and microtask ordering with metrics enabled and disabled. The [shared native Promise observer](javascript.md#optional-annotations) runs on the emitted JavaScript and adds no await or Promise handler. Rebuild its addon for the exact Node version after upgrades. The same bounded origin, stack-depth and dynamic-script limitations apply and produce visible observation losses.
+
+Measure async completion separately from the synchronous benchmark:
+
+```sh
+make benchmark-language LANGUAGE=typescript LANGUAGE_BENCHMARK_ARGS="--node-async --output build/benchmarks/typescript-async --iterations 10000 --runs 8"
+```
+
+This uses the unchanged `typescript_async_latency.mts` workload and the same compiler-only baseline. Stack observation overhead is workload dependent; complete reports require exact counts and zero losses.

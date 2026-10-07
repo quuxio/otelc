@@ -85,7 +85,8 @@ def write_reports(environment):
     objects.extend([target / "debug/quux-otelc", target / "debug/otelc-rust-adapter"])
     native = list(Path(environment["OTELC_COVERAGE_BIN_DIR"]).glob("*"))
     native.extend((target / "debug").glob("libotelc_pass.*"))
-    command = [environment.get("LLVM_COV", "llvm-cov"), "export", "--format=lcov", "--instr-profile=" + str(merged), "--ignore-filename-regex=/tests/|build.rs|/.cargo/registry/|/rustlib/src/|/opt/homebrew/.*/include/|/Library/Developer/|/\\.tmp[^/]+/"]
+    native.extend((target / "debug").glob("otelc_node_observer.node"))
+    command = [environment.get("LLVM_COV", "llvm-cov"), "export", "--format=lcov", "--instr-profile=" + str(merged), "--ignore-filename-regex=/tests/|build.rs|/.cargo/registry/|/rustlib/src/|/opt/homebrew/.*/include/|/include/node/|/Library/Developer/|/\\.tmp[^/]+/"]
     for path in objects:
         command.extend(["--object", str(path)])
     reports = [subprocess.check_output(command, text=True, env=environment)]
@@ -101,6 +102,7 @@ def write_reports(environment):
     if percentage < 80:
         raise ValueError("Rust/native line coverage is below 80%")
     enforce_rust_adapter_coverage(report)
+    enforce_node_observer_coverage(report)
 
 
 def enforce_rust_adapter_coverage(report):
@@ -119,6 +121,21 @@ def enforce_rust_adapter_coverage(report):
             raise ValueError(f"Rust {crate} line coverage is below 80%")
 
 
+def enforce_node_observer_coverage(report):
+    """Give the native Node observer its own product coverage gate."""
+    selected = []
+    include = False
+    for line in report.splitlines():
+        if line.startswith("SF:"):
+            include = "/native/node/" in line
+        if include:
+            selected.append(line)
+    percentage = line_coverage("\n".join(selected))
+    print(f"Node native observer line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
+    if percentage < 80:
+        raise ValueError("Node native observer line coverage is below 80%")
+
+
 def main():
     """Build the instrumented archive before native tests, then enforce coverage."""
     environment = coverage_environment()
@@ -130,9 +147,12 @@ def main():
     subprocess.run(["cargo", "clean", "-p", "quux-otelc-cli", "-p", "quux-otelc-config", "-p", "quux-otelc-symbols", "-p", "quux-otelc-runtime", "-p", "quux-otelc-export", "-p", "quux-otelc-rust", "-p", "quux-otelc-rust-adapter"], env=environment, check=True)
     environment["OTELC_PLUGIN_DIR"] = str(Path(environment["CARGO_TARGET_DIR"]) / "debug")
     subprocess.run(["python3", "ci/build_llvm_plugin.py"], env=environment, check=True)
+    subprocess.run(["python3", "ci/build_node_observer.py"], env=environment, check=True)
+    environment["OTELC_NODE_OBSERVER"] = str(Path(environment["CARGO_TARGET_DIR"]) / "debug/otelc_node_observer.node")
     for command in (
         ["cargo", "build", "--workspace", "--locked"],
         ["cargo", "test", "--workspace", "--locked", "--", "--test-threads=1"],
+        ["node", "--test", "adapters/node/tests/promise.test.mjs"],
     ):
         subprocess.run(command, env=environment, check=True)
     write_reports(environment)

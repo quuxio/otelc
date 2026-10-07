@@ -5,6 +5,7 @@ import { MeterProvider, PeriodicExportingMetricReader, AggregationType } from '@
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ValueType } from '@opentelemetry/api';
 import { Exporter } from './exporter.mjs';
+import { PromiseObserver } from './promise-observer.mjs';
 
 export const RUNTIME = Symbol.for('quux.otelc.runtime');
 export class Runtime {
@@ -14,7 +15,8 @@ export class Runtime {
     this.functions = new Map();
     this.pending = new Map();
     this.next = 1;
-    this.losses = { function_capacity: 0, active_call_capacity: 0, incomplete: 0, invalid: 0 };
+    this.losses = { function_capacity: 0, active_call_capacity: 0, incomplete: 0, invalid: 0, async_origin: 0 };
+    this.promiseObserver = null;
     this.exportLoss = 0;
     this.timeoutMs = Math.min(plan.export.timeout_ms, plan.runtime.shutdown_timeout_ms, plan.export.interval_ms);
     this.closed = false;
@@ -24,6 +26,8 @@ export class Runtime {
     this.socketInode = null;
     this.exporter = new Exporter(this);
     this.reader = new PeriodicExportingMetricReader({ exporter: this.exporter, exportIntervalMillis: plan.export.interval_ms, exportTimeoutMillis: this.timeoutMs });
+    const collect = this.reader.collect.bind(this.reader);
+    this.reader.collect = options => { this.promiseObserver?.flush(); return collect(options); };
     const capacity = plan.runtime.max_functions + 1;
     this.provider = new MeterProvider({
       resource: resourceFromAttributes({ 'service.name': plan.resource.service_name, 'service.version': plan.resource.service_version, 'service.instance.id': String(process.pid), ...plan.resource.attributes }),
@@ -49,6 +53,7 @@ export class Runtime {
   }
   enter(name) {
     if (!this.enabled || this.closed) return 0;
+    this.promiseObserver?.flush();
     if (!this.functions.has(name) && !this.register(name)) return 0;
     if (this.pending.size >= this.plan.runtime.max_active_calls) { this.losses.active_call_capacity++; return 0; }
     if (this.next >= Number.MAX_SAFE_INTEGER) { this.losses.invalid++; return 0; }
@@ -56,9 +61,17 @@ export class Runtime {
     this.pending.set(token, { name, start: process.hrtime.bigint() });
     return token;
   }
-  exit(token, unwound) {
+  registerAsyncSites(sites) {
+    if (!sites.length) return;
+    this.promiseObserver ??= new PromiseObserver(this);
+    this.promiseObserver.register(sites);
+  }
+  enterAsync(name, id) {
+    try { this.promiseObserver?.enter(name, id); } catch { this.losses.invalid++; }
+  }
+  exit(token, unwound, ended = null) {
     if (!token) return;
-    const end = process.hrtime.bigint();
+    const end = ended ?? process.hrtime.bigint();
     const frame = this.pending.get(token);
     if (!frame) return;
     this.pending.delete(token);
@@ -93,6 +106,7 @@ export class Runtime {
         finished = true;
         const command = request.trimEnd();
         if (request.length > 17 || !['status', 'enable', 'disable'].includes(command)) { connection.end('{"error":"invalid or incomplete control request"}\n'); return; }
+        this.promiseObserver?.flush();
         if (command !== 'status') this.enabled = command === 'enable';
         connection.end(JSON.stringify({ schema_version: 1, pid: process.pid, metrics_enabled: this.enabled, function_calls: [...this.functions.values()].reduce((sum, value) => sum + value.count, 0) }) + '\n');
       });
@@ -104,12 +118,14 @@ export class Runtime {
     this.server = server;
   }
   report() {
+    this.promiseObserver?.flush();
     const result = { schema_version: 1, language: this.plan.language, pid: process.pid, export_finished: this.exportFinished, function_calls: [...this.functions.values()].reduce((sum, value) => sum + value.count, 0), functions: Object.fromEntries([...this.functions].map(([name, value]) => [name, { count: value.count, unwinds: value.unwinds }])), losses: { ...this.losses, incomplete: this.losses.incomplete + this.pending.size }, export_loss: this.exportLoss };
     if (process.env.OTELC_REPORT_PATH) fs.writeFileSync(process.env.OTELC_REPORT_PATH, JSON.stringify(result, null, 2) + '\n');
     return result;
   }
   async close() {
     if (this.closed) return this.report();
+    this.promiseObserver?.close();
     this.closed = true;
     this.losses.incomplete += this.pending.size;
     this.pending.clear();

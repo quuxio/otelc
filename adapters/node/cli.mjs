@@ -4,6 +4,7 @@ import { registerHooks } from 'node:module';
 import { transform } from './transform.mjs';
 import { Selection, sourceName } from './policy.mjs';
 import { transpile, compilerOptions } from './typescript.mjs';
+import { nativeObserver } from './promise-observer.mjs';
 
 export function inspect(filename, plan, root = process.cwd()) {
   const name = sourceName(path.resolve(filename), root);
@@ -18,6 +19,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
   if (command === '--doctor') {
     if (plan.language === 'typescript') compilerOptions();
     if (typeof registerHooks !== 'function') throw new Error('Node 24.11+ with synchronous module hooks is required');
+    nativeObserver();
     console.log(`Node ${process.version}: in-memory ${plan.language} transformation and OTLP/HTTP metrics available`);
   } else if (command === '--inspect' && args.length >= 1 && args.slice(1).every(arg => arg === '--json')) {
     console.log(JSON.stringify(inspect(args[0], plan), null, 2));

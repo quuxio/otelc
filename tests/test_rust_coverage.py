@@ -1,5 +1,6 @@
 """Check coverage orchestration and the 80% gate without compiling applications."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -35,8 +36,9 @@ class CoverageTests(unittest.TestCase):
             with patch.object(rust_coverage.subprocess, "run") as run:
                 with patch.object(rust_coverage, "write_reports") as report:
                     rust_coverage.main()
-        self.assertEqual(run.call_args_list[2].args[0][:2], ["cargo", "build"])
-        self.assertEqual(run.call_args_list[3].args[0][:2], ["cargo", "test"])
+        self.assertEqual(run.call_args_list[3].args[0][:2], ["cargo", "build"])
+        self.assertEqual(run.call_args_list[4].args[0][:2], ["cargo", "test"])
+        self.assertEqual(run.call_args_list[5].args[0][:2], ["node", "--test"])
         self.assertEqual(report.call_args.args[0]["MARKER"], "value")
 
     def test_failure_stops_reports(self):
@@ -56,7 +58,7 @@ class CoverageTests(unittest.TestCase):
             (target / "native-binaries/app").write_text("map")
             (target / "test.profraw").write_bytes(b"profile")
             environment = {"CARGO_TARGET_DIR": directory, "OTELC_COVERAGE_BIN_DIR": str(target / "native-binaries")}
-            for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\n", True)):
+            for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\n", True)):
                 with patch.object(rust_coverage.subprocess, "run"), patch.object(Path, "write_text"):
                     with patch.object(rust_coverage.subprocess, "check_output", return_value=report) as export:
                         if passes:
@@ -65,6 +67,10 @@ class CoverageTests(unittest.TestCase):
                             with self.assertRaises(ValueError):
                                 rust_coverage.write_reports(environment)
                 self.assertTrue(any(str(target / "native-binaries/app") in call.args[0] for call in export.call_args_list))
+                for call in export.call_args_list:
+                    ignored = next(argument.split("=", 1)[1] for argument in call.args[0] if argument.startswith("--ignore-filename-regex="))
+                    self.assertIsNotNone(re.search(ignored, "/Users/runner/hostedtoolcache/node/24/include/node/v8-local-handle.h"))
+                    self.assertIsNone(re.search(ignored, "/Users/runner/work/otelc/otelc/native/node/PromiseObserver.cpp"))
 
     def test_preconfigured_llvm_tools(self):
         environment = {"LLVM_COV": "cov", "LLVM_PROFDATA": "prof"}
@@ -97,3 +103,8 @@ class CoverageTests(unittest.TestCase):
             rust_coverage.enforce_rust_adapter_coverage(good.replace("probes/src/lib.rs\nDA:1,1", "probes/src/lib.rs\nDA:1,0"))
         with self.assertRaisesRegex(ValueError, "no instrumented"):
             rust_coverage.enforce_rust_adapter_coverage("SF:/tmp/native.rs\nDA:1,1\n")
+        rust_coverage.enforce_node_observer_coverage("SF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\n")
+        with self.assertRaisesRegex(ValueError, "Node native"):
+            rust_coverage.enforce_node_observer_coverage("SF:/tmp/native/node/PromiseObserver.cpp\nDA:1,0\n")
+        with self.assertRaisesRegex(ValueError, "no instrumented"):
+            rust_coverage.enforce_node_observer_coverage(good)

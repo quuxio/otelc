@@ -1,11 +1,12 @@
 // Parser-based probes are inserted in memory; original source and signatures stay intact.
-import { transformSync } from '@babel/core';
+import { transformSync, parseSync } from '@babel/core';
 import * as t from '@babel/types';
 import { Selection } from './policy.mjs';
 import { fileURLToPath } from 'node:url';
 
 const probes = fileURLToPath(new URL('./probes.cjs', import.meta.url));
 
+let nextAsyncSite = 1;
 export const MARKER = '@quux.otelc.generated';
 export const IDENTITY = '@quux.otelc.identity ';
 function localName(path) {
@@ -50,6 +51,7 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
   let helper;
   let format;
   let instrumented = false;
+  const asyncSites = new Map();
   const result = transformSync(source, {
     filename, configFile: false, babelrc: false, sourceType: prepared?.format === 'module' ? 'module' : prepared?.format === 'commonjs' ? 'script' : 'unambiguous', sourceMaps: true,
     sourceFileName: filename, inputSourceMap: prepared?.map, parserOpts: { allowReturnOutsideFunction: true },
@@ -79,6 +81,17 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
         if (t.isIdentifier(call.node.callee, { name: 'eval' }) && !call.scope.getBinding('eval')) throw call.buildCodeFrameError('direct eval in a selected function is unsupported');
       } });
       const body = t.isBlockStatement(path.node.body) ? path.node.body : t.blockStatement([t.returnStatement(path.node.body)]);
+      if (path.node.async && !path.node.generator) {
+        const id = nextAsyncSite++;
+        asyncSites.set(id, name);
+        const begin = t.expressionStatement(t.callExpression(t.memberExpression(t.cloneNode(helper), t.identifier('enterAsync')), [t.stringLiteral(name), t.numericLiteral(id)]));
+        begin.leadingComments = [{ type: 'CommentBlock', value: MARKER }];
+        if (plan.annotations.inject_generated) begin.leadingComments.push({ type: 'CommentBlock', value: 'otelc.instrument' });
+        body.body.unshift(begin);
+        path.node.body = body;
+        path.node.expression = false;
+        return;
+      }
       // Body-level declarations have function scope, unlike declarations inside
       // the generated try block. Initialise anonymous expressions first so their
       // closures retain the original lexical bindings and mutable self-reference.
@@ -88,42 +101,41 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
         ...body.body.filter(statement => !t.isFunctionDeclaration(statement))
       ];
       const token = path.scope.generateUidIdentifier('otelc_token');
-      let completion = body.body;
-      let result;
-      if (path.node.async && !path.node.generator) {
-        result = path.scope.generateUidIdentifier('otelc_result');
-        const label = path.scope.generateUidIdentifier('otelc_body');
-        // Leave user finally blocks in their original position. Await adoption
-        // only after the original body has finished all of its cleanup.
-        path.node.body = body;
-        path.get('body').traverse({
-          Function(inner) { inner.skip(); },
-          ReturnStatement(returned) {
-            returned.replaceWith(t.blockStatement([
-              t.expressionStatement(t.assignmentExpression('=', t.cloneNode(result), returned.node.argument ?? t.unaryExpression('void', t.numericLiteral(0)))),
-              t.breakStatement(t.cloneNode(label))
-            ]));
-            returned.skip();
-          }
-        });
-        const needsAdoption = t.logicalExpression('&&', t.cloneNode(token),
-          t.logicalExpression('&&', t.cloneNode(result), t.logicalExpression('||',
-            t.binaryExpression('===', t.unaryExpression('typeof', t.cloneNode(result)), t.stringLiteral('object')),
-            t.binaryExpression('===', t.unaryExpression('typeof', t.cloneNode(result)), t.stringLiteral('function')))));
-        completion = [t.labeledStatement(label, t.blockStatement(body.body)), t.returnStatement(
-          t.conditionalExpression(needsAdoption, t.awaitExpression(t.cloneNode(result)), t.cloneNode(result)))];
-      }
       const unwound = path.scope.generateUidIdentifier('otelc_unwound');
       const error = path.scope.generateUidIdentifier('otelc_error');
       const runtimeNode = () => t.cloneNode(helper);
       const begin = t.variableDeclaration('const', [t.variableDeclarator(token, t.callExpression(t.memberExpression(runtimeNode(), t.identifier('enter')), [t.stringLiteral(name)]))]);
       begin.leadingComments = [{ type: 'CommentBlock', value: MARKER }];
       if (plan.annotations.inject_generated) begin.leadingComments.push({ type: 'CommentBlock', value: 'otelc.instrument' });
-      const statements = [begin, t.variableDeclaration('let', [t.variableDeclarator(unwound, t.booleanLiteral(false)), ...(result ? [t.variableDeclarator(result)] : [])]), t.tryStatement(t.blockStatement(completion), t.catchClause(error, t.blockStatement([t.expressionStatement(t.assignmentExpression('=', unwound, t.booleanLiteral(true))), t.throwStatement(error)])), t.blockStatement([t.expressionStatement(t.callExpression(t.memberExpression(runtimeNode(), t.identifier('exit')), [token, unwound]))]))];
+      const statements = [begin, t.variableDeclaration('let', [t.variableDeclarator(unwound, t.booleanLiteral(false))]), t.tryStatement(t.blockStatement(body.body), t.catchClause(error, t.blockStatement([t.expressionStatement(t.assignmentExpression('=', unwound, t.booleanLiteral(true))), t.throwStatement(error)])), t.blockStatement([t.expressionStatement(t.callExpression(t.memberExpression(runtimeNode(), t.identifier('exit')), [token, unwound]))]))];
       path.node.body = t.blockStatement(statements);
       path.node.body.directives = body.directives;
       path.node.expression = false;
     } } } })]
   });
+  if (asyncSites.size && runtime.registerAsyncSites) {
+    // Origins refer to the generated text seen by V8, before source-map remapping.
+    const ast = parseSync(result.code, { filename, configFile: false, babelrc: false, sourceType: format === 'module' ? 'module' : 'script', parserOpts: { tokens: true, allowReturnOutsideFunction: true } });
+    const sites = [];
+    const visit = node => {
+      if (!node || typeof node !== 'object') return;
+      if (node.async && !node.generator && t.isBlockStatement(node.body)) {
+        const call = node.body.body[0]?.expression;
+        const id = call?.arguments?.[1]?.value;
+        if (t.isMemberExpression(call?.callee) && t.isIdentifier(call.callee.object, { name: helper.name }) && t.isIdentifier(call.callee.property, { name: 'enterAsync' }) && asyncSites.has(id)) {
+          const token = ast.tokens.find(token => token.start >= (node.key?.end ?? node.id?.end ?? node.start) && token.end <= node.body.start && token.value === undefined && token.type.label === '(');
+          const origin = t.isArrowFunctionExpression(node) ? node.loc.start : token?.loc.start;
+          if (!origin) throw new Error('Cannot identify the generated async Promise origin');
+          sites.push({ id, name: asyncSites.get(id), filename, start: [node.body.loc.start.line, node.body.loc.start.column + 1], end: [node.body.loc.end.line, node.body.loc.end.column + 1], origin: [origin.line, origin.column + 1] });
+        }
+      }
+      for (const key of t.VISITOR_KEYS[node.type] ?? []) {
+        const children = node[key];
+        if (Array.isArray(children)) children.forEach(visit); else visit(children);
+      }
+    };
+    visit(ast.program);
+    runtime.registerAsyncSites(sites);
+  }
   return { code: result.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(result.map)).toString('base64'), functions: inventory, format };
 }
