@@ -99,6 +99,9 @@ func (e *exporter) Shutdown(ctx context.Context) error {
 }
 
 func (e *exporter) Export(ctx context.Context, data *metricdata.ResourceMetrics) error {
+	if e.rt.traces != nil {
+		defer e.rt.traces.flush()
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	signature, err := snapshotSignature(data)

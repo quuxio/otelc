@@ -1085,6 +1085,112 @@ fn go_overlay_preserves_sources_recovery_and_decodable_sdk_counters() {
 }
 
 #[test]
+fn go_spans_preserve_unchanged_and_annotated_sources_and_sdk_trees() {
+    for annotated in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let source = if annotated {
+            include_str!("../../../examples/apps/go_annotated.go")
+        } else {
+            include_str!("../../../examples/apps/go_app.go")
+        };
+        std::fs::write(root.path().join("app.go"), source).unwrap();
+        let baseline = success(
+            Command::new("go")
+                .args(["run", "app.go"])
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        let (metrics_port, metrics_listener) = receiver();
+        let (trace_port, trace_listener) = receiver();
+        let selection = if annotated {
+            "['app.configured']"
+        } else {
+            "['app.*']"
+        };
+        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['go']\n[sources]\ninclude=['app.go']\n[functions]\ninclude={selection}\nexclude=['*.main','*.excluded','*.<anonymous>:*']\n[annotations]\nread_existing=true\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[runtime]\nshutdown_timeout_ms=5000\n[export]\nendpoint='http://127.0.0.1:{metrics_port}'\ninterval_ms=60000\ntimeout_ms=2000\n")).unwrap();
+        let expected = if annotated { 2 } else { 10 };
+        let roots = if annotated { 2 } else { 7 };
+        let traces = start_trace_receiver(trace_listener, roots, Duration::from_secs(60));
+        let (stopped, metrics) = start_repeated_metric_receiver(metrics_listener);
+        let report_path = root.path().join("report.json");
+        let measured = success(
+            Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+                .args(["go", "app.go"])
+                .current_dir(root.path())
+                .env_remove("OTELC_CONFIG")
+                .env_remove("OTELC_LANGUAGE")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                .env(
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    format!("http://127.0.0.1:{trace_port}/custom-traces"),
+                )
+                .env("OTELC_REPORT_PATH", &report_path)
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(measured.stdout, baseline.stdout);
+        assert_eq!(measured.stderr, baseline.stderr);
+        assert_eq!(
+            source.as_bytes(),
+            std::fs::read(root.path().join("app.go")).unwrap()
+        );
+        assert!(!root.path().join("go.mod").exists());
+        assert!(!root.path().join("go.sum").exists());
+        stopped.store(true, std::sync::atomic::Ordering::Release);
+        assert!(metrics.join().unwrap().iter().any(|request| counter(
+            request,
+            "otelc.function.calls",
+            None
+        ) == expected));
+        let requests = traces.join().unwrap();
+        let spans: Vec<_> = requests
+            .iter()
+            .flat_map(|request| &request.resource_spans)
+            .flat_map(|resource| &resource.scope_spans)
+            .flat_map(|scope| &scope.spans)
+            .collect();
+        assert_eq!(spans.len(), expected as usize);
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.parent_span_id.is_empty())
+                .count(),
+            roots
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.status.as_ref().is_some_and(|status| status.code == 2))
+                .count(),
+            usize::from(!annotated)
+        );
+        for span in &spans {
+            assert_eq!(span.trace_id.len(), 16);
+            assert_eq!(span.span_id.len(), 8);
+            assert!(span.trace_id.iter().any(|byte| *byte != 0));
+            assert!(span.span_id.iter().any(|byte| *byte != 0));
+            assert!(span.name.starts_with("app."));
+            assert!(span.end_time_unix_nano >= span.start_time_unix_nano);
+            assert!(
+                span.parent_span_id.is_empty()
+                    || spans.iter().any(|parent| parent.trace_id == span.trace_id
+                        && parent.span_id == span.parent_span_id)
+            );
+        }
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report_path).unwrap()).unwrap();
+        assert_eq!(report["function_calls"], expected);
+        assert_eq!(report["export_finished"], true);
+        assert_eq!(report["export_loss"], 0);
+        assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+        let doctor = success(cli(&["--language", "go", "doctor"], root.path()));
+        assert!(String::from_utf8_lossy(&doctor.stdout).contains("function spans"));
+    }
+}
+
+#[test]
 fn tutorial_config_and_existing_annotations_preserve_source_and_plain_results() {
     for (source, template, cpp) in [
         (

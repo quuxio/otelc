@@ -80,7 +80,7 @@ Set `runtime.control_socket` inside an owner-only directory, then use `status`, 
 make benchmark-language LANGUAGE=go LANGUAGE_BENCHMARK_ARGS="--output build/benchmarks/go --iterations 10000 --runs 8"
 ```
 
-The benchmark compares original execution, disabled probes and enabled metrics, preserving one instrumented PID. It checks matching results, original hashes, exact counts, complete export and zero losses. `make go-check` runs formatting, vet, Staticcheck, govulncheck, race detection and an 80% product statement-coverage gate. Coverage includes the overlay adapter, policy, runtime and launcher.
+The benchmark compares original execution, disabled probes and enabled metrics, preserving one instrumented PID. It checks matching results, original hashes, exact counts, complete export and zero losses. `make go-check` runs formatting, vet, Staticcheck, govulncheck, race detection and an 80% product statement-coverage gate. Coverage includes the overlay adapter, policy, runtime and launcher. Trace store, scope handling and transport also have independent 80% statement-coverage gates.
 
 ## Build and runtime boundaries
 
@@ -88,7 +88,7 @@ Only project packages are transformed; third-party and standard-library sources 
 
 Go workspaces, project cgo packages, vendor mode, conflicting overlay/modfile/toolexec/buildmode flags and older compilers are rejected pending qualification. `GODEBUG=panicnil=1` is rejected because legacy nil panic recovery cannot preserve both panic propagation and normal-return classification. If an application enables that legacy mode dynamically, the probe avoids recovery, preserves propagation and reports an `unsupported_runtime` loss.
 
-Duration includes deferred cleanup. `runtime.Goexit` runs defers and records completion; it has no normal-return claim. `os.Exit`, a fatal panic in another goroutine and forced termination cannot guarantee final export. SDK admission and pending calls are bounded; incomplete calls and capacity losses remain explicit. Automatic object lifetimes, spans and context propagation remain unavailable and are rejected.
+Duration includes deferred cleanup. `runtime.Goexit` runs defers and records completion; it has no normal-return claim. `os.Exit`, a fatal panic in another goroutine and forced termination cannot guarantee final export. SDK admission and pending calls are bounded; incomplete calls and capacity losses remain explicit. [Function spans](go-spans.md) support private same-goroutine parenting and independent trace export. Automatic lifetimes and task/distributed context propagation remain unavailable and are rejected.
 
 The pinned SDK performs aggregation and protobuf encoding. The bounded HTTP transport permits serial exports, requires a decoded HTTP 200 acknowledgement, rejects redirects, malformed/partial acknowledgements and bodies over 64 KiB, closes rejected responses without waiting for their bodies, closes idle connections at shutdown and keeps response content out of diagnostics. Failed cumulative snapshots can be retried at the next interval. Go vulnerability analysis checks compiled package/call-graph exposure: the SDK's broader module graph includes the deprecated OpenPGP advisory, but no OpenPGP package is imported by this adapter or runtime.
 
