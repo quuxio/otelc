@@ -1,0 +1,18 @@
+schema_version = 1
+[build]
+backend = "llvm"
+include = ["tests/fixtures/**/*.cpp"]
+[functions]
+include = ["selected_*", "OrderBook::add*"]
+[objects]
+classes = ["OrderBook"]
+max_live = 4096
+[runtime]
+max_threads = 32
+stack_depth = 128
+queue_capacity = 65536
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 1000
+[resource]
+service_name = "otelc-exception-example"

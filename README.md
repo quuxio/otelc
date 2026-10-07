@@ -7,7 +7,7 @@
 **Compiler-assisted observability for native applications. A [quux](https://quux.io) project.**
 
 [![CI](https://github.com/quuxio/otelc/actions/workflows/ci.yml/badge.svg)](https://github.com/quuxio/otelc/actions/workflows/ci.yml)
-[![Status](https://img.shields.io/badge/status-design-blue)](docs/roadmap.md)
+[![Status](https://img.shields.io/badge/status-local%20prototype-blue)](docs/roadmap.md)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 ---
@@ -29,11 +29,11 @@
 
 ## What is otelc?
 
-otelc is a design for automatic function telemetry in native applications. Rebuild selected application code with compiler probes, link a small Rust runtime, and export function timing and, later, traces through OpenTelemetry Protocol (OTLP). Application source stays unchanged; rebuilding and linking the runtime are required.
+otelc provides a local native timing prototype for automatic function telemetry in native applications. Rebuild selected application code with compiler probes, link a bounded Rust runtime, and export function timing and, later, traces through OpenTelemetry Protocol (OTLP). The product goal is instrumentation without application source edits across C, C++, Rust, TypeScript/JavaScript, Java, Python and Go. C/C++, Python, JavaScript, TypeScript, Java, Go and Rust function timing follow this model; the current opt-in C++ lifetime guard requires source edits and does not yet meet the automatic lifetime requirement. Rebuilding/linking or changing the launch command may be required. See the [source-free contract](docs/design.md#source-free-instrumentation-contract).
 
 The first target is synchronous C and C++ on macOS ARM64 and Linux x86-64/ARM64. The architecture separates compiler integration, a language-neutral probe ABI, a bounded runtime, and telemetry export so additional native languages can be added through validated adapters.
 
-**Current status: design and repository tooling. The compiler wrapper, runtime, LLVM pass, and OTLP exporter are not implemented yet.** The examples below describe the intended interface. Quality and coverage badges currently measure repository tooling, not an instrumentation runtime.
+**Current status: local native prototype, validated on macOS ARM64.** The compiler wrapper, manifest inspection, bounded runtime, OTLP/HTTP metrics, exception-aware LLVM pass and explicit C++ object lifetime guard are implemented locally. Existing Clang function annotations, live LLVM metrics on/off controls and unchanged-source Python function timing are also implemented. Python uses CPython 3.12+ monitoring and the Python OpenTelemetry SDK. JavaScript uses an in-memory Node module transform and the JavaScript SDK; see its [101 guide](docs/javascript.md). TypeScript uses compiler emission, original source maps and the same SDK; see its [101 guide](docs/typescript.md). Java uses a JDK agent and bytecode body probes; see its [101 guide](docs/java.md). Go uses compiler overlays and the Go SDK; see its [101 guide](docs/go.md). Rust uses private generated source and a Cargo compiler wrapper with the Rust SDK; see its [101 guide](docs/rust.md). See the [language adapters](docs/languages.md). Traces, live filter changes and additional platform qualification remain planned. Published quality badges cover the repository-tooling SonarQube analysis; native coverage is enforced separately by the product quality gate. See the [local implementation and validation](docs/local-implementation.md).
 
 ## How it will work
 
@@ -47,27 +47,23 @@ flowchart LR
     Collector --> Backend[Your observability backend]
 ```
 
-The callback backend will first prove normal-return function timing using Clang's `-finstrument-functions`. An LLVM pass will then add compile-time function selection, compact metadata, and exceptional-exit handling before nested traces become a supported feature. Timing, symbol resolution, error semantics, and data loss are explicit parts of the [design](docs/design.md).
+The callback backend provides normal-return function timing using Clang's `-finstrument-functions`. The matched LLVM 22 backend provides compile-time function selection and C++ exceptional-exit timing. Nested traces remain planned. Timing, symbol resolution, error semantics, and data loss are explicit parts of the [design](docs/design.md).
 
-## Intended workflow
+## Local workflow
 
-The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. These commands are planned, not available in this checkout:
+The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Build the CLI and runtime together, then use the supplied local fixture configuration:
 
 ```sh
-# Inspect the toolchain and explain its capabilities.
-quux-otelc doctor
-
-# Compile and link selected code using the callback backend.
-quux-otelc --config otelc.toml clang++ -O2 -g -fno-exceptions app.cpp -o app
-
-# Inspect the functions and manifest produced by the build.
-quux-otelc inspect ./app
-
-# Run with the chosen configuration and a bounded shutdown flush.
-quux-otelc --config otelc.toml run ./app
+make build
+mkdir -p build/native
+./target/debug/quux-otelc --config examples/local.toml doctor
+./target/debug/quux-otelc --config examples/local.toml clang -O2 -g \
+  tests/fixtures/timing.c -o build/native/timing
+./target/debug/quux-otelc inspect build/native/timing
+./target/debug/quux-otelc --config examples/local.toml run ./build/native/timing
 ```
 
-The initial C++ timing contract requires selected translation units to already use `-fno-exceptions`. The wrapper will reject unsupported configurations rather than silently change application semantics. Exception-enabled C++ is a requirement of the LLVM milestone. See [compiler integration](docs/instrumentation.md) and [support boundaries](docs/support.md).
+For exception-enabled C++, use the LLVM backend in `examples/exceptions.toml`; `make examples` builds internal C, C++, exception and object lifetime apps. The legacy callback backend requires selected C++ translation units to already use `-fno-exceptions`. Start the [Docker Collector, Prometheus and Grafana stack](docs/observability-stack.md) with `make stack-up` to view metrics. See [compiler integration](docs/instrumentation.md) and [support boundaries](docs/support.md).
 
 ## Design documentation
 
@@ -89,7 +85,7 @@ Start with the [documentation index](docs/README.md) or [system design](docs/des
 
 ## Working on this repository
 
-Python and Node.js are used only for repository validation; the product implementation is planned in Rust, with a small native shim and LLVM C++ pass. Install Python 3.11+, Node.js 24+, and Make, then run:
+The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98+, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24.11+ and Make, then run:
 
 ```sh
 make setup
@@ -97,7 +93,7 @@ make check
 make help
 ```
 
-`make check` lints Markdown and runs the SonarQube policy helper's tests with a minimum 90% line coverage. `make scan` verifies the remote new-code policy and scans a clean Git commit when `SONAR_TOKEN` is available. See [quality setup](docs/quality.md) for the current analysis scope and future Rust gates.
+`make check` lints Markdown, tests repository tooling with a minimum 90% line coverage, and runs Rust formatting, Clippy, unit tests, native integration tests, queue model checking and 80% native, Python and Node product line-coverage gates. `make scan` verifies the remote new-code policy and scans a clean Git commit when `SONAR_TOKEN` is available. See [quality setup](docs/quality.md) for the current analysis scope and local Rust coverage workflow.
 
 ## Contributing
 
@@ -106,3 +102,13 @@ Design feedback and implementation proposals are welcome through [issues](https:
 ## License
 
 Released under [AGPL-3.0](LICENSE). No separate runtime linking exception is granted by this repository.
+
+## Local metrics, lifetimes and benchmarks
+
+- [Docker Collector, Prometheus and Grafana](docs/observability-stack.md): `make stack-up`, then open <http://localhost:3000/d/otelc-local>.
+- [Exception-aware C++ and internal examples](docs/local-implementation.md): `make examples`; select `examples/exceptions.toml` for the matched LLVM backend.
+- [Object lifetime prototype and automatic lifetime requirement](docs/object-lifetimes.md): the current guard is opt-in; source-free class instrumentation remains TODO.
+- [Paired benchmarks](docs/benchmarks.md): `make benchmark`, retaining plain, disabled-probe and active timing samples with loss evidence.
+- [Developer 101](docs/developer-101.md): complete source, configuration, build/run commands, existing annotations, live metrics control and added-latency measurements.
+- [Common configuration](docs/common-configuration.md): one schema-2 policy, validated and resolved for every target language; native C/C++, Python, JavaScript and TypeScript consume it now.
+- [Language adapter TODOs](docs/roadmap.md#todo-language-adapters): Rust, TypeScript/JavaScript, Java/AspectJ, Python and Go integration.

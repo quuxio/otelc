@@ -2,20 +2,26 @@
 
 ## Current state
 
-No product platform is supported yet: the runtime and compiler wrapper are not implemented. The tables describe intended rollout, not successful end-to-end tests. The only compiler evidence currently recorded is the focused macOS ARM64 callback check in [research.md](research.md).
+The local callback and LLVM 22 backends have passed native C/C++ and OTLP checks on macOS ARM64. The LLVM lane handles Itanium C++ exception unwinding; the opt-in lifetime guard supports bounded object metrics but requires source edits. Automatic source-free lifetime instrumentation remains TODO. There is no supported release yet. The tables retain rollout requirements; Linux and other platforms still require native qualification. See [current implementation and evidence](local-implementation.md).
+
+All target languages must meet the [source-free contract](design.md#source-free-instrumentation-contract). The following routes describe current behaviour and planned adapters separately.
 
 ## Languages
 
 | Language | Initial route | Planned support |
 | --- | --- | --- |
 | C | Clang callbacks | M1: synchronous normal-return functions |
-| C++ | Clang callbacks, then LLVM pass | M1: selected `-fno-exceptions` code; M2: validated exception-enabled code and traces |
+| C++ | Clang callbacks, then LLVM pass | Local callbacks: selected `-fno-exceptions` code; local LLVM: exception-enabled timing; traces planned |
 | Objective-C / Objective-C++ | Clang with language-specific fixtures | Later: method names, exceptions, blocks, ARC, and messaging boundaries |
 | Swift | Matched compiler integration or Swift-specific pass | Later: begin with synchronous native functions; async requires a separate adapter |
-| Rust | Rust compiler integration and matched LLVM | Later: monomorphization, panic, inlining, and async need Rust-specific evidence |
+| Rust | Rust 1.98.1 generated-source and Cargo compiler wrapper | Implemented synchronous named functions, methods, generics, threads, panic unwinding and live controls; async/closures, lifetimes/traces unavailable |
 | Fortran / Zig | Validated compiler adapter | Exploratory; no current support commitment |
-| Go | Existing Go compile-time ecosystem | Outside initial scope |
-| Java / .NET / Python / JavaScript | Existing runtime/agent ecosystems | Outside native compiler scope |
+| Go | Go 1.26+ compiler overlays and Go SDK | Implemented unchanged files/module projects, functions/methods/callbacks, goroutines, defer/panic/recover and live controls; workspaces/cgo, lifetimes/traces unavailable |
+| Java | JDK 21+ agent and ASM bytecode body probes | Implemented selected methods/constructors, exceptions, recursion, executor threads, optional annotations and live controls; lifetimes/traces unavailable |
+| Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation and live control; lifetimes/traces remain unavailable |
+| JavaScript | Node 24.11+ in-memory loader transform, JavaScript SDK | Implemented ESM/CommonJS function timing, async/generators, constructors, exceptions and live controls; lifetimes/traces unavailable |
+| TypeScript | TypeScript 6.0.3 compiler emit and Node in-memory probes | Implemented typed functions, enums/namespaces, decorators, exceptions, original source maps and live metrics; lifetimes/traces unavailable |
+| .NET | Runtime/agent ecosystem | Exploratory; outside the current target-language list |
 
 Using LLVM somewhere in a compiler pipeline does not imply that it accepts our plugin, shares the same LLVM ABI, or preserves the required language semantics. Every new language must supply its own build and control-flow fixtures.
 

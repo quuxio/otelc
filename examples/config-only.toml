@@ -1,0 +1,26 @@
+schema_version = 2
+languages = ["c", "cpp"]
+
+[sources]
+include = ["examples/apps/**"]
+exclude = []
+
+[functions]
+include = ["process_order*"]
+exclude = []
+
+[annotations]
+read_existing = false
+inject_generated = false
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 1000
+
+[resource]
+service_name = "otelc-config-only-example"
+
+[adapters.c]
+backend = "llvm"
+[adapters.cpp]
+backend = "llvm"

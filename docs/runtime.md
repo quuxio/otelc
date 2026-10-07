@@ -1,5 +1,7 @@
 # Runtime design
 
+The callback timing path is implemented locally; trace fields, tokens and policy generations remain future contracts. See [current behaviour and validation](local-implementation.md).
+
 ## State and initialization
 
 The runtime has `disabled`, `initializing`, `running`, and `draining` states. It starts disabled. Initialization reads and validates configuration, resolves a manifest against loaded image identity, allocates fixed pools, establishes clock anchors, and starts one worker. Only a completely initialized runtime transitions to running.
@@ -68,3 +70,7 @@ Normal shutdown stops new admission, drains completed records, and attempts expo
 In a fork child, inherited worker threads and synchronization state cannot be reused. A platform adapter must disable telemetry in the child without blocking; reinitialization is a later capability. `exec` starts a fresh runtime. Until the fork fixture passes, fork while instrumented is outside support.
 
 Signal handlers, thread cancellation, dynamic module unloading, async tasks, fibers, and context switching outside ordinary native threads are explicitly unsupported in the initial runtime. See the [support matrix](support.md).
+
+## Live metrics admission
+
+The local LLVM runtime supports an opt-in private Unix control socket for status/enable/disable. It changes an atomic admission flag, leaving selected functions and pool capacities fixed. New off-state entries receive token zero; their exits stay no-ops even after enable. On-state entries retain valid tokens and finish after disable, including exception unwinds. Already queued observations drain and export; counters retain their history. Periodic encoding/export pauses once disabled observations have drained. The worker and compiled probes remain present. Control requests and shutdown waits are bounded, and normal shutdown removes the owned socket. Callback live controls and filter reloads are rejected/not implemented. See [developer commands](developer-101.md#turn-metrics-offon-without-restarting).

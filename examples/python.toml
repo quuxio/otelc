@@ -1,0 +1,23 @@
+schema_version = 2
+languages = ["python"]
+
+[sources]
+include = ["examples/apps/python*.py"]
+
+[functions]
+include = ["examples.apps.python_app.*", "examples.apps.python_annotated.configured"]
+exclude = ["*.excluded", "*.main", "*.main.<locals>.*", "*.asynchronous"]
+
+[annotations]
+read_existing = true
+
+[resource]
+service_name = "otelc-python-example"
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 100
+timeout_ms = 300
+
+[adapters.python]
+backend = "profile"

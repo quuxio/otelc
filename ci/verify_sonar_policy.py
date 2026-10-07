@@ -22,7 +22,11 @@ def validate_policy(payload: dict) -> None:
     if not isinstance(settings, list):
         raise ValueError("SonarQube returned an invalid settings response")
     matching = [item for item in settings if isinstance(item, dict) and item.get("key") == POLICY_KEY]
-    if len(matching) != 1 or matching[0].get("value") != EXPECTED_POLICY:
+    if (
+        len(matching) != 1
+        or matching[0].get("value") != EXPECTED_POLICY
+        or matching[0].get("inherited", False) is not False
+    ):
         raise ValueError("Set the project's new-code definition to Previous version")
 
 

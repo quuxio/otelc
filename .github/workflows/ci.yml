@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths-ignore: ['.badges/**']
   pull_request:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -23,20 +23,62 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
           node-version: '24'
       - name: Install validation tools
         run: |
           python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python3 -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
           npm ci --ignore-scripts --prefix ci/markdownlint
       - name: Validate documents and tooling
-        run: make check PYTHON=python3
+        run: make lint test PYTHON=python3
+
+  native:
+    name: Native macOS ARM64 and 80% coverage
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install Python adapter and coverage dependencies
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python3 -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: '24'
+      - name: Install Node adapter dependencies
+        run: npm ci --ignore-scripts --prefix adapters/node
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Build Java adapter
+        run: make java-build
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: adapters/go/go.sum
+      - name: Build Go adapter and install pinned analysers
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          make go-build
+      - name: Install Rust and matching coverage tools
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
+          rustup default 1.98.1
+          brew install llvm@22
+          cargo install cargo-llvm-cov --version 0.8.7 --locked
+      - name: Validate native runtime and coverage
+        run: make rust-check model-check rust-coverage python-check node-check java-check go-check PYTHON=python3
 
   sonar:
     name: SonarQube
-    needs: quality
+    needs: [quality, native]
     if: >-
       github.actor != 'dependabot[bot]' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -48,10 +90,11 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install coverage tooling
         run: |
           python3 -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+          python3 -m pip install --require-hashes --only-binary=:all: -r adapters/python/requirements.txt
       - name: Produce coverage report
         run: make test PYTHON=python3
       - name: Verify remote new-code policy

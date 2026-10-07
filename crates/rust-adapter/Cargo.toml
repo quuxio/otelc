@@ -1,0 +1,19 @@
+[package]
+name = "quux-otelc-rust-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+[[bin]]
+name = "otelc-rust-adapter"
+path = "src/main.rs"
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+quux-otelc-config = { path = "../config" }
+quux-otelc-rust = { path = "../rust-probes" }
+syn = { version = "=3.0.6", features = ["full", "visit"] }
+proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
+quote = "=1.0.47"
+tempfile = "3"

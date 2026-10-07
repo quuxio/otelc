@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: otelc
+    orgId: 1
+    folder: otelc
+    type: file
+    disableDeletion: false
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

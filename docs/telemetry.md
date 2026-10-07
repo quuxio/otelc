@@ -1,5 +1,7 @@
 # Telemetry semantics
 
+The local implementation exports callback timing metrics. Traces and context integration below remain future contracts; see [current implementation](local-implementation.md).
+
 ## Metrics
 
 The initial worker exports aggregate function timing as cumulative OTLP metrics. These are project-specific instrument names, not claims of standardized OpenTelemetry function-metric conventions.

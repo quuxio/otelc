@@ -1,0 +1,22 @@
+# Working local callback example for the native fixtures.
+schema_version = 1
+
+[build]
+backend = "callbacks"
+include = ["tests/fixtures/**/*.c", "tests/fixtures/**/*.cpp"]
+
+[functions]
+include = ["selected_*", "OrderBook::*"]
+
+[runtime]
+max_threads = 8
+stack_depth = 64
+queue_capacity = 4096
+shutdown_timeout_ms = 2000
+
+[export]
+endpoint = "http://localhost:4318"
+interval_ms = 1000
+
+[resource]
+service_name = "otelc-local-example"

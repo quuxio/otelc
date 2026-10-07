@@ -2,7 +2,7 @@
 
 ## Status
 
-This is a draft contract for the LLVM backend. There is no installed header or runtime library yet. The callback prototype exposes the compiler's legacy ABI and adapts it internally; it does not pretend that Clang already passes these descriptors or tokens.
+This is a draft contract for the LLVM backend. The local runtime implements legacy callbacks and an interim address-based token ABI (`otelc_function_enter_v1` and `otelc_function_leave_v1`) for the LLVM timing pass, plus `otelc_object_begin_v1`/`otelc_object_end_v1` for the installed C++ lifetime guard. The descriptor-based token interface below remains a proposal. The callback prototype exposes the compiler's legacy ABI and adapts it internally; it does not pretend that Clang already passes these descriptors or tokens.
 
 ## Versioned interface
 

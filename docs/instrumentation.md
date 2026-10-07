@@ -2,7 +2,7 @@
 
 ## Callback backend
 
-The first backend will use Clang's documented [`-finstrument-functions`](https://clang.llvm.org/docs/ClangCommandLineReference.html#cmdoption-clang-finstrument-functions) option. The compiler emits callbacks whose arguments identify the function and caller:
+The local callback backend uses Clang's documented [`-finstrument-functions`](https://clang.llvm.org/docs/ClangCommandLineReference.html#cmdoption-clang-finstrument-functions) option. The compiler emits callbacks whose arguments identify the function and caller:
 
 ```c
 void __cyg_profile_func_enter(void *function, void *call_site);
@@ -23,9 +23,9 @@ The first backend instruments before inlining. Inlined logical function callback
 
 ## Build wrapper
 
-The planned `quux-otelc ... clang` and `quux-otelc ... clang++` forms wrap the real driver. Compile-only invocations add probes only to selected source inputs; link-only invocations add the matching runtime once and build the final manifest. Preprocessing, dependency generation, assembly-only output, compiler queries, and configure-time checks pass through without instrumentation.
+The implemented `quux-otelc ... clang` and `quux-otelc ... clang++` forms wrap the real driver. Compile-only invocations add probes only to selected source inputs; link-only invocations add the matching runtime once and build the final manifest. Preprocessing, dependency generation, assembly-only output, compiler queries, and configure-time checks pass through without instrumentation.
 
-The wrapper parses response files using the selected driver's rules, handles paths containing spaces, and retains the application's optimization, debug, target, sysroot, and deployment flags. It records the effective compiler version, target triple, probe backend, and relevant flags in the manifest. Unsupported LTO, mixed runtimes, or cross-compilation combinations fail a capability check before producing a misleading instrumented artifact.
+The wrapper parses response files using the selected driver's rules, handles paths containing spaces, and retains the application's optimization, debug, target, sysroot, and deployment flags. It records the effective compiler version, target triple, probe backend, and relevant flags in the manifest. Unsupported LTO, mixed runtimes, or cross-compilation combinations fail a capability check before producing a misleading instrumented artifact. With `backend=llvm`, the wrapper explicitly selects the compiler matched to the built plugin; Apple Clang remains a separate callback lane.
 
 The direct driver wrapper comes first. A CMake adapter will then use compiler launchers for compilation and an explicit link integration. A launcher alone cannot ensure runtime linkage. `compile_commands.json` helps inspect selection but is not a replacement for capturing the final link. General-purpose `build` wrapping waits until a tested CMake workflow exists.
 
@@ -47,9 +47,9 @@ The same function can recur with indistinguishable legacy callback addresses, so
 
 ## LLVM backend
 
-The proposed pass uses LLVM's new pass manager and a toolchain-specific plugin build. It selects eligible functions after a documented optimization boundary, emits constant descriptors, and injects `otelc_enter_v1`/`otelc_leave_v1` calls. The returned token is local to one invocation and survives recursive calls.
+The local LLVM 22 pass uses LLVM's new pass manager and a matched upstream toolchain-specific plugin build. It implements exception-aware function timing; sampled traces and descriptor-driven registration remain proposals. It selects eligible functions after a documented optimization boundary, retains a function-address inventory, and injects `otelc_function_enter_v1`/`otelc_function_leave_v1` calls. The returned token is local to one invocation and survives recursive calls.
 
-The pass must instrument normal returns and applicable exception cleanup exits, including `invoke`, `landingpad`, and `resume` paths. Only escaping exceptions mark an invocation as an exceptional exit; an exception caught inside the same function does not. If the pass cannot prove balanced cleanup for a function, it must exclude that function with a reason in the manifest. Unsupported exception personalities and Windows funclets are explicit capability failures.
+The local pass instruments normal returns and escaping exception cleanup exits, including `invoke`, `landingpad`, and `resume` paths. Only escaping exceptions mark an invocation as an exceptional exit; an exception caught inside the same function does not. If the pass cannot prove balanced cleanup for a function, it must exclude that function with a reason in the manifest. Unsupported exception personalities and Windows funclets are explicit capability failures.
 
 Probe calls must remain observably ordered without unnecessarily prohibiting unrelated optimization. Descriptors and symbols must survive the chosen linker settings. Tail calls, `musttail`, `noreturn`, LTO, sanitizer combinations, and optimization-induced merging need their own fixtures; the pass cannot simply insert a call before every textual `ret` and declare completion.
 
