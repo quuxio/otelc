@@ -86,7 +86,7 @@ def write_reports(environment):
     native = list(Path(environment["OTELC_COVERAGE_BIN_DIR"]).glob("*"))
     native.extend((target / "debug").glob("libotelc_pass.*"))
     native.extend((target / "debug").glob("otelc_node_observer.node"))
-    command = [environment.get("LLVM_COV", "llvm-cov"), "export", "--format=lcov", "--instr-profile=" + str(merged), "--ignore-filename-regex=/tests/|build.rs|/.cargo/registry/|/rustlib/src/|/opt/homebrew/.*/include/|/Library/Developer/|/\\.tmp[^/]+/"]
+    command = [environment.get("LLVM_COV", "llvm-cov"), "export", "--format=lcov", "--instr-profile=" + str(merged), "--ignore-filename-regex=/tests/|build.rs|/.cargo/registry/|/rustlib/src/|/opt/homebrew/.*/include/|/include/node/|/Library/Developer/|/\\.tmp[^/]+/"]
     for path in objects:
         command.extend(["--object", str(path)])
     reports = [subprocess.check_output(command, text=True, env=environment)]

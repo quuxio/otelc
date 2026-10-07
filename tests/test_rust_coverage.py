@@ -1,5 +1,6 @@
 """Check coverage orchestration and the 80% gate without compiling applications."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -66,6 +67,10 @@ class CoverageTests(unittest.TestCase):
                             with self.assertRaises(ValueError):
                                 rust_coverage.write_reports(environment)
                 self.assertTrue(any(str(target / "native-binaries/app") in call.args[0] for call in export.call_args_list))
+                for call in export.call_args_list:
+                    ignored = next(argument.split("=", 1)[1] for argument in call.args[0] if argument.startswith("--ignore-filename-regex="))
+                    self.assertIsNotNone(re.search(ignored, "/Users/runner/hostedtoolcache/node/24/include/node/v8-local-handle.h"))
+                    self.assertIsNone(re.search(ignored, "/Users/runner/work/otelc/otelc/native/node/PromiseObserver.cpp"))
 
     def test_preconfigured_llvm_tools(self):
         environment = {"LLVM_COV": "cov", "LLVM_PROFDATA": "prof"}
