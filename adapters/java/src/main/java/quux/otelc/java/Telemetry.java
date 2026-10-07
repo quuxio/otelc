@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -33,6 +34,8 @@ public final class Telemetry implements AutoCloseable {
   final ConcurrentHashMap<Long, Frame> pending = new ConcurrentHashMap<>();
   private final AtomicLong next = new AtomicLong();
   private final AtomicBoolean closed = new AtomicBoolean();
+  private final AtomicBoolean sdkStopping = new AtomicBoolean();
+  private final CompletableFuture<Boolean> sdkStopped = new CompletableFuture<>();
   private final ReentrantLock observations = new ReentrantLock();
   private volatile boolean discardCompletions;
   volatile boolean enabled;
@@ -119,23 +122,43 @@ public final class Telemetry implements AutoCloseable {
     String filename = System.getenv("OTELC_REPORT_PATH"); if (filename != null) Files.writeString(Path.of(filename), new GsonBuilder().setPrettyPrinting().create().toJson(result) + "\n");
     return result;
   }
+  private CompletableFuture<Boolean> shutdownSdk(long deadline, boolean flush) {
+    if (!sdkStopping.compareAndSet(false, true)) return sdkStopped;
+    // SDK entry points can perform synchronous collection or transport cleanup
+    // before returning a result. Keep those operations off the application thread.
+    Thread.ofPlatform().daemon().name("otelc-java-shutdown").start(() -> {
+      boolean finished = false;
+      try {
+        if (flush) {
+          var flushed = provider.forceFlush().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+          var stopped = provider.shutdown().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+          finished = flushed.isDone() && stopped.isDone();
+        } else { exporter.shutdown(); provider.shutdown(); }
+      } catch (Exception ignored) { /* The caller reports unfinished export. */ }
+      finally {
+        sdkStopped.complete(finished);
+        if (!finished) exporter.shutdown();
+      }
+    });
+    return sdkStopped;
+  }
   @Override public void close() {
     if (!closed.compareAndSet(false, true)) return;
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(plan.integer("runtime", "shutdown_timeout_ms"));
     try {
       if (control != null) control.close();
       if (!observations.tryLock(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
-        discardCompletions = true; exportLoss.incrementAndGet(); exporter.shutdown();
-        provider.shutdown().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+        discardCompletions = true; exportLoss.incrementAndGet(); shutdownSdk(deadline, false);
         return;
       }
       try { losses.get("incomplete").addAndGet(pending.size()); pending.clear(); }
       finally { observations.unlock(); }
-      var flushed = provider.forceFlush().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
-      var stopped = provider.shutdown().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
-      exportFinished = flushed.isDone() && stopped.isDone();
-      if (!exportFinished) { exportLoss.incrementAndGet(); exporter.shutdown(); }
-    } catch (Exception ignored) { exportLoss.incrementAndGet(); exporter.shutdown(); }
+      exportFinished = shutdownSdk(deadline, true).get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      if (!exportFinished) exportLoss.incrementAndGet();
+    } catch (Exception ignored) {
+      if (ignored instanceof InterruptedException) Thread.currentThread().interrupt();
+      exportLoss.incrementAndGet(); shutdownSdk(deadline, false);
+    }
     finally { try { report(); } catch (IOException ignored) { /* Reporting must not change application exit. */ } }
   }
 }

@@ -11,6 +11,27 @@ class CriticalReviewTest {
   var policy=AgentTest.policy(endpoint);policy.getAsJsonObject("export").addProperty("timeout_ms",1000);
   policy.getAsJsonObject("runtime").addProperty("shutdown_timeout_ms",2000);return new Plan(policy);
  }
+ @Test void blockedSdkCollectionCannotHoldApplicationShutdown() throws Exception {
+  try(var receiver=new AgentTest.Receiver();var rt=new Telemetry(relaxedPlan(receiver.endpoint()));var pool=Executors.newSingleThreadExecutor()){
+   var reached=new CountDownLatch(1);var resume=new CountDownLatch(1);
+   var field=Telemetry.class.getDeclaredField("provider");field.setAccessible(true);
+   var provider=(io.opentelemetry.sdk.metrics.SdkMeterProvider)field.get(rt);
+   try(var counter=provider.get("shutdown-regression").counterBuilder("test.blocked.collection").buildWithCallback(observer->{
+    reached.countDown();try{resume.await();}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}
+    observer.record(1);
+   })){
+    rt.plan.section("runtime").addProperty("shutdown_timeout_ms",50);
+    var closing=pool.submit(rt::close);
+    try{
+     assertTrue(reached.await(1,TimeUnit.SECONDS));
+     closing.get(1,TimeUnit.SECONDS);
+     assertEquals(false,rt.report().get("export_finished"));
+     assertTrue(rt.exportLoss.get()>0);
+     assertEquals(1L,resume.getCount(),"shutdown returned while the SDK callback remained blocked");
+    }finally{resume.countDown();closing.get(3,TimeUnit.SECONDS);}
+   }
+  }
+ }
  @Test void blockedRecordingMarksIncompleteAndKeepsShutdownBudget() throws Exception {
   try(var receiver=new AgentTest.Receiver();var rt=new Telemetry(relaxedPlan(receiver.endpoint()));var pool=Executors.newSingleThreadExecutor()){
    var reached=new CountDownLatch(1);var resume=new CountDownLatch(1);

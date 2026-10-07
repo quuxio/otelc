@@ -88,6 +88,8 @@ This compares uninstrumented execution, disabled probes and enabled metrics, che
 
 The pinned Java SDK provides metric aggregation and OTLP protobuf encoding. The bounded HTTP sender permits one in-flight request, rejects redirects, malformed/partial acknowledgements and responses over 64 KiB, and honours OTLP header precedence. Failed cumulative snapshots can be retried at the next export interval. Shutdown uses one overall deadline. The SDK's internal marshaler is version-pinned and covered by decoding tests; it must be requalified when upgrading.
 
+SDK collection and cleanup run on a daemon worker because SDK calls can block before returning a completion result. The application waits only until its shutdown deadline. If SDK work remains blocked, the report records unfinished export and loss; background cleanup cannot hold application exit open.
+
 ## Boundaries
 
 Normal application class loaders that can access the agent are supported; named modules gain the required read edge. An isolated loader or unresolved stack-frame type produces an explicit `unsupported_class` loss rather than changing application behaviour. Check loss counters before trusting a benchmark. Retransformation and already-instrumented classes are rejected. Agent dependencies are shaded to avoid application dependency collisions.
