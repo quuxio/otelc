@@ -75,3 +75,5 @@ See the [Collector/Grafana guide](observability-stack.md). Select service `otelc
 ## Boundaries
 
 This is a function-metrics adapter for CPython 3.12+ on the tested macOS/Linux CI lanes. C-extension internals, PyPy, subprocess/fork propagation, distributed spans, annotation injection and automatic object/resource/collection lifetimes are unavailable and requested unsupported capabilities fail configuration resolution. Generator/coroutine timing begins at first execution, not object allocation. Fatal process termination cannot guarantee export. Source/class behaviour is preserved; full debugger/profiler combinations still require qualification, and otelc claims a free monitoring ID rather than replacing another tool.
+
+Function spans can be enabled through the same external policy; see the [Python span guide](python-spans.md) for unchanged source, coroutine/generator parenting, loss and viewing commands.

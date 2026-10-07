@@ -18,7 +18,11 @@ def main(args: list[str]) -> int:
     if not hasattr(sys, "monitoring"):
         raise ValueError("Python instrumentation requires CPython 3.12+")
     if args[1] == "--doctor":
-        print(f"Python {sys.version.split()[0]}: CPython monitoring and OTLP/HTTP metrics available")
+        signals = "metrics"
+        if plan.get("traces", {}).get("enabled", False):
+            from quux_otelc_python import traces  # Check requested SDK support before launch.
+            signals += " and function spans"
+        print(f"Python {sys.version.split()[0]}: CPython monitoring and OTLP/HTTP {signals} available")
         return 0
     if args[1] == "--inspect":
         if len(args) < 3 or any(a != "--json" for a in args[3:]):

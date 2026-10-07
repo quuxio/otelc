@@ -16,4 +16,4 @@ The common TOML policy remains the configuration entry point. Existing annotatio
 
 See the [common configuration](common-configuration.md), [Python guide](python.md), [JavaScript guide](javascript.md), [TypeScript guide](typescript.md), [Java guide](java.md), [Go guide](go.md), [Rust guide](rust.md), [developer 101](developer-101.md) and [support matrix](support.md).
 
-Rust function spans are available through the common trace policy; see [Rust spans](rust-spans.md). Other language trace backends, automatic task/distributed parenting and source-free lifetimes remain separate gaps.
+Rust and Python function spans are available through the common trace policy; see [Rust spans](rust-spans.md) and [Python spans](python-spans.md). Other language trace backends, automatic task/distributed parenting and source-free lifetimes remain separate gaps.

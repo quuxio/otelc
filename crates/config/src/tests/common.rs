@@ -61,6 +61,23 @@ fn rust_traces_resolve_independent_signal_settings() {
     assert!(!config.resolve(Language::Go).unwrap().execution_available);
 }
 #[test]
+fn python_traces_share_the_independent_signal_policy() {
+    let mut config = policy();
+    config.traces.enabled = true;
+    config
+        .apply_environment(|key| match key {
+            "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT" => Some("111".into()),
+            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT" => Some("555".into()),
+            _ => None,
+        })
+        .unwrap();
+    let python = config.resolve(Language::Python).unwrap();
+    assert!(python.execution_available);
+    assert_eq!(python.export.timeout_ms, 111);
+    assert_eq!(python.trace_export.unwrap().timeout_ms, 555);
+    assert!(!config.resolve(Language::Java).unwrap().execution_available);
+}
+#[test]
 fn native_projection_uses_shared_policy_and_owned_buffer_settings() {
     let config = policy();
     let native = config.for_native(Language::Cpp).unwrap();
