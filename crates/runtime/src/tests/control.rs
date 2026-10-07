@@ -1,5 +1,5 @@
 use super::*;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::{fs::DirBuilderExt, net::UnixStream};
 #[test]
 fn commands_are_explicit_and_invalid_requests_leave_state_unchanged() {
     let enabled = AtomicBool::new(false);
@@ -51,4 +51,34 @@ fn request_framing_is_bounded_and_requires_a_complete_line() {
     let started = Instant::now();
     assert!(read_command(&mut server).is_err());
     assert!(started.elapsed() < Duration::from_secs(1));
+}
+#[test]
+fn inherited_nonblocking_socket_waits_for_a_fragmented_valid_request() {
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    server.set_nonblocking(true).unwrap();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(25));
+        client.write_all(b"sta").unwrap();
+        std::thread::sleep(Duration::from_millis(25));
+        client.write_all(b"tus\n").unwrap();
+    });
+    assert_eq!(read_command(&mut server).unwrap(), "status");
+    writer.join().unwrap();
+}
+#[test]
+fn trickled_bytes_cannot_extend_the_total_control_deadline() {
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    let writer = std::thread::spawn(move || {
+        for byte in b"status\n" {
+            std::thread::sleep(Duration::from_millis(45));
+            if client.write_all(&[*byte]).is_err() {
+                break;
+            }
+        }
+    });
+    let started = Instant::now();
+    assert!(read_command(&mut server).is_err());
+    assert!(started.elapsed() < Duration::from_millis(300));
+    drop(server);
+    writer.join().unwrap();
 }

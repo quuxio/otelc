@@ -447,3 +447,29 @@ fn policy_and_control_fail_before_application_launch_without_destroying_files() 
     std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(Runtime::new(policy).is_err());
 }
+#[test]
+fn rust_control_accepts_fragmented_commands_before_the_shared_deadline() {
+    let directory = tempfile::Builder::new()
+        .prefix("ru-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = directory.path().join("s");
+    let receiver = Receiver::good();
+    let mut plan = plan(&receiver);
+    plan.runtime.control_socket = Some(path.to_string_lossy().into());
+    let runtime = Runtime::new(plan).unwrap();
+    let mut stream = UnixStream::connect(path).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    thread::sleep(Duration::from_millis(25));
+    stream.write_all(b"dis").unwrap();
+    thread::sleep(Duration::from_millis(25));
+    stream.write_all(b"able\n").unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(response["metrics_enabled"], false);
+    runtime.close();
+}
