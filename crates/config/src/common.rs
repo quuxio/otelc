@@ -342,9 +342,6 @@ impl CommonConfig {
                     "automatic {language} lifetimes are not implemented"
                 ));
             }
-            if self.traces.enabled && language == Language::TypeScript {
-                unavailable.push(format!("{language} span export is not implemented"));
-            }
         } else if language == Language::Java {
             if backend != "agent" {
                 unavailable.push("Java requires the agent backend".into());

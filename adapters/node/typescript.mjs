@@ -36,7 +36,7 @@ function functionName(node, parents, file) {
 }
 function tag(node, parents, file) {
   let result = null;
-  const locations = [node, ...parents.slice(-2)].filter(Boolean);
+  const locations = [node, ...parents.slice(-2)].filter(location => location && !ts.isSourceFile(location));
   for (const location of locations) {
     for (const comment of ts.getLeadingCommentRanges(file.text, location.getFullStart()) ?? []) {
       for (const raw of file.text.slice(comment.pos, comment.end).replace(/^\/\/?\*?/, '').replace(/\*\/$/, '').split('\n')) {

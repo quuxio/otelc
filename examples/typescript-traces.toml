@@ -1,0 +1,16 @@
+schema_version = 2
+languages = ["typescript"]
+[sources]
+include = ["examples/apps/typescript_trace_app.mts"]
+[functions]
+include = ["examples.apps.typescript_trace_app.*"]
+[traces]
+enabled = true
+root_sample_ratio = 1.0
+max_active_traces = 32
+max_spans_per_trace = 256
+[resource]
+service_name = "otelc-typescript-traces"
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 500

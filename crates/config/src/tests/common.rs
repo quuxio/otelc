@@ -82,7 +82,7 @@ fn java_traces_consume_the_common_independent_signal_policy() {
 }
 
 #[test]
-fn javascript_traces_resolve_independently_while_typescript_remains_unqualified() {
+fn node_language_traces_resolve_with_independent_signal_settings() {
     let mut config = policy();
     config.traces.enabled = true;
     config.export.timeout_ms = 111;
@@ -92,16 +92,12 @@ fn javascript_traces_resolve_independently_while_typescript_remains_unqualified(
             _ => None,
         })
         .unwrap();
-    let resolved = config.resolve(Language::JavaScript).unwrap();
-    assert!(resolved.execution_available);
-    assert_eq!(resolved.export.timeout_ms, 111);
-    assert_eq!(resolved.trace_export.unwrap().timeout_ms, 555);
-    assert!(
-        !config
-            .resolve(Language::TypeScript)
-            .unwrap()
-            .execution_available
-    );
+    for language in [Language::JavaScript, Language::TypeScript] {
+        let resolved = config.resolve(language).unwrap();
+        assert!(resolved.execution_available);
+        assert_eq!(resolved.export.timeout_ms, 111);
+        assert_eq!(resolved.trace_export.unwrap().timeout_ms, 555);
+    }
 }
 #[test]
 fn python_traces_share_the_independent_signal_policy() {
