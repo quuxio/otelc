@@ -15,7 +15,7 @@ rustc --edition=2024 -O -g examples/apps/rust_app.rs -o /tmp/plain-rust-app
 ./target/debug/quux-otelc --config examples/rust.toml rust examples/apps/rust_app.rs
 ```
 
-Both applications print `72`. Rust's normal panic hook also prints the two caught panic diagnostics. Instrumentation records ten calls: recursion, receiver methods, an escaping panic, an internally caught panic and thread work. The escaping payload remains the original `String`; internally caught panics do not become escaping-unwind observations.
+Both applications print `72`. Rust's normal panic hook also prints the two caught panic diagnostics. Instrumentation records 15 calls: recursion, receiver methods, an escaping panic, an internally caught panic, parsed closures and thread work. Two escaping-unwind observations include the outer escaping function and the closure that panics inside the catching function. The escaping payload remains the original `String`; internally caught panics do not become escaping-unwind observations.
 
 From an existing Cargo project, supply an absolute CLI and configuration path:
 
@@ -117,9 +117,52 @@ async fn ready(value: i32) -> i32 {
 
 The native await polls the original body directly without an additional scheduled task. Parameter shadowing preserves reverse parameter destruction order; concrete return coercions retain the original expected output type. This changes the compiler-generated future's layout and adds runtime state, but preserves the qualified results and cleanup behaviour. Async destructured, wildcard and `ref` parameters are rejected visibly pending compiler-level lifetime qualification. Executor attribute macros controlling async `main`, per-poll CPU timing and complete macro-expansion coverage remain unsupported. The paired async benchmark measures immediately completing futures; it is not evidence for every executor or suspended workload. Run `make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS="--rust-async --output build/benchmarks/rust-async --iterations 10000 --runs 8"` to compare the unchanged baseline with metrics off/on in one instrumented PID. It verifies source hashes, matching checksums, exact calls, complete export and zero losses.
 
+## Synchronous closures
+
+Parsed synchronous closures use body guards without replacing the closure object or changing its parameters/capture modifier. Both expression and block bodies are supported. Identities include enclosing function/closure scopes and the original opening pipe's line/column, for example `examples.apps.rust_closure_app.main.<closure>@10:18`. Nested and same-line closures have distinct identities. Editing source positions changes these identities; use `inspect` before selecting particular callbacks.
+
+```sh
+rustc --edition=2024 -O examples/apps/rust_closure_app.rs -o /tmp/plain-rust-closures
+/tmp/plain-rust-closures
+./target/debug/quux-otelc --config examples/rust-closures.toml rust examples/apps/rust_closure_app.rs
+./target/debug/quux-otelc --config examples/rust-closures.toml rust examples/apps/rust_closure_annotated.rs
+```
+
+The first pair preserves results and prints `closure results preserved; drops=["second", "first", "capture", "local", "argument"]`. The configured run measures 20 closure invocations and one escaping panic with no observation loss. The fixture qualifies `Fn`, `FnMut`, `FnOnce`, owned and borrowed results, early returns, destructured inputs, function-pointer coercion, a noncapturing closure returned by a const factory, disjoint field capture, nested closures and thread movement. An uncalled closure produces no observation; creating and discarding a future from a synchronous closure records one body call and no future cancellation.
+
+The annotated example prints `30` and records two calls. An adjacent comment can select or exclude a closure bound by `let`, without a runtime import:
+
+```rust
+// otelc.instrument
+let selected = |value| value * 3;
+// otelc.exclude
+let excluded = |value| value - 1;
+```
+
+External selection still has exclusion priority. Generated input for an expression body resembles:
+
+```rust
+let selected = |value| {
+    let __quux_otelc_guard = ::quux_otelc_rust::enter("example.main.<closure>@3:16");
+    value * 3
+};
+```
+
+The adapter inserts no new lines. Normal return, early return and panic unwinding end the body observation. Closure captures dropped when the closure object itself is destroyed are outside this duration; this is function timing, not automatic object lifetime tracing. A synchronous closure returning a future measures creation of that future, not polling or completion. Async/const closures are inspectable and rejected when selected until their own semantics are qualified.
+
+Macro argument tokens are not expanded by this parser: a closure written directly inside `assert_eq!(...)`, another expression macro or a macro-generated item is outside this coverage. Ordinary calls to an already instrumented closure from a macro still execute its body guard. Complete macro/hygiene coverage requires compiler integration; zero loss in the selected parsed inventory does not prove that hidden macro callbacks were instrumented.
+
+Measure the unchanged closure workload with live controls:
+
+```sh
+make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS="--rust-closures --output build/benchmarks/rust-closures --iterations 10000 --runs 8"
+```
+
+The baseline and off/on runs use the same closure, compiler flags, source hash and checksums. A complete report requires exact call counts, zero loss, final export and one instrumented PID across live toggles.
+
 ## Current boundaries
 
-This milestone supports synchronous and the qualified async named functions, methods, trait default methods, generics, nested functions, normal OS threads and panic unwinding on the qualified macOS ARM64 host. Const and naked functions are rejected when selected; async main is rejected. Function metrics for closures and macro-generated items are not implemented. Selected `include!` source fragments, test/procedural-macro/edition-2015 crates and existing compiler wrappers require separate qualification. Normal expression macros remain usable. Symlinked source modules require separate qualification. Build scripts execute unchanged and do not start instrumentation.
+This milestone supports synchronous and the qualified async named functions, methods, trait default methods, generics, nested functions, normal OS threads and panic unwinding on the qualified macOS ARM64 host. Const and naked functions are rejected when selected; async main is rejected. Parsed synchronous closures are supported; async/const closures and macro-generated functions or closures remain unsupported. Selected `include!` source fragments, test/procedural-macro/edition-2015 crates and existing compiler wrappers require separate qualification. Normal expression macros remain usable. Symlinked source modules require separate qualification. Build scripts execute unchanged and do not start instrumentation.
 
 Rust `panic=abort`, `process::exit`, forced termination and unjoined background work cannot guarantee final observations or export. Custom targets, cross-compilation, sanitizers and altered panic strategies require matching SDK qualification. Automatic value lifetime/move/drop metrics, distributed context and spans remain unavailable and are rejected by configuration. Timing a `Drop::drop` method measures that method body, not an object's entire lifetime.
 

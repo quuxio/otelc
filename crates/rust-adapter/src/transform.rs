@@ -108,6 +108,81 @@ fn annotate(
     Ok((include, exclude))
 }
 impl Parser<'_> {
+    fn closure(&mut self, node: &syn::ExprClosure, binding: Option<(&[syn::Attribute], Span)>) {
+        let position = node.inputs_begin.span.start();
+        let label = format!("<closure>@{}:{}", position.line, position.column + 1);
+        let name = format!("{}.{}", self.scope.join("."), label);
+        let enabled = self.plan.annotations.read_existing && self.selected_source;
+        let annotations = annotate(self.source, node.span(), &node.attrs, enabled).and_then(
+            |(include, exclude)| {
+                if let Some((attrs, span)) = binding {
+                    let (bound_include, bound_exclude) =
+                        annotate(self.source, span, attrs, enabled)?;
+                    Ok((include || bound_include, exclude || bound_exclude))
+                } else {
+                    Ok((include, exclude))
+                }
+            },
+        );
+        let (include, exclude) = match annotations {
+            Ok(value) => value,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let selected = self.selected_source
+            && !exclude
+            && self.selection.accepts_with_annotation(&name, include);
+        let unsupported = if node.constness.is_some() {
+            Some("const closures cannot contain runtime probes")
+        } else if node.asyncness.is_some() {
+            Some("async closures require lending-future and capture qualification")
+        } else if node.modifiers.require_empty().is_err() {
+            Some("closure modifiers require separate compiler qualification")
+        } else {
+            None
+        };
+        self.functions.push(Function {
+            name: name.clone(),
+            line: position.line,
+            selected,
+            unsupported,
+        });
+        if selected {
+            if let Some(reason) = unsupported {
+                if !self.inspect {
+                    self.error = Some(anyhow::anyhow!("{name}: {reason}"));
+                }
+            } else {
+                let annotation = if self.plan.annotations.inject_generated {
+                    "/*otelc.instrument*/"
+                } else {
+                    ""
+                };
+                let probe = format!(
+                    "/*{MARKER}*/{annotation}let {}=::quux_otelc_rust::enter({name:?});",
+                    self.guard
+                );
+                if let syn::Expr::Block(body) = &*node.body {
+                    self.edits.push((
+                        offset(self.source, body.block.brace_token.span.open()) + 1,
+                        probe,
+                    ));
+                } else {
+                    self.edits
+                        .push((offset(self.source, node.body.span()), format!("{{{probe}")));
+                    self.edits.push((
+                        position_offset(self.source, node.body.span().end()),
+                        "}".into(),
+                    ));
+                }
+            }
+        }
+        self.scope.push(label);
+        visit::visit_expr_closure(self, node);
+        self.scope.pop();
+    }
     fn function(
         &mut self,
         sig: &syn::Signature,
@@ -277,6 +352,18 @@ impl<'ast> Visit<'ast> for Coercions<'_> {
     }
 }
 impl<'ast> Visit<'ast> for Parser<'_> {
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        if let Some(initializer) = &node.init {
+            if let syn::Expr::Closure(closure) = &*initializer.expr {
+                self.closure(closure, Some((&node.attrs, node.span())));
+                return;
+            }
+        }
+        visit::visit_local(self, node);
+    }
+    fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+        self.closure(node, None);
+    }
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
         let root = self.scope.len() == 1;
         self.function(&node.sig, &node.block, &node.attrs, node.span(), root);

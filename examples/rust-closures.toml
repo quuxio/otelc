@@ -1,0 +1,17 @@
+schema_version = 2
+languages = ["rust"]
+[sources]
+include = ["examples/apps/rust_closure_*.rs"]
+[functions]
+include = ["examples.apps.rust_closure_app.*.<closure>@*", "examples.apps.rust_closure_annotated.configured.<closure>@*"]
+[annotations]
+read_existing = true
+inject_generated = true
+[resource]
+service_name = "otelc-rust-closures"
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 100
+timeout_ms = 300
+[adapters.rust]
+backend = "compiler"
