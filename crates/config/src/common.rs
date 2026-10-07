@@ -356,9 +356,6 @@ impl CommonConfig {
             if self.lifetimes.enabled {
                 unavailable.push("automatic Go lifetimes are not implemented".into());
             }
-            if self.traces.enabled {
-                unavailable.push("Go span export is not implemented".into());
-            }
         } else if language == Language::Rust {
             if backend != "compiler" {
                 unavailable.push("Rust requires the compiler backend".into());

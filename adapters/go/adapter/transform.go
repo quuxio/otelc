@@ -78,6 +78,13 @@ func Transform(filename string, source []byte, packageName string, plan policy.P
 	for used[alias] {
 		alias += "_"
 	}
+	start, finish := "Start", "Finish"
+	if plan.Traces.Enabled {
+		start, finish = "StartTrace", "FinishTrace"
+	}
+	probe := func(name string) string {
+		return "defer " + alias + "." + finish + "(" + alias + "." + start + "(" + strconv.Quote(name) + "));"
+	}
 	functions := []Function{}
 	edits := []insertion{}
 	seen := map[*ast.FuncLit]bool{}
@@ -105,7 +112,7 @@ func Transform(filename string, source []byte, packageName string, plan policy.P
 			code = "defer " + alias + ".Close();"
 		}
 		if selected {
-			code += "defer " + alias + ".Finish(" + alias + ".Start(" + strconv.Quote(name) + "));"
+			code += probe(name)
 		}
 		if code != "" {
 			edits = append(edits, insertion{positions.Position(fn.Body.Lbrace).Offset + 1, code})
@@ -132,7 +139,7 @@ func Transform(filename string, source []byte, packageName string, plan policy.P
 			admit := sourceSelected && !exc && plan.Functions.Accept(anonymous, inc)
 			functions = append(functions, Function{Name: anonymous, Selected: admit, Line: line})
 			if admit {
-				edits = append(edits, insertion{positions.Position(literal.Body.Lbrace).Offset + 1, "defer " + alias + ".Finish(" + alias + ".Start(" + strconv.Quote(anonymous) + "));"})
+				edits = append(edits, insertion{positions.Position(literal.Body.Lbrace).Offset + 1, probe(anonymous)})
 			}
 			return true
 		})
@@ -151,7 +158,7 @@ func Transform(filename string, source []byte, packageName string, plan policy.P
 		selected := sourceSelected && plan.Functions.Accept(name, false)
 		functions = append(functions, Function{Name: name, Selected: selected, Line: position.Line})
 		if selected {
-			edits = append(edits, insertion{positions.Position(literal.Body.Lbrace).Offset + 1, "defer " + alias + ".Finish(" + alias + ".Start(" + strconv.Quote(name) + "));"})
+			edits = append(edits, insertion{positions.Position(literal.Body.Lbrace).Offset + 1, probe(name)})
 		}
 		return true
 	})

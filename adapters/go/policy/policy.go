@@ -40,7 +40,19 @@ type Plan struct {
 	Export struct {
 		IntervalMS int `json:"interval_ms"`
 		TimeoutMS  int `json:"timeout_ms"`
+		MaxQueued  int `json:"max_queued_batches"`
 	} `json:"export"`
+	Traces struct {
+		Enabled   bool    `json:"enabled"`
+		Ratio     float64 `json:"root_sample_ratio"`
+		MaxActive int     `json:"max_active_traces"`
+		MaxSpans  int     `json:"max_spans_per_trace"`
+	} `json:"traces"`
+	TraceExport *struct {
+		Endpoint  string `json:"endpoint"`
+		Protocol  string `json:"protocol"`
+		TimeoutMS int    `json:"timeout_ms"`
+	} `json:"trace_export"`
 	Endpoint string `json:"metrics_endpoint"`
 }
 

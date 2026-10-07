@@ -200,6 +200,9 @@ func Run(planPath string, args []string, sdkRoot string) (int, error) {
 	if len(args) == 1 && args[0] == "--doctor" {
 		if err = Doctor(goTool, root); err == nil {
 			fmt.Println("Go: compiler overlays, deferred function probes and OTLP/HTTP metrics available")
+			if plan.Traces.Enabled {
+				fmt.Println("Go: sampled function spans with private same-goroutine parenting available; qualified on Go 1.27.1")
+			}
 		}
 		return 0, err
 	}

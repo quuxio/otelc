@@ -23,25 +23,32 @@ type function struct {
 	options api.MeasurementOption
 }
 type frame struct {
-	name  string
-	start time.Time
+	name    string
+	start   time.Time
+	metrics bool
+	trace   *traceIdentity
 }
 type Runtime struct {
-	plan           policy.Plan
-	mu             sync.Mutex
-	functions      map[string]*function
-	pending        map[uint64]frame
-	losses         map[string]uint64
-	next           uint64
-	enabled        atomic.Bool
-	closed         atomic.Bool
-	revision       atomic.Uint64
-	exportLoss     atomic.Uint64
-	provider       *sdk.MeterProvider
-	calls, unwinds api.Int64Counter
-	duration       api.Float64Histogram
-	control        *control
-	finished       bool
+	plan              policy.Plan
+	mu                sync.Mutex
+	functions         map[string]*function
+	pending           map[uint64]frame
+	losses            map[string]uint64
+	next              uint64
+	enabled           atomic.Bool
+	closed            atomic.Bool
+	revision          atomic.Uint64
+	exportLoss        atomic.Uint64
+	provider          *sdk.MeterProvider
+	calls, unwinds    api.Int64Counter
+	duration          api.Float64Histogram
+	control           *control
+	finished          bool
+	traces            *traceStore
+	traceCurrent      map[uint64]uint64
+	goroutineIdentity func() uint64
+	untrackedScopes   uint64
+	contextBlocked    bool
 }
 
 var active atomic.Pointer[Runtime]
@@ -67,24 +74,50 @@ func init() {
 	active.Store(rt)
 }
 func New(plan policy.Plan) (*Runtime, error) {
-	rt := &Runtime{plan: plan, functions: map[string]*function{}, pending: map[uint64]frame{}, losses: map[string]uint64{"function_capacity": 0, "active_call_capacity": 0, "incomplete": 0, "invalid": 0, "unsupported_runtime": 0}}
-	rt.enabled.Store(plan.Metrics.Enabled)
-	exporter, err := newExporter(rt)
-	if err != nil {
+	if err := validateTracePlan(plan); err != nil {
 		return nil, err
 	}
-	reader := sdk.NewPeriodicReader(exporter, sdk.WithInterval(time.Duration(plan.Export.IntervalMS)*time.Millisecond), sdk.WithTimeout(time.Duration(min(plan.Export.TimeoutMS, plan.Runtime.ShutdownMS))*time.Millisecond))
+	rt := &Runtime{plan: plan, functions: map[string]*function{}, pending: map[uint64]frame{}, losses: map[string]uint64{"function_capacity": 0, "active_call_capacity": 0, "incomplete": 0, "invalid": 0, "unsupported_runtime": 0}}
+	rt.enabled.Store(plan.Metrics.Enabled)
 	attrs := []attribute.KeyValue{attribute.String("service.name", plan.Resource.Name), attribute.String("service.version", plan.Resource.Version), attribute.String("service.instance.id", fmt.Sprint(os.Getpid()))}
 	for key, value := range plan.Resource.Attributes {
 		attrs = append(attrs, attribute.String(key, value))
 	}
-	rt.provider = sdk.NewMeterProvider(sdk.WithReader(reader), sdk.WithResource(resource.NewSchemaless(attrs...)), sdk.WithCardinalityLimit(max(plan.Runtime.MaxFunctions+1, 8)), sdk.WithView(sdk.NewView(sdk.Instrument{Name: "otelc.function.duration"}, sdk.Stream{Aggregation: sdk.AggregationExplicitBucketHistogram{Boundaries: plan.Metrics.Bounds}})))
+	res := resource.NewSchemaless(attrs...)
+	if plan.Traces.Enabled {
+		sender, err := newTraceExporter(rt)
+		if err != nil {
+			return nil, err
+		}
+		rt.traces, err = newTraceStore(rt, res, sender)
+		if err != nil {
+			sender.Shutdown(context.Background())
+			return nil, err
+		}
+		rt.traceCurrent = map[uint64]uint64{}
+		rt.goroutineIdentity = currentGoroutine
+	}
+	exporter, err := newExporter(rt)
+	if err != nil {
+		if rt.traces != nil {
+			rt.traces.close(context.Background())
+		}
+		return nil, err
+	}
+	reader := sdk.NewPeriodicReader(exporter, sdk.WithInterval(time.Duration(plan.Export.IntervalMS)*time.Millisecond), sdk.WithTimeout(time.Duration(min(plan.Export.TimeoutMS, plan.Runtime.ShutdownMS))*time.Millisecond))
+	rt.provider = sdk.NewMeterProvider(sdk.WithReader(reader), sdk.WithResource(res), sdk.WithCardinalityLimit(max(plan.Runtime.MaxFunctions+1, 8)), sdk.WithView(sdk.NewView(sdk.Instrument{Name: "otelc.function.duration"}, sdk.Stream{Aggregation: sdk.AggregationExplicitBucketHistogram{Boundaries: plan.Metrics.Bounds}})))
 	meter := rt.provider.Meter("quux.otelc", api.WithInstrumentationVersion("0.1.0"))
 	rt.calls, _ = meter.Int64Counter("otelc.function.calls", api.WithUnit("{call}"))
 	rt.unwinds, _ = meter.Int64Counter("otelc.function.unwinds", api.WithUnit("{observation}"))
 	rt.duration, _ = meter.Float64Histogram("otelc.function.duration", api.WithUnit("s"))
 	dropped, _ := meter.Int64ObservableCounter("otelc.runtime.dropped_observations", api.WithUnit("{observation}"))
 	exports, _ := meter.Int64ObservableCounter("otelc.export.dropped_batches", api.WithUnit("{batch}"))
+	var traceDrops api.Int64ObservableCounter
+	observables := []api.Observable{dropped, exports}
+	if rt.traces != nil {
+		traceDrops, _ = meter.Int64ObservableCounter("otelc.trace.dropped_trees", api.WithUnit("{tree}"))
+		observables = append(observables, traceDrops)
+	}
 	_, err = meter.RegisterCallback(func(ctx context.Context, observer api.Observer) error {
 		rt.mu.Lock()
 		defer rt.mu.Unlock()
@@ -92,17 +125,29 @@ func New(plan policy.Plan) (*Runtime, error) {
 			observer.ObserveInt64(dropped, int64(value), api.WithAttributes(attribute.String("reason", reason)))
 		}
 		observer.ObserveInt64(exports, int64(rt.exportLoss.Load()))
+		if traceDrops != nil {
+			for reason, value := range rt.traces.report()["losses"].(map[string]uint64) {
+				observer.ObserveInt64(traceDrops, int64(value), api.WithAttributes(attribute.String("reason", reason)))
+			}
+		}
 		return nil
-	}, dropped, exports)
+	}, observables...)
 	if err == nil && plan.Runtime.Socket != nil {
 		rt.control, err = bind(rt, *plan.Runtime.Socket)
 	}
 	if err != nil {
 		rt.provider.Shutdown(context.Background())
+		if rt.traces != nil {
+			rt.traces.close(context.Background())
+		}
 		return nil, err
 	}
 	return rt, nil
 }
+func newFunction(name string) *function {
+	return &function{options: api.WithAttributes(attribute.String("code.function.name", name))}
+}
+func legacyNilPanic() bool { return policy.LegacyNilPanic(os.Getenv("GODEBUG")) }
 func (rt *Runtime) start(name string) uint64 {
 	if !rt.enabled.Load() || rt.closed.Load() {
 		return 0
@@ -118,7 +163,7 @@ func (rt *Runtime) start(name string) uint64 {
 			rt.revision.Add(1)
 			return 0
 		}
-		rt.functions[name] = &function{options: api.WithAttributes(attribute.String("code.function.name", name))}
+		rt.functions[name] = newFunction(name)
 	}
 	if len(rt.pending) >= rt.plan.Runtime.MaxActive {
 		rt.losses["active_call_capacity"]++
@@ -131,7 +176,7 @@ func (rt *Runtime) start(name string) uint64 {
 		rt.revision.Add(1)
 		return 0
 	}
-	rt.pending[rt.next] = frame{name: name, start: time.Now()}
+	rt.pending[rt.next] = frame{name: name, start: time.Now(), metrics: true}
 	return rt.next
 }
 func (rt *Runtime) finish(token uint64, unwound bool) {
@@ -143,6 +188,12 @@ func (rt *Runtime) finish(token uint64, unwound bool) {
 		return
 	}
 	delete(rt.pending, token)
+	rt.recordLocked(value, ended, unwound)
+}
+func (rt *Runtime) recordLocked(value frame, ended time.Time, unwound bool) {
+	if !value.metrics {
+		return
+	}
 	fn := rt.functions[value.name]
 	fn.Count++
 	if unwound {
@@ -204,7 +255,11 @@ func (rt *Runtime) report() map[string]any {
 		lost[name] = value
 	}
 	lost["incomplete"] += uint64(len(rt.pending))
-	return map[string]any{"schema_version": 1, "language": "go", "pid": os.Getpid(), "export_finished": rt.finished, "function_calls": count, "functions": functions, "losses": lost, "export_loss": rt.exportLoss.Load()}
+	result := map[string]any{"schema_version": 1, "language": "go", "pid": os.Getpid(), "export_finished": rt.finished, "function_calls": count, "functions": functions, "losses": lost, "export_loss": rt.exportLoss.Load()}
+	if rt.traces != nil {
+		result["traces"] = rt.traces.report()
+	}
+	return result
 }
 func (rt *Runtime) Close() {
 	if !rt.closed.CompareAndSwap(false, true) {
@@ -218,14 +273,37 @@ func (rt *Runtime) Close() {
 	rt.mu.Lock()
 	rt.losses["incomplete"] += uint64(len(rt.pending))
 	clear(rt.pending)
+	clear(rt.traceCurrent)
 	rt.revision.Add(1)
 	rt.mu.Unlock()
+	var traceDone <-chan struct{}
+	if rt.traces != nil {
+		deadline, _ := ctx.Deadline()
+		rt.traces.shutdownPending(deadline)
+		traceDone = rt.traces.flush()
+	}
 	flushed := rt.provider.ForceFlush(ctx)
+	var traceErr error
+	if traceDone != nil {
+		select {
+		case <-traceDone:
+		case <-ctx.Done():
+			traceErr = ctx.Err()
+		}
+	}
 	stopped := rt.provider.Shutdown(ctx)
+	if rt.traces != nil {
+		if err := rt.traces.close(ctx); err != nil {
+			traceErr = err
+		}
+	}
 	rt.mu.Lock()
 	rt.finished = ctx.Err() == nil
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		rt.finished = false
+	}
 	rt.mu.Unlock()
-	if flushed != nil || stopped != nil {
+	if flushed != nil || stopped != nil || traceErr != nil {
 		rt.exportLoss.Add(1)
 	}
 	if path := os.Getenv("OTELC_REPORT_PATH"); path != "" {
