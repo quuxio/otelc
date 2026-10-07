@@ -1,0 +1,14 @@
+schema_version = 2
+languages = ["rust"]
+[sources]
+include = ["examples/apps/rust_async_app.rs"]
+[functions]
+include = ["*.ready", "*.borrowed", "*.waiting", "*.migrating", "*.escaping", "*.recovered", "*.fallible", "*.ordered", "*.callable", "*.mutable", "*.generic", "*.opaque", "*.AsyncOrder.calculate"]
+[resource]
+service_name = "otelc-rust-async-example"
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 100
+timeout_ms = 300
+[adapters.rust]
+backend = "compiler"

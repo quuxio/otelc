@@ -204,6 +204,87 @@ fn guards_entered_during_an_existing_unwind_are_normal_completions() {
     assert_eq!(report["functions"]["Drop"]["unwinds"], 0);
     assert_eq!(report["function_calls"], 2);
 }
+
+#[test]
+fn async_completion_cancellation_and_panic_have_distinct_sdk_counters() {
+    let receiver = Receiver::good();
+    let runtime = Runtime::new(plan(&receiver)).unwrap();
+    let context = &mut std::task::Context::from_waker(std::task::Waker::noop());
+    let mut pending = Box::pin(async {
+        observe_with_guard(runtime.enter("cancelled"), std::future::pending::<()>()).await;
+    });
+    assert!(std::future::Future::poll(pending.as_mut(), context).is_pending());
+    drop(pending);
+    let mut completed = Box::pin(async {
+        observe_with_guard(runtime.enter("completed"), std::future::ready(23)).await
+    });
+    assert_eq!(
+        std::future::Future::poll(completed.as_mut(), context),
+        std::task::Poll::Ready(23)
+    );
+    assert!(catch_unwind(AssertUnwindSafe(|| {
+        let mut panicked = Box::pin(async {
+            observe_with_guard(runtime.enter("panicked"), async {
+                panic!("original panic")
+            })
+            .await
+        });
+        let _ = std::future::Future::poll(panicked.as_mut(), context);
+    }))
+    .is_err());
+    runtime.close();
+    receiver.wait(1);
+    let report = runtime.report();
+    assert_eq!(report["function_calls"], 3);
+    assert_eq!(report["functions"]["cancelled"]["cancellations"], 1);
+    assert_eq!(report["functions"]["cancelled"]["unwinds"], 0);
+    assert_eq!(report["functions"]["panicked"]["cancellations"], 0);
+    assert_eq!(report["functions"]["panicked"]["unwinds"], 1);
+    let requests = receiver.requests.lock().unwrap();
+    let request = requests.last().unwrap();
+    assert_eq!(number(request, "otelc.function.calls"), 3);
+    assert_eq!(number(request, "otelc.function.duration"), 3);
+    assert_eq!(number(request, "otelc.function.cancellations"), 1);
+    assert_eq!(number(request, "otelc.function.unwinds"), 1);
+}
+
+#[test]
+fn async_admission_is_fixed_at_first_poll_bounded_and_drained_at_shutdown() {
+    let receiver = Receiver::good();
+    let mut config = plan(&receiver);
+    config.runtime.max_active_calls = 1;
+    let runtime = Runtime::new(config).unwrap();
+    let context = &mut std::task::Context::from_waker(std::task::Waker::noop());
+    let observed = &runtime;
+    let future = |name| async move {
+        observe_with_guard(observed.enter(name), std::future::pending::<()>()).await;
+    };
+    runtime.state.enabled.store(false, Ordering::Release);
+    let mut disabled = Box::pin(future("disabled"));
+    assert!(std::future::Future::poll(disabled.as_mut(), context).is_pending());
+    runtime.state.enabled.store(true, Ordering::Release);
+    assert!(std::future::Future::poll(disabled.as_mut(), context).is_pending());
+    let mut admitted = Box::pin(future("admitted"));
+    assert!(std::future::Future::poll(admitted.as_mut(), context).is_pending());
+    let mut rejected = Box::pin(future("rejected"));
+    assert!(std::future::Future::poll(rejected.as_mut(), context).is_pending());
+    runtime.state.enabled.store(false, Ordering::Release);
+    drop(admitted);
+    drop(rejected);
+    drop(disabled);
+    runtime.state.enabled.store(true, Ordering::Release);
+    let mut pending = Box::pin(future("pending"));
+    assert!(std::future::Future::poll(pending.as_mut(), context).is_pending());
+    runtime.close();
+    drop(pending);
+    let report = runtime.report();
+    assert_eq!(report["function_calls"], 1);
+    assert_eq!(report["functions"]["admitted"]["cancellations"], 1);
+    assert!(report["functions"].get("disabled").is_none());
+    assert_eq!(report["losses"]["active_call_capacity"], 1);
+    assert_eq!(report["losses"]["incomplete"], 1);
+    assert_eq!(report["export_loss"], 0);
+}
 fn request(path: &std::path::Path, command: &[u8]) -> serde_json::Value {
     let mut stream = UnixStream::connect(path).unwrap();
     stream

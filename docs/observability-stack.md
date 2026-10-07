@@ -55,6 +55,7 @@ Metric names are translated for Prometheus:
 | --- | --- |
 | `otelc_function_calls_total` | Completed selected invocations, including exceptional exits |
 | `otelc_function_unwinds_total` | Selected invocations ending through exception unwinding |
+| `otelc_function_cancellations_total` | Rust async observations ending through future cancellation |
 | `otelc_function_duration_seconds_bucket` | Inclusive function duration histogram |
 | `otelc_object_lifetimes_total` | Completed admitted lifetime guards |
 | `otelc_object_lifetime_duration_seconds_bucket` | Duration from guard start to finish |

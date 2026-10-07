@@ -31,6 +31,7 @@ use std::{
 struct Function {
     count: u64,
     unwinds: u64,
+    cancellations: u64,
     attributes: Vec<KeyValue>,
 }
 struct Frame {
@@ -60,6 +61,7 @@ pub struct Runtime {
     provider: SdkMeterProvider,
     calls: Counter<u64>,
     unwinds: Counter<u64>,
+    cancellations: Counter<u64>,
     duration: Histogram<f64>,
     stop: mpsc::SyncSender<mpsc::SyncSender<()>>,
     control: Mutex<Option<control::Control>>,
@@ -123,6 +125,10 @@ impl Runtime {
             .build();
         let unwinds = meter
             .u64_counter("otelc.function.unwinds")
+            .with_unit("{observation}")
+            .build();
+        let cancellations = meter
+            .u64_counter("otelc.function.cancellations")
             .with_unit("{observation}")
             .build();
         let duration = meter
@@ -212,6 +218,7 @@ impl Runtime {
             provider,
             calls,
             unwinds,
+            cancellations,
             duration,
             stop,
             control: Mutex::new(None),
@@ -256,6 +263,7 @@ impl Runtime {
                             Function {
                                 count: 0,
                                 unwinds: 0,
+                                cancellations: 0,
                                 attributes: vec![KeyValue::new(
                                     "code.function.name",
                                     name.to_owned(),
@@ -295,7 +303,7 @@ impl Runtime {
             self.state.revision.fetch_add(1, Ordering::Release);
         }
     }
-    fn finish(&self, token: u64) {
+    fn finish(&self, token: u64, cancelled: bool) {
         let ended = Instant::now();
         if let Ok(mut data) = self.state.data.lock() {
             let Some(frame) = data.pending.remove(&token) else {
@@ -305,9 +313,13 @@ impl Runtime {
                 return;
             };
             let escaped = std::thread::panicking() && !frame.was_panicking;
+            let cancelled = cancelled && !escaped;
             function.count = function.count.saturating_add(1);
             if escaped {
                 function.unwinds = function.unwinds.saturating_add(1);
+            }
+            if cancelled {
+                function.cancellations = function.cancellations.saturating_add(1);
             }
             // Serialize recording with close: completed reports and the final
             // SDK snapshot must agree even when another thread is shutting down.
@@ -318,6 +330,9 @@ impl Runtime {
             );
             if escaped {
                 self.unwinds.add(1, &function.attributes);
+            }
+            if cancelled {
+                self.cancellations.add(1, &function.attributes);
             }
             self.state.revision.fetch_add(1, Ordering::Release);
         }
@@ -331,7 +346,7 @@ impl Runtime {
                 count += function.count;
                 values.insert(
                     name.clone(),
-                    serde_json::json!({"count":function.count,"unwinds":function.unwinds}),
+                    serde_json::json!({"count":function.count,"unwinds":function.unwinds,"cancellations":function.cancellations}),
                 );
             }
             losses = data.losses.clone();
@@ -378,16 +393,44 @@ pub struct Guard {
     runtime: Option<Arc<Runtime>>,
     token: u64,
 }
-impl Drop for Guard {
-    fn drop(&mut self) {
+impl Guard {
+    fn finish(&mut self, cancelled: bool) {
         if let Some(runtime) = self.runtime.take() {
-            if catch_unwind(AssertUnwindSafe(|| runtime.finish(self.token))).is_err() {
+            if catch_unwind(AssertUnwindSafe(|| runtime.finish(self.token, cancelled))).is_err() {
                 if let Ok(mut data) = runtime.state.data.lock() {
                     runtime.lose(&mut data, "invalid");
                 }
             }
         }
     }
+}
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.finish(false);
+    }
+}
+struct AsyncGuard {
+    guard: Guard,
+    completed: bool,
+}
+impl Drop for AsyncGuard {
+    fn drop(&mut self) {
+        self.guard.finish(!self.completed);
+    }
+}
+/// Observe one async body from its first poll through completion or drop.
+/// Awaiting the original future adds no scheduling or executor requirement.
+pub async fn observe_future<F: std::future::Future>(name: &str, future: F) -> F::Output {
+    observe_with_guard(enter(name), future).await
+}
+async fn observe_with_guard<F: std::future::Future>(guard: Guard, future: F) -> F::Output {
+    let mut guard = AsyncGuard {
+        guard,
+        completed: false,
+    };
+    let output = future.await;
+    guard.completed = true;
+    output
 }
 pub struct Shutdown;
 impl Drop for Shutdown {

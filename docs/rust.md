@@ -92,9 +92,34 @@ make rust-check rust-coverage
 
 The current `make build` SDK is a debug build, so these results include debug SDK costs. The benchmark compiles the unchanged baseline and instrumented application with `--edition=2024 -O -g`, warms both and alternates off/on in one instrumented PID. Compilation, launch, control requests and shutdown are outside body timings. Reports retain hashes, checksums, all samples, exact calls and complete-export/zero-loss evidence. Rust adapter and Rust probe product coverage each have an independent 80% line gate, as well as the existing native aggregate gate.
 
+## Async functions and cancellation
+
+Named async functions and methods use the same external selection policy. An observation starts on the first poll, ends at completion, escaping panic or cancellation, and includes time suspended between polls. Constructing and dropping an unpolled future produces no observation. Cancellation records a call and duration plus `otelc.function.cancellations`; it is separate from escaping panic unwinding and observation loss. A cancelled future's ordinary cleanup still runs. Disabling metrics affects admission at the first poll; an already admitted future retains its token through later polls and destruction. Shutdown reports still-pending futures as incomplete.
+
+```sh
+rustc --edition=2024 -O examples/apps/rust_async_app.rs -o /tmp/plain-rust-async
+/tmp/plain-rust-async
+./target/debug/quux-otelc --config examples/rust-async.toml rust examples/apps/rust_async_app.rs
+```
+
+Both runs print the original destructor order `["local", "second", "first"]` and `async results preserved; cleanups=2`. The instrumented run records 14 calls, two cancellations and one escaping unwind. The fixture covers borrowed outputs, mutable receivers/parameters, generic non-Send values, opaque outputs, return coercions, early returns, `?`, preserved panic payloads, cancellation and movement between threads. No executor dependency or original-source change is required.
+
+Generated input for a simple async function resembles:
+
+```rust
+async fn ready(value: i32) -> i32 {
+    ::quux_otelc_rust::observe_future("examples.apps.rust_async_app.ready", async move {
+        let value = value;
+        ::std::convert::identity::<i32>(value + 1)
+    }).await
+}
+```
+
+The native await polls the original body directly without an additional scheduled task. Parameter shadowing preserves reverse parameter destruction order; concrete return coercions retain the original expected output type. This changes the compiler-generated future's layout and adds runtime state, but preserves the qualified results and cleanup behaviour. Async destructured, wildcard and `ref` parameters are rejected visibly pending compiler-level lifetime qualification. Executor attribute macros controlling async `main`, per-poll CPU timing and complete macro-expansion coverage remain unsupported. The paired async benchmark measures immediately completing futures; it is not evidence for every executor or suspended workload. Run `make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS="--rust-async --output build/benchmarks/rust-async --iterations 10000 --runs 8"` to compare the unchanged baseline with metrics off/on in one instrumented PID. It verifies source hashes, matching checksums, exact calls, complete export and zero losses.
+
 ## Current boundaries
 
-This milestone supports synchronous named functions, methods, trait default methods, generics, nested functions, normal OS threads and panic unwinding on the qualified macOS ARM64 host. Const, async and naked functions are rejected when selected; async main is rejected. Function metrics for closures, macro-generated items and future polling are not implemented. Selected `include!` source fragments, test/procedural-macro/edition-2015 crates and existing compiler wrappers require separate qualification. Normal expression macros remain usable. Symlinked source modules require separate qualification. Build scripts execute unchanged and do not start instrumentation.
+This milestone supports synchronous and the qualified async named functions, methods, trait default methods, generics, nested functions, normal OS threads and panic unwinding on the qualified macOS ARM64 host. Const and naked functions are rejected when selected; async main is rejected. Function metrics for closures and macro-generated items are not implemented. Selected `include!` source fragments, test/procedural-macro/edition-2015 crates and existing compiler wrappers require separate qualification. Normal expression macros remain usable. Symlinked source modules require separate qualification. Build scripts execute unchanged and do not start instrumentation.
 
 Rust `panic=abort`, `process::exit`, forced termination and unjoined background work cannot guarantee final observations or export. Custom targets, cross-compilation, sanitizers and altered panic strategies require matching SDK qualification. Automatic value lifetime/move/drop metrics, distributed context and spans remain unavailable and are rejected by configuration. Timing a `Drop::drop` method measures that method body, not an object's entire lifetime.
 

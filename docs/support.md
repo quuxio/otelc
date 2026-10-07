@@ -14,7 +14,7 @@ All target languages must meet the [source-free contract](design.md#source-free-
 | C++ | Clang callbacks, then LLVM pass | Local callbacks: selected `-fno-exceptions` code; local LLVM: exception-enabled timing; traces planned |
 | Objective-C / Objective-C++ | Clang with language-specific fixtures | Later: method names, exceptions, blocks, ARC, and messaging boundaries |
 | Swift | Matched compiler integration or Swift-specific pass | Later: begin with synchronous native functions; async requires a separate adapter |
-| Rust | Rust 1.98.1 generated-source and Cargo compiler wrapper | Implemented synchronous named functions, methods, generics, threads, panic unwinding and live controls; async/closures, lifetimes/traces unavailable |
+| Rust | Rust 1.98.1 generated-source and Cargo compiler wrapper | Implemented synchronous/qualified async named functions, methods, generics, threads, panic unwinding, cancellation and live controls; closures, lifetimes/traces unavailable |
 | Fortran / Zig | Validated compiler adapter | Exploratory; no current support commitment |
 | Go | Go 1.26+ compiler overlays and Go SDK | Implemented unchanged files/module projects, functions/methods/callbacks, goroutines, defer/panic/recover and live controls; workspaces/cgo, lifetimes/traces unavailable |
 | Java | JDK 21+ agent and ASM bytecode body probes | Implemented selected methods/constructors, exceptions, recursion, executor threads, optional annotations and live controls; lifetimes/traces unavailable |
