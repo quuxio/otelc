@@ -275,6 +275,7 @@ impl Runtime {
                                 .is_err()
                             {
                                 worker_state.export_loss.fetch_add(1, Ordering::Relaxed);
+                                worker_state.revision.fetch_add(1, Ordering::Release);
                             }
                         }
                     }

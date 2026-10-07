@@ -303,6 +303,38 @@ fn trace_collector_rejection_is_visible_and_shutdown_is_bounded() {
     assert!(runtime.report()["export_loss"].as_u64().unwrap() > 0);
 }
 #[test]
+fn failed_trace_export_health_reaches_metrics_without_another_function_call() {
+    let metrics = Receiver::good();
+    let rejected = Receiver::new(
+        b"HTTP/1.1 400 Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        Duration::ZERO,
+    );
+    let mut plan = trace_plan(&metrics);
+    plan.export.interval_ms = 10;
+    plan.trace_export.as_mut().unwrap().endpoint =
+        rejected.endpoint.replace("/v1/metrics", "/v1/traces");
+    let runtime = Runtime::new(plan).unwrap();
+    drop(runtime.enter_scoped("one"));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if metrics
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| number(request, "otelc.export.dropped_batches") == 1)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "trace export health did not reach metrics"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+    runtime.close();
+}
+#[test]
 fn forged_trace_plans_are_rejected_before_a_worker_or_control_is_started() {
     let receiver = Receiver::good();
     let mut plan = trace_plan(&receiver);
