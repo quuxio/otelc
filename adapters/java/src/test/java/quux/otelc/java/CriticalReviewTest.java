@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.RepeatedTest;
 class CriticalReviewTest {
  static Plan relaxedPlan(String endpoint) {
   var policy=AgentTest.policy(endpoint);policy.getAsJsonObject("export").addProperty("timeout_ms",1000);
@@ -32,29 +33,36 @@ class CriticalReviewTest {
    }
   }
  }
- @Test void blockedRecordingMarksIncompleteAndKeepsShutdownBudget() throws Exception {
-  try(var receiver=new AgentTest.Receiver();var rt=new Telemetry(relaxedPlan(receiver.endpoint()));var pool=Executors.newSingleThreadExecutor()){
+ @RepeatedTest(10) void blockedRecordingCannotHoldShutdownOrCompleteLate() throws Exception {
+  try(var receiver=new AgentTest.Receiver();var rt=new Telemetry(relaxedPlan(receiver.endpoint()));var pool=Executors.newFixedThreadPool(2)){
    var reached=new CountDownLatch(1);var resume=new CountDownLatch(1);
    var field=Telemetry.class.getDeclaredField("calls");field.setAccessible(true);
    var original=(LongCounter)field.get(rt);
    var intercepted=Proxy.newProxyInstance(LongCounter.class.getClassLoader(),new Class<?>[]{LongCounter.class},(proxy,method,args)->{
-    if(method.getName().equals("add")){reached.countDown();if(!resume.await(2,TimeUnit.SECONDS))throw new AssertionError("barrier timeout");}
+    if(method.getName().equals("add")){reached.countDown();resume.await();}
     return method.invoke(original,args);
    });
    field.set(rt,intercepted);
    long token=rt.enter("finishing");var done=pool.submit(()->rt.exit(token,false));
-   assertTrue(reached.await(1,TimeUnit.SECONDS));
+   java.util.concurrent.Future<?> closing=null;
    try{
+    assertTrue(reached.await(1,TimeUnit.SECONDS));
     rt.plan.section("runtime").addProperty("shutdown_timeout_ms",50);
-    long started=System.nanoTime(); rt.close();
-    assertTrue(System.nanoTime()-started<TimeUnit.MILLISECONDS.toNanos(200));
+    long started=System.nanoTime();closing=pool.submit(rt::close);
+    // Guard test progress, while the event assertions prove independence from recording.
+    closing.get(1,TimeUnit.SECONDS);
+    assertEquals(1L,resume.getCount(),"shutdown must return before the recording is released");
+    assertFalse(done.isDone(),"the SDK recording must still be blocked");
     assertEquals(false,rt.report().get("export_finished"));
     assertTrue(rt.exportLoss.get()>0);
     assertEquals(1L,((java.util.Map<?,?>)rt.report().get("losses")).get("incomplete"));
     long exported=receiver.requests.stream().skip(Math.max(0,receiver.requests.size()-1)).flatMap(r->r.getResourceMetricsList().stream()).flatMap(r->r.getScopeMetricsList().stream()).flatMap(r->r.getMetricsList().stream()).filter(m->m.getName().equals("otelc.function.calls")).flatMap(m->m.getSum().getDataPointsList().stream()).mapToLong(p->p.getAsInt()).sum();
-    System.out.println("FINAL report="+rt.report()+"; collector function calls="+exported);
+    System.out.println("Shutdown observation ns="+(System.nanoTime()-started)+"; FINAL report="+rt.report()+"; collector function calls="+exported);
     assertEquals(rt.count(),exported,"completed report and final SDK snapshot disagree; no loss is reported");
-   }finally{resume.countDown();done.get(1,TimeUnit.SECONDS);}
+   }finally{resume.countDown();done.get(3,TimeUnit.SECONDS);if(closing!=null)closing.get(3,TimeUnit.SECONDS);}
+   assertEquals(false,rt.report().get("export_finished"),"late recording must not complete shutdown");
+   assertEquals(0,rt.count(),"late recording must not enter the completed report");
+   assertEquals(1L,((java.util.Map<?,?>)rt.report().get("losses")).get("incomplete"));
   }
  }
  @Test void completionMustAgreeWithFinalSnapshotDuringClose() throws Exception {
