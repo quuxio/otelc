@@ -276,3 +276,5 @@ make check
 ```
 
 `developer-examples` builds these four native demonstration apps and their manifests. The tests run plain/instrumented C/C++ comparisons with an upstream OTLP decoder, check original source bytes and exercise toggles across exceptional calls. `make check` also enforces the 80% product line-coverage gate. The local lane remains a prototype; see [support](support.md) before applying it to LTO, shared libraries, asynchronous execution or other platforms.
+
+For source-free Go spans, the [Go span guide](go-spans.md) shows unchanged and annotated sources, generated compiler input, commands and Collector/Tempo viewing. Live metric controls leave the launch-time trace policy enabled.

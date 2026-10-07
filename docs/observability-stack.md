@@ -106,3 +106,5 @@ For Java method spans, use `examples/java-traces.toml` and set the trace dashboa
 For JavaScript function spans, use `examples/javascript-traces.toml` and set the trace dashboard service to `otelc-javascript-traces`; see the [JavaScript span guide](javascript-spans.md).
 
 The [TypeScript trace example](typescript-spans.md) uses the same Collector/Tempo pipeline without editing its typed source. Set the trace dashboard service to `otelc-typescript-traces`.
+
+The [Go trace example](go-spans.md) produces same-goroutine function trees through the same Collector/Tempo pipeline. Set the trace dashboard service to `otelc-go-traces`.
