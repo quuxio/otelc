@@ -37,6 +37,8 @@ The first target is synchronous C and C++ on macOS ARM64 and Linux x86-64/ARM64.
 
 ## How it will work
 
+Dependabot alerts and security updates are enabled separately from weekly dependency-update proposals. Run `make github-security-check` to verify the live settings and open-alert count as quuxio; see the [security policy](SECURITY.md#dependabot-alerts-and-security-updates).
+
 ```mermaid
 flowchart LR
     Source[Selected C/C++ source] --> Compiler[Clang + compiler probes]
