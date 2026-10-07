@@ -77,3 +77,5 @@ Precedence is defaults, TOML and documented OpenTelemetry environment overrides.
 Adapter conformance requires the same defaults, wildcard/exclusion rules, environment precedence, bounds, unsupported-feature errors and resolved policy for shared test vectors. It also requires unchanged-source checks, correct selected-function telemetry, declared lifetime boundaries and paired benchmarks. The implemented tests resolve all eight targets from one file, reject invalid/unsupported requests and run both native C and exception-enabled C++ through schema 2 with an actual OTLP decoder.
 
 See the [developer 101](developer-101.md) for complete unchanged/annotated sources, validated commands, live controls and paired latency measurements. Control sockets are disabled by default; their parent directory must be private and owned by the process user.
+
+The Java agent consumes the same trace policy and independent transport settings for bounded [method-body spans](java-spans.md). Existing bytecode annotations remain optional; a returned asynchronous stage is timed only until the method returns.

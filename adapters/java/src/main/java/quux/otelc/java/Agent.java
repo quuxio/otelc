@@ -27,7 +27,7 @@ public final class Agent {
     var plan = new Plan(Path.of(args[0]));
     var sources = new Sources(Path.of("").toRealPath(), plan);
     if (args[1].equals("--doctor") && args.length == 2) {
-      System.out.println("Java " + java.lang.Runtime.version() + ": bytecode function probes and OTLP/HTTP metrics available");
+      System.out.println("Java " + java.lang.Runtime.version() + ": bytecode function probes and OTLP/HTTP metrics" + (TraceStore.enabled(plan) ? " and method spans" : "") + " available");
     } else if (args[1].equals("--inspect") && args.length >= 3 && java.util.Arrays.stream(args).skip(3).allMatch(value -> value.equals("--json"))) {
       var node = new ClassNode(); new ClassReader(Files.readAllBytes(Path.of(args[2]))).accept(node, ClassReader.SKIP_CODE);
       var functions = new Weaver(plan, sources, null, null).inventory(node);

@@ -14,11 +14,11 @@ All target languages must meet the [source-free contract](design.md#source-free-
 | C++ | Clang callbacks, then LLVM pass | Local callbacks: selected `-fno-exceptions` code; local LLVM: exception-enabled timing; traces planned |
 | Objective-C / Objective-C++ | Clang with language-specific fixtures | Later: method names, exceptions, blocks, ARC, and messaging boundaries |
 | Swift | Matched compiler integration or Swift-specific pass | Later: begin with synchronous native functions; async requires a separate adapter |
-| Rust | Rust 1.98.1 generated-source and Cargo compiler wrapper | Implemented synchronous/qualified async named functions, methods, generics, threads, panic unwinding, cancellation and live controls; closures, lifetimes/traces unavailable |
+| Rust | Rust 1.98.1 generated-source and Cargo compiler wrapper | Implemented synchronous/qualified async named functions, methods, generics, threads, panic unwinding, cancellation and live controls; synchronous closures and sampled function spans are qualified; async closures, macro expansion and automatic lifetimes remain unavailable |
 | Fortran / Zig | Validated compiler adapter | Exploratory; no current support commitment |
 | Go | Go 1.26+ compiler overlays and Go SDK | Implemented unchanged files/module projects, functions/methods/callbacks, goroutines, defer/panic/recover and live controls; workspaces/cgo, lifetimes/traces unavailable |
-| Java | JDK 21+ agent and ASM bytecode body probes | Implemented selected methods/constructors, exceptions, recursion, executor threads, optional annotations and live controls; lifetimes/traces unavailable |
-| Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation and live control; lifetimes/traces remain unavailable |
+| Java | JDK 21+ agent and ASM bytecode body probes | Implemented selected methods/constructors, exceptions, recursion, executor threads, optional annotations, live controls and sampled method-body spans; lifetimes and task completion propagation remain unavailable |
+| Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation, live control and sampled function spans; automatic lifetimes remain unavailable |
 | JavaScript | Node 24.11+ in-memory loader transform, JavaScript SDK | Implemented ESM/CommonJS function timing, async/generators, constructors, exceptions and live controls; lifetimes/traces unavailable |
 | TypeScript | TypeScript 6.0.3 compiler emit and Node in-memory probes | Implemented typed functions, enums/namespaces, decorators, exceptions, original source maps and live metrics; lifetimes/traces unavailable |
 | .NET | Runtime/agent ecosystem | Exploratory; outside the current target-language list |

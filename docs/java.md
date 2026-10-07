@@ -2,6 +2,8 @@
 
 The Java adapter adds timing probes to selected class bytecode when the JDK loads it. Original source files, compiled classes and application JARs stay unchanged. It needs a full JDK 21+ and Maven to build the external agent; application code needs no OpenTelemetry dependency, import or annotation.
 
+The common trace policy also enables sampled [method-body spans](java-spans.md), including same-thread parenting and the read-only Tempo/Grafana viewer. Method spans and asynchronous task completion have distinct boundaries; see that guide before enabling traces.
+
 ## Build and run
 
 ```sh
@@ -94,6 +96,6 @@ SDK collection and cleanup run on a daemon worker because SDK calls can block be
 
 Normal application class loaders that can access the agent are supported; named modules gain the required read edge. An isolated loader or unresolved stack-frame type produces an explicit `unsupported_class` loss rather than changing application behaviour. Check loss counters before trusting a benchmark. Retransformation and already-instrumented classes are rejected. Agent dependencies are shaded to avoid application dependency collisions.
 
-A method returning a future is timed until it returns the future, not until that future completes. Executor methods selected independently are timed on their execution thread. Automatic object lifetimes, spans and AspectJ are unavailable and rejected by configuration. Forced JVM termination cannot guarantee a final export.
+A method returning a future is timed until it returns the future, not until that future completes. Executor methods selected independently are timed on their execution thread. [Method-body spans](java-spans.md) follow the same boundary. Automatic object lifetimes and AspectJ are unavailable and rejected by configuration. Forced JVM termination cannot guarantee a final export.
 
 For class-only/JAR applications, source selection falls back to the logical package/`SourceFile` path (for example `example/App.java`), or the outer class name if debug source metadata is absent. Parsed local class declarations recover the physical source path when debug metadata is absent, including secondary classes whose name differs from their filename. Local source exclusions still win. Bootstrap/platform classes are protected from this fallback. Disabled admission checks avoid the observation lock. Normal shutdown serialises completed SDK recording with its final snapshot; if recording cannot drain within the shutdown deadline, the report marks incomplete observations and export failure instead of claiming successful completion.

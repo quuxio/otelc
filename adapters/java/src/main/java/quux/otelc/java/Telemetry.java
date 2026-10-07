@@ -28,6 +28,8 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class Telemetry implements AutoCloseable {
   final Plan plan;
   final long timeoutMs;
+  final TraceStore traces;
+  volatile long shutdownDeadline = Long.MAX_VALUE;
   final AtomicLong exportLoss = new AtomicLong();
   final Map<String, AtomicLong> losses = new LinkedHashMap<>();
   final ConcurrentHashMap<String, Function> functions = new ConcurrentHashMap<>();
@@ -37,6 +39,7 @@ public final class Telemetry implements AutoCloseable {
   private final AtomicBoolean sdkStopping = new AtomicBoolean();
   private final CompletableFuture<Boolean> sdkStopped = new CompletableFuture<>();
   private final ReentrantLock observations = new ReentrantLock();
+  private final ThreadLocal<Long> current = ThreadLocal.withInitial(() -> 0L);
   private volatile boolean discardCompletions;
   volatile boolean enabled;
   private volatile boolean exportFinished;
@@ -46,7 +49,7 @@ public final class Telemetry implements AutoCloseable {
   private final LongCounter unwinds;
   private final DoubleHistogram duration;
   private Control control;
-  record Frame(String name, long started) {}
+  record Frame(String name, long started, boolean metrics, TraceStore.Identity trace, long previous) {}
   static final class Function {
     final Attributes attributes;
     final AtomicLong calls = new AtomicLong();
@@ -58,12 +61,14 @@ public final class Telemetry implements AutoCloseable {
     enabled = plan.bool("metrics", "enabled");
     timeoutMs = Math.min(plan.integer("export", "timeout_ms"), plan.integer("runtime", "shutdown_timeout_ms"));
     for (String reason : new String[] {"function_capacity", "active_call_capacity", "incomplete", "invalid", "unsupported_class"}) losses.put(reason, new AtomicLong());
-    exporter = new Exporter(this);
-    var reader = PeriodicMetricReader.builder(exporter).setInterval(Duration.ofMillis(plan.integer("export", "interval_ms"))).build();
     var attributes = Attributes.builder().put("service.name", plan.string("resource", "service_name")).put("service.version", plan.string("resource", "service_version")).put("service.instance.id", Long.toString(ProcessHandle.current().pid()));
     plan.section("resource").getAsJsonObject("attributes").entrySet().forEach(entry -> attributes.put(entry.getKey(), entry.getValue().getAsString()));
+    var resource = Resource.create(attributes.build());
+    traces = TraceStore.enabled(plan) ? new TraceStore(this, resource) : null;
+    exporter = new Exporter(this);
+    var reader = PeriodicMetricReader.builder(exporter).setInterval(Duration.ofMillis(plan.integer("export", "interval_ms"))).build();
     var boundaries = plan.section("metrics").getAsJsonArray("histogram_boundaries_seconds").asList().stream().map(value -> value.getAsDouble()).toList();
-    var builder = SdkMeterProvider.builder().setResource(Resource.create(attributes.build())).registerMetricReader(reader);
+    var builder = SdkMeterProvider.builder().setResource(resource).registerMetricReader(reader);
     for (String name : new String[] {"otelc.function.calls", "otelc.function.unwinds", "otelc.function.duration"}) {
       var view = View.builder().setCardinalityLimit(plan.integer("runtime", "max_functions") + 1);
       if (name.endsWith("duration")) view.setAggregation(Aggregation.explicitBucketHistogram(boundaries));
@@ -76,6 +81,7 @@ public final class Telemetry implements AutoCloseable {
     duration = meter.histogramBuilder("otelc.function.duration").setUnit("s").build();
     meter.counterBuilder("otelc.runtime.dropped_observations").setUnit("{observation}").buildWithCallback(observer -> losses.forEach((reason, count) -> observer.record(count.get(), Attributes.builder().put("reason", reason).build())));
     meter.counterBuilder("otelc.export.dropped_batches").setUnit("{batch}").buildWithCallback(observer -> observer.record(exportLoss.get()));
+    if (traces != null) meter.counterBuilder("otelc.trace.dropped_trees").setUnit("{tree}").buildWithCallback(observer -> traces.losses().forEach((reason, count) -> observer.record(count, Attributes.builder().put("reason", reason).build())));
   }
   boolean register(String name) {
     observations.lock();
@@ -86,30 +92,54 @@ public final class Telemetry implements AutoCloseable {
     } finally { observations.unlock(); }
   }
   long enter(String name) {
-    if (!enabled || closed.get()) return 0;
+    if ((!enabled && traces == null) || closed.get()) return 0;
     observations.lock();
     try {
-      if (!enabled || closed.get()) return 0;
-      if (!register(name)) return 0;
-      if (pending.size() >= plan.integer("runtime", "max_active_calls")) { lose("active_call_capacity"); return 0; }
+      if ((!enabled && traces == null) || closed.get()) return 0;
+      long previous = traces == null ? 0 : current.get();
+      var caller = pending.get(previous);
+      var parent = previous == 0 ? null : caller == null ? TraceStore.SUPPRESSED : caller.trace();
+      if (!register(name)) { if (traces != null) traces.reject(parent, "function_capacity"); return suppress(previous); }
+      if (pending.size() >= plan.integer("runtime", "max_active_calls")) { lose("active_call_capacity"); if (traces != null) traces.reject(parent, "active_call_capacity"); return suppress(previous); }
       long token = next.incrementAndGet();
-      if (token <= 0) { lose("invalid"); return 0; }
-      pending.put(token, new Frame(name, System.nanoTime())); return token;
+      if (token <= 0 || token == Long.MAX_VALUE) { lose("invalid"); if (traces != null) traces.reject(parent, "invalid"); return suppress(previous); }
+      long started = System.nanoTime();
+      var trace = traces == null ? null : traces.begin(parent, name, started);
+      pending.put(token, new Frame(name, started, enabled, trace, previous));
+      if (traces != null) current.set(token);
+      return token;
     } finally { observations.unlock(); }
+  }
+  private long suppress(long previous) {
+    if (traces == null) return 0;
+    // Store rejected scope restoration in the bytecode's primitive local, outside bounded maps.
+    current.set(Long.MIN_VALUE);
+    return previous == Long.MIN_VALUE ? Long.MIN_VALUE : -previous - 1;
   }
   void exit(long token, boolean escaped) {
     if (token == 0) return;
     long ended = System.nanoTime();
     observations.lock();
     try {
+      if (token < 0) {
+        long previous = token == Long.MIN_VALUE ? Long.MIN_VALUE : -token - 1;
+        if (previous == 0 || closed.get()) current.remove(); else current.set(previous);
+        return;
+      }
       var frame = pending.get(token); if (frame == null) return;
       var function = functions.get(frame.name());
-      calls.add(1, function.attributes); duration.record((ended - frame.started()) / 1e9, function.attributes);
-      if (escaped) unwinds.add(1, function.attributes);
+      if (frame.metrics()) {
+        calls.add(1, function.attributes); duration.record((ended - frame.started()) / 1e9, function.attributes);
+        if (escaped) unwinds.add(1, function.attributes);
+      }
       pending.remove(token);
-      if (discardCompletions) { lose("incomplete"); return; }
-      function.calls.incrementAndGet();
-      if (escaped) function.unwinds.incrementAndGet();
+      if (traces != null) {
+        if (current.get() == token) { if (frame.previous() == 0) current.remove(); else current.set(frame.previous()); }
+        if (discardCompletions) traces.reject(frame.trace(), "incomplete");
+        traces.finish(frame.trace(), ended, escaped);
+      }
+      if (discardCompletions) { if (frame.metrics() || frame.trace() != null && frame.trace().sampled()) lose("incomplete"); return; }
+      if (frame.metrics()) { function.calls.incrementAndGet(); if (escaped) function.unwinds.incrementAndGet(); }
     } finally { observations.unlock(); }
   }
   void lose(String reason) { losses.get(reason).incrementAndGet(); }
@@ -118,10 +148,12 @@ public final class Telemetry implements AutoCloseable {
   Map<String, Object> report() throws IOException {
     var result = new LinkedHashMap<String, Object>(); result.put("schema_version", 1); result.put("language", "java"); result.put("pid", ProcessHandle.current().pid()); result.put("export_finished", exportFinished); result.put("function_calls", count());
     var values = new LinkedHashMap<String, Object>(); functions.forEach((name, value) -> values.put(name, Map.of("count", value.calls.get(), "unwinds", value.unwinds.get()))); result.put("functions", values);
-    var lost = new LinkedHashMap<String, Long>(); losses.forEach((name, value) -> lost.put(name, value.get())); lost.compute("incomplete", (name, value) -> value + pending.size()); result.put("losses", lost); result.put("export_loss", exportLoss.get());
+    var lost = new LinkedHashMap<String, Long>(); losses.forEach((name, value) -> lost.put(name, value.get())); lost.compute("incomplete", (name, value) -> value + incomplete()); result.put("losses", lost); result.put("export_loss", exportLoss.get());
+    if (traces != null) result.put("traces", traces.report());
     String filename = System.getenv("OTELC_REPORT_PATH"); if (filename != null) Files.writeString(Path.of(filename), new GsonBuilder().setPrettyPrinting().create().toJson(result) + "\n");
     return result;
   }
+  private long incomplete() { return pending.values().stream().filter(frame -> frame.metrics() || frame.trace() != null && frame.trace().sampled()).count(); }
   private CompletableFuture<Boolean> shutdownSdk(long deadline, boolean flush) {
     if (!sdkStopping.compareAndSet(false, true)) return sdkStopped;
     // SDK entry points can perform synchronous collection or transport cleanup
@@ -145,13 +177,14 @@ public final class Telemetry implements AutoCloseable {
   @Override public void close() {
     if (!closed.compareAndSet(false, true)) return;
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(plan.integer("runtime", "shutdown_timeout_ms"));
+    shutdownDeadline = deadline;
     try {
       if (control != null) control.close();
       if (!observations.tryLock(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
         discardCompletions = true; exportLoss.incrementAndGet(); shutdownSdk(deadline, false);
         return;
       }
-      try { losses.get("incomplete").addAndGet(pending.size()); pending.clear(); }
+      try { losses.get("incomplete").addAndGet(incomplete()); pending.clear(); current.remove(); if (traces != null) traces.shutdownPending(); }
       finally { observations.unlock(); }
       exportFinished = shutdownSdk(deadline, true).get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
       if (!exportFinished) exportLoss.incrementAndGet();

@@ -100,3 +100,5 @@ If the dashboard is empty, check that the app was launched with `quux-otelc run`
 If port 4318 is occupied by another Collector, choose a different loopback host port in Compose and update the app's endpoint. Do the same for occupied Grafana or Prometheus ports. Do not stop unrelated containers or services. `doctor` checks the compiler/runtime/configuration; it does not test this pipeline or prove Collector connectivity.
 
 Configuration follows the [OpenTelemetry Docker setup](https://opentelemetry.io/docs/collector/install/docker/), [Prometheus exporter](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/prometheusexporter/README.md) and [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/) documentation.
+
+For Java method spans, use `examples/java-traces.toml` and set the trace dashboard service to `otelc-java-traces`; see the [Java span guide](java-spans.md).

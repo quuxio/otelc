@@ -8,6 +8,7 @@
   </properties>
   <dependencies>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-metrics</artifactId><version>${otel.version}</version></dependency>
+    <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-trace</artifactId><version>${otel.version}</version></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-exporter-otlp-common</artifactId><version>${otel.version}</version></dependency>
     <dependency><groupId>io.opentelemetry.proto</groupId><artifactId>opentelemetry-proto</artifactId><version>1.11.1-alpha</version></dependency>
     <dependency><groupId>org.ow2.asm</groupId><artifactId>asm</artifactId><version>${asm.version}</version></dependency>
@@ -25,7 +26,9 @@
         <executions>
           <execution><goals><goal>prepare-agent</goal></goals></execution>
           <execution><id>report</id><phase>verify</phase><goals><goal>report</goal><goal>check</goal></goals><configuration>
-            <rules><rule><element>BUNDLE</element><limits><limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>0.80</minimum></limit></limits></rule></rules>
+            <rules><rule><element>BUNDLE</element><limits><limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>0.80</minimum></limit></limits></rule>
+              <rule><element>CLASS</element><includes><include>quux.otelc.java.TraceStore</include><include>quux.otelc.java.TraceExporter</include></includes><limits><limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>0.80</minimum></limit></limits></rule>
+            </rules>
           </configuration></execution>
         </executions>
       </plugin>

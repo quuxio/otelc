@@ -60,6 +60,26 @@ fn rust_traces_resolve_independent_signal_settings() {
     assert_eq!(trace.timeout_ms, 333);
     assert!(!config.resolve(Language::Go).unwrap().execution_available);
 }
+
+#[test]
+fn java_traces_consume_the_common_independent_signal_policy() {
+    let mut config = policy();
+    config.traces.enabled = true;
+    config.traces.root_sample_ratio = 0.5;
+    config.export.timeout_ms = 111;
+    config
+        .apply_environment(|key| match key {
+            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT" => Some("555".into()),
+            _ => None,
+        })
+        .unwrap();
+    let resolved = config.resolve(Language::Java).unwrap();
+    assert!(resolved.execution_available);
+    assert_eq!(resolved.trace_export.unwrap().timeout_ms, 555);
+    assert_eq!(resolved.export.timeout_ms, 111);
+    assert_eq!(resolved.traces.root_sample_ratio, 0.5);
+    assert!(!config.resolve(Language::Go).unwrap().execution_available);
+}
 #[test]
 fn python_traces_share_the_independent_signal_policy() {
     let mut config = policy();
@@ -75,7 +95,7 @@ fn python_traces_share_the_independent_signal_policy() {
     assert!(python.execution_available);
     assert_eq!(python.export.timeout_ms, 111);
     assert_eq!(python.trace_export.unwrap().timeout_ms, 555);
-    assert!(!config.resolve(Language::Java).unwrap().execution_available);
+    assert!(!config.resolve(Language::Go).unwrap().execution_available);
 }
 #[test]
 fn native_projection_uses_shared_policy_and_owned_buffer_settings() {
