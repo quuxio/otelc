@@ -97,7 +97,7 @@ test('unchanged and annotated TypeScript examples agree with compiler-only basel
     fs.writeFileSync(throwing, 'type Value = number;\nexport function fail(value:Value):never {\n  throw new Error("mapped");\n}\nfail(1);\n');
     try {
       const mappedPolicy = path.join(directory, 'mapped.toml');
-      fs.writeFileSync(mappedPolicy, fs.readFileSync(config, 'utf8').replace('examples/apps/typescript*.*', 'build/typescript-source-map.mts').replace('examples.apps.typescript_app.*', 'build.typescript-source-map.*'));
+      fs.writeFileSync(mappedPolicy, fs.readFileSync(config, 'utf8').replace('examples/apps/typescript*.*', 'build/typescript-source-map.mts').replace('examples.apps.typescript_app.*', 'build.typescript-source-map.*') + '\n[traces]\nenabled=true\n');
       const mapped = await child(cli, ['--config', mappedPolicy, 'ts', throwing]);
       assert.notEqual(mapped.status, 0); assert.match(mapped.stderr, /typescript-source-map\.mts:3:/);
     } finally { fs.unlinkSync(throwing); }

@@ -29,7 +29,9 @@ export async function install(plan, root = process.cwd()) {
       const prepared = typed.transpile(source, filename, name, selected ? plan : { ...plan, annotations: { ...plan.annotations, read_existing: false } }, root);
       const hinted = context.format?.replace('-typescript', '');
       if (['module', 'commonjs'].includes(hinted)) prepared.format = hinted;
-      const output = transform(prepared.code, filename, name, plan, selected ? runtime : { register: () => false }, prepared);
+      const executionPlan = selected ? plan : { ...plan,
+        function_matchers: { include: [], exclude: [] }, annotations: { ...plan.annotations, read_existing: false } };
+      const output = transform(prepared.code, filename, name, executionPlan, runtime, prepared);
       return { format: output.format, shortCircuit: true, source: output.code };
     }
     const result = nextLoad(url, context);

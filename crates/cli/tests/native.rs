@@ -1578,18 +1578,43 @@ fn java_method_spans_preserve_unedited_and_annotated_apps_and_original_class_fil
 
 #[test]
 fn javascript_spans_preserve_unedited_esm_and_annotated_commonjs_with_typed_otlp() {
+    verify_node_spans("javascript");
+}
+
+#[test]
+fn typescript_spans_preserve_unedited_esm_and_annotated_commonjs_with_typed_otlp() {
+    verify_node_spans("typescript");
+}
+
+fn verify_node_spans(language: &str) {
+    let typed = language == "typescript";
     for annotated in [false, true] {
         let root = tempfile::tempdir().unwrap();
-        let source = if annotated {
+        let source = if typed && annotated {
+            include_str!("../../../examples/apps/typescript_annotated.cts")
+        } else if typed {
+            include_str!("../../../examples/apps/typescript_trace_app.mts")
+        } else if annotated {
             include_str!("../../../examples/apps/javascript_annotated.cjs")
         } else {
             include_str!("../../../examples/apps/javascript_trace_app.mjs")
         };
-        let filename = if annotated { "trace.cjs" } else { "trace.mjs" };
+        let filename = match (typed, annotated) {
+            (true, true) => "trace.cts",
+            (true, false) => "trace.mts",
+            (false, true) => "trace.cjs",
+            (false, false) => "trace.mjs",
+        };
         std::fs::write(root.path().join(filename), source).unwrap();
         let node = std::env::var("OTELC_NODE").unwrap_or_else(|_| "node".into());
+        let mut plain = Command::new(node);
+        if typed {
+            plain
+                .arg("--import")
+                .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../adapters/node/plain.mjs"));
+        }
         let baseline = success(
-            Command::new(node)
+            plain
                 .arg(filename)
                 .current_dir(root.path())
                 .output()
@@ -1598,7 +1623,7 @@ fn javascript_spans_preserve_unedited_esm_and_annotated_commonjs_with_typed_otlp
         let (metrics_port, metrics_listener) = receiver();
         let (trace_port, trace_listener) = receiver();
         let selection = if annotated { "[]" } else { "['trace.*']" };
-        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['javascript']\n[sources]\ninclude=['trace.*']\n[functions]\ninclude={selection}\n[annotations]\nread_existing=true\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[runtime]\nshutdown_timeout_ms=5000\n[export]\nendpoint='http://127.0.0.1:{metrics_port}'\ninterval_ms=60000\ntimeout_ms=2000\n")).unwrap();
+        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['{language}']\n[sources]\ninclude=['trace.*']\n[functions]\ninclude={selection}\n[annotations]\nread_existing=true\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[runtime]\nshutdown_timeout_ms=5000\n[export]\nendpoint='http://127.0.0.1:{metrics_port}'\ninterval_ms=60000\ntimeout_ms=2000\n")).unwrap();
         let expected = if annotated { 1 } else { 11 };
         let roots = if annotated { 1 } else { 5 };
         let traces = start_trace_receiver(trace_listener, roots, Duration::from_secs(60));
@@ -1606,7 +1631,7 @@ fn javascript_spans_preserve_unedited_esm_and_annotated_commonjs_with_typed_otlp
         let report = root.path().join("report.json");
         let measured = success(
             Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
-                .args(["node", filename])
+                .args([if typed { "ts" } else { "node" }, filename])
                 .current_dir(root.path())
                 .env_remove("OTELC_CONFIG")
                 .env_remove("OTELC_LANGUAGE")
@@ -1673,7 +1698,7 @@ fn javascript_spans_preserve_unedited_esm_and_annotated_commonjs_with_typed_otlp
         assert_eq!(report["export_finished"], true);
         assert_eq!(report["export_loss"], 0);
         assert_eq!(report["traces"]["losses"], serde_json::json!({}));
-        let doctor = success(cli(&["--language", "javascript", "doctor"], root.path()));
+        let doctor = success(cli(&["--language", language, "doctor"], root.path()));
         assert!(String::from_utf8_lossy(&doctor.stdout).contains("function spans"));
     }
 }

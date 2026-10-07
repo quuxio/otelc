@@ -20,7 +20,7 @@ All target languages must meet the [source-free contract](design.md#source-free-
 | Java | JDK 21+ agent and ASM bytecode body probes | Implemented selected methods/constructors, exceptions, recursion, executor threads, optional annotations, live controls and sampled method-body spans; lifetimes and task completion propagation remain unavailable |
 | Python | CPython 3.12+ monitoring, Python OTLP SDK | Implemented function timing, exceptions, recursion, threads, generators, async/cancellation, live control and sampled function spans; automatic lifetimes remain unavailable |
 | JavaScript | Node 24.11+ in-memory loader transform, JavaScript SDK | Implemented ESM/CommonJS function timing, async/generators, constructors, exceptions, live controls and sampled function spans; automatic lifetimes, async-generator traces, delegated yields and for-await tracing remain unavailable |
-| TypeScript | TypeScript 6.0.3 compiler emit and Node in-memory probes | Implemented typed functions, enums/namespaces, decorators, exceptions, original source maps and live metrics; lifetimes/traces unavailable |
+| TypeScript | TypeScript 6.0.3 compiler emit and Node in-memory probes | Implemented typed functions, enums/namespaces, decorators, exceptions, original source maps, live metrics and sampled function spans; lifetimes remain unavailable |
 | .NET | Runtime/agent ecosystem | Exploratory; outside the current target-language list |
 
 Using LLVM somewhere in a compiler pipeline does not imply that it accepts our plugin, shares the same LLVM ABI, or preserves the required language semantics. Every new language must supply its own build and control-flow fixtures.

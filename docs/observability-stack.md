@@ -104,3 +104,5 @@ Configuration follows the [OpenTelemetry Docker setup](https://opentelemetry.io/
 For Java method spans, use `examples/java-traces.toml` and set the trace dashboard service to `otelc-java-traces`; see the [Java span guide](java-spans.md).
 
 For JavaScript function spans, use `examples/javascript-traces.toml` and set the trace dashboard service to `otelc-javascript-traces`; see the [JavaScript span guide](javascript-spans.md).
+
+The [TypeScript trace example](typescript-spans.md) uses the same Collector/Tempo pipeline without editing its typed source. Set the trace dashboard service to `otelc-typescript-traces`.
