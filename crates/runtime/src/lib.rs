@@ -2,6 +2,7 @@
 mod control;
 mod objects;
 mod queue;
+mod thread;
 use anyhow::{Context, Result};
 use queue::{Queue, Record};
 use quux_otelc_config::{export_headers, Config};
@@ -177,51 +178,44 @@ fn initialize() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("runtime already initialized"))?;
     let state = STATE.get().context("runtime unavailable")?;
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(state.config.export.max_queued_batches);
-    let exporter = std::thread::Builder::new()
-        .name("otelc-export".into())
-        .spawn(move || {
-            let endpoint = state.config.metrics_endpoint();
-            while let Ok(batch) = rx.recv() {
-                let remaining = state
-                    .deadline
-                    .lock()
-                    .ok()
-                    .and_then(|d| *d)
-                    .map(|d| d.saturating_duration_since(Instant::now()))
-                    .unwrap_or(Duration::from_millis(state.config.export.timeout_ms));
-                if remaining.is_zero()
-                    || quux_otelc_export::send(
-                        &endpoint,
-                        &headers,
-                        &batch,
-                        remaining.min(Duration::from_millis(state.config.export.timeout_ms)),
-                    )
-                    .is_err()
-                {
-                    increment(&state.export_loss);
-                }
+    let exporter = thread::spawn(c"otelc-export", move || {
+        let endpoint = state.config.metrics_endpoint();
+        while let Ok(batch) = rx.recv() {
+            let remaining = state
+                .deadline
+                .lock()
+                .ok()
+                .and_then(|d| *d)
+                .map(|d| d.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::from_millis(state.config.export.timeout_ms));
+            if remaining.is_zero()
+                || quux_otelc_export::send(
+                    &endpoint,
+                    &headers,
+                    &batch,
+                    remaining.min(Duration::from_millis(state.config.export.timeout_ms)),
+                )
+                .is_err()
+            {
+                increment(&state.export_loss);
             }
-            let _ = done_tx.send(());
-        })?;
+        }
+        let _ = done_tx.send(());
+    })?;
     state.running.store(true, Ordering::Release);
-    if let Err(error) = std::thread::Builder::new()
-        .name("otelc-worker".into())
-        .spawn(move || {
-            worker(state, tx);
-            drop(exporter);
-        })
-    {
+    if let Err(error) = thread::spawn(c"otelc-worker", move || {
+        worker(state, tx);
+        drop(exporter);
+    }) {
         state.running.store(false, Ordering::Release);
         return Err(error.into());
     }
     if let Some(control) = control {
         let (control_tx, control_rx) = mpsc::channel();
-        let thread = match std::thread::Builder::new()
-            .name("otelc-control".into())
-            .spawn(move || {
-                control::serve(control, state);
-                let _ = control_tx.send(());
-            }) {
+        let thread = match thread::spawn(c"otelc-control", move || {
+            control::serve(control, state);
+            let _ = control_tx.send(());
+        }) {
             Ok(thread) => thread,
             Err(error) => {
                 state.running.store(false, Ordering::Release);
