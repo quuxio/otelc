@@ -29,12 +29,46 @@ static int key_ready;
 static void retire(void *value) {
     if (value) otelc_retire_thread((intptr_t)value - 1);
 }
+/* Runtime lifecycle and worker callbacks must never measure their own work. */
+struct worker_start { void (*run)(void *); void *argument; const char *name; };
+static void *run_worker(void *value) {
+    /* Suppress before any Rust thread startup or task allocation can call back. */
+    busy = 1;
+    struct worker_start start = *(struct worker_start *)value;
+    free(value);
+#ifdef __APPLE__
+    pthread_setname_np(start.name);
+#else
+    pthread_setname_np(pthread_self(), start.name);
+#endif
+    start.run(start.argument);
+    return NULL;
+}
+int otelc_start_worker(pthread_t *thread, const char *name, void (*run)(void *), void *argument) {
+    struct worker_start *start = malloc(sizeof(*start));
+    if (!start) return ENOMEM;
+    start->run = run;
+    start->argument = argument;
+    start->name = name;
+    pthread_attr_t attributes;
+    int result = pthread_attr_init(&attributes);
+    if (result) { free(start); return result; }
+    /* Keep the previous Rust worker's 2 MiB stack floor on macOS as well. */
+    result = pthread_attr_setstacksize(&attributes, 2 * 1024 * 1024);
+    if (!result) result = pthread_create(thread, &attributes, run_worker, start);
+    pthread_attr_destroy(&attributes);
+    if (result) free(start);
+    return result;
+}
+static void shutdown(void) { busy = 1; otelc_shutdown(); }
 /* No lifecycle work is initiated from application probes. */
 __attribute__((constructor(101))) static void initialize(void) {
     key_ready = pthread_key_create(&retirement_key, retire) == 0;
     if (key_ready) {
+        busy = 1;
         otelc_initialize();
-        atexit(otelc_shutdown);
+        atexit(shutdown);
+        busy = 0;
     }
 }
 /* Cache the slot in native TLS; registration is a cold-path operation. */

@@ -48,7 +48,7 @@ The pass emits cleanup so every accepted invocation gets a leave along each supp
 
 Native module initialization registers descriptors and a module build identity before those probes are admitted. Registration may allocate; function probes may not. The runtime copies or owns all metadata needed after registration. Modules with unsupported unload behaviour remain excluded until the module-lifetime contract is implemented.
 
-A small native initializer starts the runtime only after configuration and manifest validation. Before initialization and during shutdown, probes return zero. Exporter threads have a thread-local suppression flag set before any instrumented application callbacks can be reached.
+A small native initializer starts the runtime only after configuration and manifest validation. Before initialization and during shutdown, probes return zero. Native initialisation and the shutdown callback suppress probes on the calling thread. Aggregation, exporter and control threads start through a C entry that sets thread-local suppression before entering Rust or running telemetry work. This also excludes calls to an application-provided allocator from worker startup; setting suppression only inside a Rust thread closure is too late. Workers have a 2 MiB stack and retain their operating-system thread names. Application threads still record calls to selected allocators, and shim callbacks preserve `errno`. The macOS zone-allocator integration fixture checks both native backends; interposed allocators on other targets remain unqualified.
 
 The eventual manual context/flush APIs will be separately versioned. Do not extend this minimal interface with unused error, argument, or distributed-context hooks before an implemented adapter needs them.
 

@@ -144,6 +144,79 @@ fn counter(request: &ExportMetricsServiceRequest, name: &str, label: Option<&str
         })
         .sum()
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn allocator_callbacks_do_not_measure_native_runtime_or_worker_startup() {
+    use std::os::unix::fs::PermissionsExt;
+    let source = include_str!("../../../tests/fixtures/allocator.c");
+    for backend in ["llvm", "callbacks"] {
+        let root = tempfile::tempdir().unwrap();
+        let (port, listener) = receiver();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(root.path().join("main.c"), source).unwrap();
+        let control = if backend == "llvm" {
+            format!(
+                "control_socket=\"{}\"\n",
+                root.path().join("control.sock").display()
+            )
+        } else {
+            String::new()
+        };
+        std::fs::write(root.path().join("otelc.toml"), format!(
+            "schema_version=1\n[build]\nbackend=\"{backend}\"\ninclude=[\"*.c\"]\n[functions]\ninclude=[\"malloc\"]\n[runtime]\nmax_threads=1\nshutdown_timeout_ms=3000\n{control}[export]\nendpoint=\"http://127.0.0.1:{port}\"\ninterval_ms=60000\n"
+        )).unwrap();
+        success(cli(
+            &[
+                "clang",
+                "-O1",
+                "-g",
+                "-fno-builtin-malloc",
+                "main.c",
+                "-o",
+                "app",
+            ],
+            root.path(),
+        ));
+        retain_native(root.path(), backend);
+        let server = start_receiver(listener);
+        let report = root.path().join("report.json");
+        success(
+            Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+                .args(["run", "./app"])
+                .current_dir(root.path())
+                .env_remove("OTELC_LANGUAGE")
+                .env_remove("OTELC_CONFIG")
+                .env("OTELC_REPORT_PATH", &report)
+                .output()
+                .unwrap(),
+        );
+        let metrics = server.join().unwrap();
+        assert_eq!(
+            counter(&metrics, "otelc.function.calls", Some("malloc")),
+            1,
+            "{backend}"
+        );
+        assert_eq!(
+            counter(&metrics, "otelc.runtime.dropped_observations", None),
+            0,
+            "{backend}"
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["function_calls"], 1);
+        assert_eq!(report["export_finished"], true);
+        assert_eq!(report["export_dropped_batches"], 0);
+        assert!(report["losses"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|value| value == &serde_json::json!(0)));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+            source
+        );
+    }
+}
 #[test]
 fn c_recursion_counts_and_histograms() {
     for _ in 0..3 {
