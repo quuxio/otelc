@@ -2,14 +2,14 @@ use crate::Runtime;
 use anyhow::{bail, Result};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     os::unix::{
         fs::{MetadataExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
     sync::{atomic::Ordering, Arc},
-    time::{Duration, Instant},
+    time::Duration,
 };
 pub(crate) struct Control {
     path: PathBuf,
@@ -70,35 +70,17 @@ impl Drop for Control {
     }
 }
 fn respond(stream: &mut UnixStream, runtime: &Runtime) -> Result<()> {
-    // macOS accepted sockets can inherit the listener's nonblocking flag.
-    stream.set_nonblocking(false)?;
-    let end = Instant::now() + Duration::from_millis(200);
-    let mut request = Vec::new();
-    let mut byte = [0];
-    while request.len() < 18 {
-        let remaining = end.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        stream.set_read_timeout(Some(remaining))?;
-        if stream.read(&mut byte).ok() != Some(1) {
-            break;
-        }
-        request.push(byte[0]);
-        if byte[0] == b'\n' {
-            break;
-        }
-    }
-    let invalid = match request.as_slice() {
-        b"enable\n" => {
+    let request = quux_otelc_config::control::read_command(stream);
+    let invalid = match request.as_deref() {
+        Ok("enable") => {
             runtime.state.enabled.store(true, Ordering::Release);
             false
         }
-        b"disable\n" => {
+        Ok("disable") => {
             runtime.state.enabled.store(false, Ordering::Release);
             false
         }
-        b"status\n" => false,
+        Ok("status") => false,
         _ => true,
     };
     let value = if invalid {

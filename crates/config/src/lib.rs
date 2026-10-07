@@ -1,4 +1,6 @@
 //! Shared, strict configuration and selection rules.
+#[cfg(unix)]
+pub mod control;
 use anyhow::{bail, Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};

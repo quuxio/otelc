@@ -1,10 +1,11 @@
 //! Opt-in owner-only control. Requests change admission, never outstanding tokens.
 use crate::*;
+use quux_otelc_config::control::read_command;
 use std::{
-    io::{Read, Write},
+    io::Write,
     os::unix::{
         fs::{MetadataExt, PermissionsExt},
-        net::{UnixListener, UnixStream},
+        net::UnixListener,
     },
     path::Path,
 };
@@ -48,27 +49,6 @@ pub(super) fn bind(value: &str) -> Result<Bound> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     bound.listener.set_nonblocking(true)?;
     Ok(bound)
-}
-fn read_command(stream: &mut UnixStream) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_millis(200);
-    let mut bytes = Vec::new();
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            anyhow::bail!("control request timed out");
-        }
-        stream.set_read_timeout(Some(remaining))?;
-        let mut byte = [0];
-        stream.read_exact(&mut byte)?;
-        if byte[0] == b'\n' {
-            break;
-        }
-        bytes.push(byte[0]);
-        if bytes.len() > 16 {
-            anyhow::bail!("control request too long");
-        }
-    }
-    String::from_utf8(bytes).context("control request must be UTF-8")
 }
 fn apply(command: &str, enabled: &AtomicBool) -> Result<()> {
     match command {
