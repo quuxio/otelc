@@ -328,9 +328,6 @@ impl CommonConfig {
             if self.lifetimes.enabled {
                 unavailable.push("automatic Python lifetimes are not implemented".into());
             }
-            if self.traces.enabled {
-                unavailable.push("Python span export is not implemented".into());
-            }
         } else if matches!(language, Language::JavaScript | Language::TypeScript) {
             let required = if language == Language::TypeScript {
                 "source"

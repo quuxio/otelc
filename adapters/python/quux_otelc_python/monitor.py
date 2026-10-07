@@ -1,5 +1,6 @@
 """CPython monitoring preserves original code, frames, signatures and async behaviour."""
 import ast
+import asyncio
 import inspect
 import sys
 import tokenize
@@ -69,7 +70,7 @@ class Monitor:
         return display if self.functions.accepts(display, tag == "otelc.instrument") else None
 
     def start(self, code, _):
-        if not self.runtime.enabled or self.runtime.closed:
+        if not self.runtime.observing or self.runtime.closed:
             return
         entry = self.names.get(id(code))
         if entry is None:
@@ -77,6 +78,9 @@ class Monitor:
             if name is None:
                 return sys.monitoring.DISABLE
             if len(self.names) >= self.plan["runtime"]["max_functions"] or len(name.encode()) > 1024:
+                if self.runtime.traces is not None:
+                    self.runtime.reject_observation("function_capacity", self.parent_key(sys._getframe(1)))
+                    return None
                 self.runtime.loss["function_capacity"] += 1
                 return sys.monitoring.DISABLE
             # Code equality ignores filenames. Retain the object so its identity
@@ -84,19 +88,39 @@ class Monitor:
             self.names[id(code)] = (code, name)
         else:
             name = entry[1]
-        self.runtime.enter(id(sys._getframe(1)), name)
+        frame = sys._getframe(1)
+        self.runtime.enter(id(frame), name, self.parent_key(frame))
+
+    def parent_key(self, frame):
+        parent = None
+        if self.runtime.traces is not None:
+            ancestor = frame.f_back
+            # Inspect active caller links, never retain application frames or
+            # leak an active context into separately scheduled tasks.
+            for _ in range(4096):
+                if ancestor is None:
+                    break
+                if id(ancestor.f_code) in self.names or self.display_name(ancestor.f_code) is not None:
+                    parent = id(ancestor)
+                    break
+                ancestor = ancestor.f_back
+            else:
+                parent = 0  # Suppress a tree whose parent search exceeded its bound.
+                with self.runtime.lock:
+                    self.runtime.traces.reject(None, "parent_depth")
+        return parent
 
     def returned(self, code, _, value):
         if id(code) not in self.names:
             # A selected frame may have started while monitoring was off.
             # Disabling its return location would also silence later admitted
             # invocations of that same code after live enable.
-            return sys.monitoring.DISABLE if self.runtime.enabled and self.display_name(code) is None else None
+            return sys.monitoring.DISABLE if self.runtime.observing and self.display_name(code) is None else None
         self.runtime.exit(id(sys._getframe(1)), False)
 
     def unwound(self, code, _, exception):
         if id(code) in self.names:
-            self.runtime.exit(id(sys._getframe(1)), True)
+            self.runtime.exit(id(sys._getframe(1)), True, isinstance(exception, (GeneratorExit, asyncio.CancelledError)))
 
     def install(self):
         monitoring = sys.monitoring
@@ -118,7 +142,7 @@ class Monitor:
         if self.tool is None:
             return
         events = sys.monitoring.events
-        mask = events.PY_START | events.PY_RETURN | events.PY_UNWIND if self.runtime.enabled else (
+        mask = events.PY_START | events.PY_RETURN | events.PY_UNWIND if self.runtime.observing else (
             events.PY_RETURN | events.PY_UNWIND if self.runtime.pending else 0)
         sys.monitoring.set_events(self.tool, mask)
 

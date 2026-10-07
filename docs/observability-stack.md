@@ -76,9 +76,9 @@ The Collector retains inactive metric series for one hour; Prometheus retains hi
 
 Use [paired benchmarks](benchmarks.md) for measured plain-versus-instrumented overhead. Their observation reports distinguish complete timing from runs with admission, stack, queue or export losses. A low elapsed time with dropped observations is not evidence of equivalent telemetry.
 
-## View Rust traces
+## View function traces
 
-Use the [Rust span guide](rust-spans.md) and its unchanged internal example. The [read-only trace dashboard](http://localhost:3000/d/otelc-traces) uses the provisioned **otelc Tempo** datasource. Filter by Service and click a trace name to show its spans, or paste a known Trace ID. Anonymous viewers cannot use Explore; this dashboard supplies the supported viewing path. The metrics dashboard remains available. Allow time for batching, Tempo ingestion and search indexing. Check `http://127.0.0.1:3200/ready` and the Collector/Tempo logs if traces are absent; an application export acknowledgement alone does not prove downstream storage.
+Use the [Rust span guide](rust-spans.md) or [Python span guide](python-spans.md) and their unchanged internal examples. Change the dashboard Service field to match the configured service. The [read-only trace dashboard](http://localhost:3000/d/otelc-traces) uses the provisioned **otelc Tempo** datasource. Filter by Service and click a trace name to show its spans, or paste a known Trace ID. Anonymous viewers cannot use Explore; this dashboard supplies the supported viewing path. The metrics dashboard remains available. Allow time for batching, Tempo ingestion and search indexing. Check `http://127.0.0.1:3200/ready` and the Collector/Tempo logs if traces are absent; an application export acknowledgement alone does not prove downstream storage.
 
 If testing from a temporary checkout, ensure its configuration path is shared with the Docker engine. Colima on the tested Mac shares the permanent `/Users/sclarke/github/otelc` tree, while a `/private/tmp` worktree is not automatically visible.
 

@@ -86,7 +86,7 @@ class PythonAdapterTests(unittest.TestCase):
             response.status_code = 200
             response.raw = unittest.mock.Mock()
             response.raw.read.return_value = body
-            with patch.object(requests.Session, "post", return_value=response) as posted:
+            with patch.object(requests.Session, "request", return_value=response) as posted:
                 value = Session().post("http://127.0.0.1/v1/metrics")
             self.assertEqual(value.status_code, expected)
             self.assertEqual(value.content, b"")
