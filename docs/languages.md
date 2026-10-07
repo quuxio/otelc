@@ -1,6 +1,6 @@
 # Language adapter implementation
 
-Each additional language lands separately on `master` after its unchanged-source examples, configuration conformance, exceptional exits, SDK/Collector decoding, coverage, documentation and paired benchmark pass. All GitHub work uses quuxio.
+Each additional language lands separately on `main` after its unchanged-source examples, configuration conformance, exceptional exits, SDK/Collector decoding, coverage, documentation and paired benchmark pass. All GitHub work uses quuxio.
 
 | Order | Language | Function metrics implementation |
 | --- | --- | --- |

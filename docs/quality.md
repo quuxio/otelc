@@ -60,7 +60,7 @@ Store `SONAR_TOKEN` as a GitHub Actions secret. Do not put credentials into `son
 
 ## CI
 
-The workflow lints documents, runs Python helper tests and coverage, validates native fixtures and enforces 80% product coverage on macOS ARM64, and runs SonarQube on trusted push/manual/same-repository PR events. Fork and Dependabot PRs get local-quality checks without receiving a SonarQube token; their merged changes are analysed on `main` or `master`. Both branches trigger push and pull-request checks. The SonarQube job checks out the actual PR head commit and supplies that exact SHA as `sonar.projectVersion`.
+The workflow lints documents, runs Python helper tests and coverage, validates native fixtures and enforces 80% product coverage on macOS ARM64, and runs SonarQube on trusted push/manual/same-repository PR events. Fork and Dependabot PRs get local-quality checks without receiving a SonarQube token; their merged changes are analysed on `main`. Pushes and pull requests targeting `main` trigger checks. The SonarQube job checks out the actual PR head commit and supplies that exact SHA as `sonar.projectVersion`.
 
 The helper is analyzed as Python and imports `build/coverage.xml`. Tests use fake HTTP responses; they never rely on live infrastructure or consume a credential. SonarQube's current quality gate is checked after upload. A missing CI credential is a failure for an authenticated scan, not a successful skipped analysis. Actions are pinned to full commit hashes; Python wheels and npm packages are locked and installed without running dependency build or lifecycle scripts.
 
