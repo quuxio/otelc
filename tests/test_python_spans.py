@@ -340,7 +340,7 @@ def escape(error):
         self.assertEqual(len(traces.requests), 1)
 
     def test_forged_trace_settings_are_rejected_without_leaking_values(self):
-        for group, key, value in (("traces", "root_sample_ratio", float("nan")), ("traces", "max_active_traces", 0), ("traces", "max_spans_per_trace", 65537), ("export", "max_queued_batches", 0), ("trace_export", "timeout_ms", 0), ("trace_export", "protocol", "grpc"), ("trace_export", "endpoint", "http://secret.example/private"), ("trace_export", "endpoint", "https://user:secret@example.invalid")):
+        for group, key, value in (("traces", "root_sample_ratio", float("nan")), ("traces", "max_active_traces", 0), ("traces", "max_spans_per_trace", 65537), ("export", "max_queued_batches", 0), ("trace_export", "timeout_ms", 0), ("trace_export", "protocol", "grpc"), ("trace_export", "endpoint", "http://secret.example/private"), ("trace_export", "endpoint", "https://user:secret@example.invalid"), ("trace_export", "endpoint", "https://example.invalid?private=value")):
             policy = trace_plan()
             policy[group][key] = value
             with self.assertRaisesRegex(ValueError, "invalid resolved Python trace settings"):

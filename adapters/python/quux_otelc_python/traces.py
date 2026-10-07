@@ -89,7 +89,7 @@ class TraceStore:
                 except ValueError:
                     pass
             if (url.scheme not in ("http", "https") or not url.hostname
-                    or url.username is not None or url.password is not None or url.fragment
+                    or url.username is not None or url.password is not None or url.query or url.fragment
                     or url.scheme == "http" and not loopback):
                 raise ValueError
             _ = url.port
