@@ -32,7 +32,9 @@ struct Parser<'a> {
     error: Option<anyhow::Error>,
 }
 fn offset(source: &str, span: Span) -> usize {
-    let position = span.start();
+    position_offset(source, span.start())
+}
+fn position_offset(source: &str, position: proc_macro2::LineColumn) -> usize {
     let mut lines = vec![0];
     lines.extend(
         source
@@ -133,8 +135,8 @@ impl Parser<'_> {
             && self.selection.accepts_with_annotation(&name, include);
         let unsupported = if sig.constness.is_some() {
             Some("const functions cannot contain runtime probes")
-        } else if sig.asyncness.is_some() {
-            Some("async function timing requires a future/poll adapter")
+        } else if sig.asyncness.is_some() && sig.inputs.iter().any(|input| matches!(input, syn::FnArg::Typed(input) if !matches!(&*input.pat, syn::Pat::Ident(binding) if binding.by_ref.is_none() && binding.subpat.is_none()))) {
+            Some("async destructured/ref parameters require compiler lifetime qualification")
         } else if attrs.iter().any(|attr| {
             attr.path().is_ident("naked")
                 || (attr.path().is_ident("unsafe")
@@ -154,6 +156,14 @@ impl Parser<'_> {
         });
         let mut code = String::new();
         if self.startup && root && sig.ident == "main" {
+            // Executor attribute macros control async entry-point shutdown;
+            // their expansion is outside this source adapter's current contract.
+            if sig.asyncness.is_some() {
+                self.error = Some(anyhow::anyhow!(
+                    "Rust async main requires executor entry-point qualification"
+                ));
+                return;
+            }
             if let Some(reason) = unsupported {
                 self.error = Some(anyhow::anyhow!("Rust entry point: {reason}"));
                 return;
@@ -173,16 +183,96 @@ impl Parser<'_> {
             if self.plan.annotations.inject_generated {
                 code.push_str("/*otelc.instrument*/");
             }
-            code.push_str(&format!(
-                "let {}=::quux_otelc_rust::enter({name:?});",
-                self.guard
-            ));
+            if sig.asyncness.is_some() {
+                // Keep the original async signature and parameter ownership.
+                // Only the body is nested; the native await polls it directly,
+                // retaining Pending, wakeups, Send bounds and panic payloads.
+                code.push_str(&format!(
+                    "::quux_otelc_rust::observe_future({name:?},async move{{"
+                ));
+                // Rust async-fn parameters drop in reverse declaration order.
+                // Shadow all named parameters in that order inside the body;
+                // otherwise async-block capture-field order changes cleanup.
+                // The receiver is first and drops after these body bindings.
+                for input in &sig.inputs {
+                    if let syn::FnArg::Typed(input) = input {
+                        if let syn::Pat::Ident(binding) = &*input.pat {
+                            let name = &binding.ident;
+                            if binding.mutability.is_some() {
+                                code.push_str(&format!("let _=&mut {name};let mut {name}={name};"));
+                            } else {
+                                code.push_str(&format!("let {name}={name};"));
+                            }
+                        }
+                    }
+                }
+                if let syn::ReturnType::Type(_, output) = &sig.output {
+                    let mut opaque = Opaque(false);
+                    opaque.visit_type(output);
+                    if !opaque.0 {
+                        let mut coercions = Coercions {
+                            source: self.source,
+                            output: output.to_token_stream().to_string(),
+                            edits: &mut self.edits,
+                        };
+                        coercions.visit_block(body);
+                        if let Some(syn::Stmt::Expr(expression, None)) = body.stmts.last() {
+                            if !matches!(expression, syn::Expr::Return(_)) {
+                                coercions.expression(expression);
+                            }
+                        }
+                    }
+                }
+                self.edits.push((
+                    offset(self.source, body.brace_token.span.close()),
+                    "}).await".into(),
+                ));
+            } else {
+                code.push_str(&format!(
+                    "let {}=::quux_otelc_rust::enter({name:?});",
+                    self.guard
+                ));
+            }
         }
         if !code.is_empty() {
             self.edits.push((
                 offset(self.source, body.brace_token.span.open()) + 1,
                 format!("/*{MARKER}*/{code}"),
             ));
+        }
+    }
+}
+struct Opaque(bool);
+impl<'ast> Visit<'ast> for Opaque {
+    fn visit_type_impl_trait(&mut self, _: &'ast syn::TypeImplTrait) {
+        self.0 = true;
+    }
+}
+struct Coercions<'a> {
+    source: &'a str,
+    output: String,
+    edits: &'a mut Vec<(usize, String)>,
+}
+impl Coercions<'_> {
+    fn expression(&mut self, expression: &syn::Expr) {
+        self.edits.push((
+            offset(self.source, expression.span()),
+            format!("::std::convert::identity::<{}>(", self.output),
+        ));
+        self.edits.push((
+            position_offset(self.source, expression.span().end()),
+            ")".into(),
+        ));
+    }
+}
+impl<'ast> Visit<'ast> for Coercions<'_> {
+    fn visit_item(&mut self, _: &'ast syn::Item) {}
+    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
+    fn visit_expr_async(&mut self, _: &'ast syn::ExprAsync) {}
+    fn visit_expr_return(&mut self, node: &'ast syn::ExprReturn) {
+        if let Some(expression) = &node.expr {
+            self.expression(expression);
+            self.visit_expr(expression);
         }
     }
 }

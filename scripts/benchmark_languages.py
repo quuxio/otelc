@@ -17,11 +17,13 @@ except ModuleNotFoundError:
     from benchmark_live import batch, compare, measure, read_line
 
 
-def run(root, output, iterations, runs, language="python", endpoint=None):
+def run(root, output, iterations, runs, language="python", endpoint=None, rust_async=False):
     if not 1 <= iterations <= 1000000 or not 2 <= runs <= 100:
         raise ValueError("iterations must be 1..1000000 and runs 2..100")
     if language not in ("python", "javascript", "typescript", "java", "go", "rust"):
         raise ValueError("language benchmark adapter is not implemented")
+    if rust_async and language != "rust":
+        raise ValueError("async Rust benchmark requires language=rust")
     root, output = Path(root).resolve(), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     private = Path(tempfile.mkdtemp(prefix="control-", dir=output))
@@ -37,11 +39,13 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
         source = root / "examples/apps/go_latency.go"
     elif language == "rust":
         adapter, interpreter = "rust", os.environ.get("OTELC_RUSTC", shutil.which("rustc") or "rustc")
-        source = root / "examples/apps/rust_latency.rs"
+        source = root / f"examples/apps/{'rust_async_latency' if rust_async else 'rust_latency'}.rs"
     original = source.read_bytes()
     config.write_text((root / f"examples/{language}.toml").read_text().replace(f"examples.apps.{language}_app.*", f"examples.apps.{language}_latency.process_order").replace('[resource]', '[metrics]\nenabled = false\n\n[runtime]\ncontrol_socket = ' + json.dumps(str(socket)) + '\n\n[resource]'))
     if language == "java":
         config.write_text(config.read_text().replace("examples.apps.JavaApp*.*", "examples.apps.JavaLatency.process_order(*)"))
+    elif rust_async:
+        config.write_text(config.read_text().replace("examples.apps.rust_latency.process_order", "examples.apps.rust_async_latency.process_order"))
     if endpoint:
         config.write_text(config.read_text().replace("http://127.0.0.1:4318", endpoint))
     cli = root / "target/debug/quux-otelc"
@@ -86,7 +90,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None):
         if not complete or source.read_bytes() != original:
             raise ValueError("Incomplete telemetry or modified source")
         toolchain = sys.version.split()[0] if language == "python" else subprocess.check_output([interpreter, "version" if language == "go" else "--version"], text=True).strip()
-        report = {"language": language, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
+        report = {"language": language, "rust_async": rust_async, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
     finally:
@@ -106,8 +110,9 @@ def main():
     parser.add_argument("--runs", type=int, default=8)
     parser.add_argument("--output", type=Path, default=Path("build/benchmarks/python"))
     parser.add_argument("--endpoint")
+    parser.add_argument("--rust-async", action="store_true", help="Measure Rust async first-poll-to-completion probes")
     args = parser.parse_args()
-    result = run(Path(__file__).resolve().parents[1], args.output, args.iterations, args.runs, args.language, args.endpoint)
+    result = run(Path(__file__).resolve().parents[1], args.output, args.iterations, args.runs, args.language, args.endpoint, args.rust_async)
     print(json.dumps(result["summary"], indent=2))
 
 

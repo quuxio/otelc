@@ -10,7 +10,7 @@ Each additional language lands separately on `main` after its unchanged-source e
 | 3 | TypeScript | TypeScript compiler and in-memory Node probes; implemented |
 | 4 | Java | Java agent and method bytecode instrumentation; implemented |
 | 5 | Go | Go compiler overlays and Go SDK; implemented |
-| 6 | Rust | Rust 1.98.1 generated body guards, Cargo compiler wrapper and Rust SDK; implemented |
+| 6 | Rust | Rust 1.98.1 generated body guards, qualified async completion/cancellation timing, Cargo compiler wrapper and Rust SDK; implemented |
 
 The common TOML policy remains the configuration entry point. Existing annotations are optional. The adapter must reject capabilities it cannot execute; a language implementation does not imply support for spans, every framework or every lifetime boundary. Automatic C++ lifetimes remain separate from the current explicit guard prototype.
 

@@ -127,7 +127,8 @@ fn unsupported_functions_are_inspectable_and_rejected_when_selected() {
     plan.functions.exclude.clear();
     for source in [
         "const fn fixed() -> i32 { 2 }",
-        "async fn waiting() {}",
+        "async fn patterned((x, y): (i32, i32)) -> i32 { x + y }",
+        "async fn referenced(ref value: String) -> usize { value.len() }",
         "#[unsafe(naked)] unsafe extern \"C\" fn bare() {}",
     ] {
         assert!(transform(source, "file", &plan, true, false, false).is_err());
@@ -164,6 +165,58 @@ fn unsupported_functions_are_inspectable_and_rejected_when_selected() {
     .unwrap();
     assert!(functions[0].selected);
     assert!(!functions[1].selected);
+}
+
+#[test]
+fn async_futures_preserve_results_borrows_panics_cancellation_and_thread_movement() {
+    let root = tempfile::tempdir().unwrap();
+    let source = include_str!("../../../examples/apps/rust_async_app.rs");
+    let input = root.path().join("main.rs");
+    fs::write(&input, source).unwrap();
+    let binary = root.path().join("plain");
+    success(
+        Command::new("rustc")
+            .args(["--edition=2024", "-O"])
+            .arg(&input)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .unwrap(),
+    );
+    let baseline = success(Command::new(&binary).output().unwrap());
+    let path = write_plan(root.path());
+    let mut plan: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    plan["functions"]["include"] = serde_json::json!([
+        "main.ready",
+        "main.borrowed",
+        "main.waiting",
+        "main.migrating",
+        "main.escaping",
+        "main.recovered",
+        "main.fallible",
+        "main.ordered",
+        "main.callable",
+        "main.mutable",
+        "main.generic",
+        "main.opaque",
+        "main.AsyncOrder.calculate"
+    ]);
+    fs::write(&path, plan.to_string()).unwrap();
+    let instrumented = success(run(root.path(), &path, &["main.rs"]));
+    assert_eq!(baseline.stdout, instrumented.stdout);
+    assert_eq!(baseline.stderr, instrumented.stderr);
+    assert_eq!(fs::read_to_string(input).unwrap(), source);
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["function_calls"], 14);
+    assert_eq!(report["functions"]["main.waiting"]["cancellations"], 1);
+    assert_eq!(report["functions"]["main.escaping"]["unwinds"], 1);
+    assert_eq!(report["functions"]["main.recovered"]["unwinds"], 0);
+    assert!(report["losses"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|count| count == 0));
 }
 #[test]
 fn specialised_receivers_and_nested_trait_methods_have_distinct_identities() {
