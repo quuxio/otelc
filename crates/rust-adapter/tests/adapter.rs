@@ -92,6 +92,122 @@ fn parser_respects_original_lines_byte_filters_annotations_and_hygiene() {
     assert_eq!(inspect, source);
 }
 #[test]
+fn synchronous_closure_inventory_and_body_probes_preserve_original_signatures() {
+    let mut plan = policy();
+    plan.functions.include = vec!["*.<closure>@*".into()];
+    let source = "fn main() { let expression=|value:i32| value+1; let block=move |value:i32| {value+2}; let nested=|| || 7; }";
+    let (generated, functions) = transform(source, "file", &plan, true, false, false).unwrap();
+    let closures: Vec<_> = functions
+        .iter()
+        .filter(|function| function.name.contains("<closure>"))
+        .collect();
+    assert_eq!(closures.len(), 4);
+    assert!(closures
+        .iter()
+        .all(|function| function.selected && function.unsupported.is_none()));
+    assert_eq!(generated.matches("::quux_otelc_rust::enter(").count(), 4);
+    assert!(generated.contains("|value:i32| {"));
+    assert!(generated.contains("move |value:i32| {"));
+    assert_eq!(generated.lines().count(), source.lines().count());
+    syn::parse_file(&generated).unwrap();
+}
+#[test]
+fn closure_annotations_exclusions_and_unsupported_boundaries_are_visible() {
+    let mut plan = policy();
+    plan.functions.include = vec!["file.main.<closure>@4:*".into()];
+    let source = "fn main(){\n// otelc.instrument\nlet annotated=||7;\nlet configured=||8;\n// otelc.exclude\nlet excluded=||9;\n}";
+    let (_, functions) = transform(source, "file", &plan, true, false, false).unwrap();
+    assert_eq!(
+        functions
+            .iter()
+            .map(|function| function.selected)
+            .collect::<Vec<_>>(),
+        [false, true, true, false]
+    );
+    plan.functions.exclude.push("*.<closure>@3:*".into());
+    let (_, functions) = transform(source, "file", &plan, true, false, false).unwrap();
+    assert!(!functions[1].selected);
+    plan.functions.include = vec!["not_selected".into()];
+    plan.functions.exclude.clear();
+    let (_, documented) = transform(
+        "fn main(){\n/// otelc.instrument\nlet callback=||7;\n}",
+        "file",
+        &plan,
+        true,
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(documented[1].selected);
+    plan.functions.include = vec!["*".into()];
+    for source in [
+        "fn main(){ let callback=async || 7; }",
+        "fn main(){ let callback=const || 7; }",
+    ] {
+        assert!(transform(source, "file", &plan, true, false, false).is_err());
+        let (original, functions) = transform(source, "file", &plan, true, false, true).unwrap();
+        assert_eq!(original, source);
+        assert!(functions[1].unsupported.is_some());
+        assert!(transform(source, "file", &plan, false, false, false).is_ok());
+    }
+    assert!(transform(
+        "fn main(){\n// otelc.unknown\nlet callback=||7;}",
+        "file",
+        &plan,
+        true,
+        false,
+        false
+    )
+    .is_err());
+}
+#[test]
+fn closure_runtime_preserves_traits_borrows_capture_precision_drops_and_panic_payloads() {
+    let root = tempfile::tempdir().unwrap();
+    let source = include_str!("../../../examples/apps/rust_closure_app.rs");
+    fs::write(root.path().join("main.rs"), source).unwrap();
+    success(
+        Command::new("rustc")
+            .args(["--edition=2024", "-O", "-g", "main.rs", "-o", "plain"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let baseline = success(Command::new(root.path().join("plain")).output().unwrap());
+    let path = write_plan(root.path());
+    let mut plan: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    plan["functions"]["include"] = serde_json::json!(["*.<closure>@*"]);
+    fs::write(&path, plan.to_string()).unwrap();
+    let instrumented = success(run(root.path(), &path, &["main.rs"]));
+    assert_eq!(baseline.stdout, instrumented.stdout);
+    assert_eq!(baseline.stderr, instrumented.stderr);
+    assert_eq!(
+        fs::read_to_string(root.path().join("main.rs")).unwrap(),
+        source
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["function_calls"], 20);
+    assert!(report["functions"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|value| value["cancellations"] == 0));
+    assert_eq!(
+        report["functions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|value| value["unwinds"].as_u64().unwrap())
+            .sum::<u64>(),
+        1
+    );
+    assert!(report["losses"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|count| count == 0));
+}
+#[test]
 fn named_scopes_generics_default_methods_nested_functions_and_raw_identifiers() {
     let mut plan = policy();
     plan.functions.include = vec!["*".into()];

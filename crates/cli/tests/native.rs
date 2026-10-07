@@ -654,8 +654,8 @@ fn rust_generated_sources_preserve_examples_and_export_sdk_metrics() {
             "rust_app.rs",
             include_str!("../../../examples/apps/rust_app.rs"),
             "72",
-            10,
-            1,
+            15,
+            2,
         ),
         (
             "rust_annotated.rs",
@@ -664,11 +664,25 @@ fn rust_generated_sources_preserve_examples_and_export_sdk_metrics() {
             2,
             0,
         ),
+        (
+            "rust_closure_app.rs",
+            include_str!("../../../examples/apps/rust_closure_app.rs"),
+            "closure results preserved; drops=[\"second\", \"first\", \"capture\", \"local\", \"argument\"]",
+            20,
+            1,
+        ),
+        (
+            "rust_closure_annotated.rs",
+            include_str!("../../../examples/apps/rust_closure_annotated.rs"),
+            "30",
+            2,
+            0,
+        ),
     ] {
         let root = tempfile::tempdir().unwrap();
         let (port, listener) = receiver();
         std::fs::write(root.path().join(file), source).unwrap();
-        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['rust']\n[sources]\ninclude=['*.rs']\n[functions]\ninclude=['rust_app.*','rust_annotated.configured']\nexclude=['*.main','*.excluded']\n[annotations]\nread_existing=true\ninject_generated=true\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\ntimeout_ms=1000\n")).unwrap();
+        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['rust']\n[sources]\ninclude=['*.rs']\n[functions]\ninclude=['rust_app.*','rust_annotated.configured','rust_closure_app.*.<closure>@*','rust_closure_annotated.configured.<closure>@*']\nexclude=['*.main','*.excluded']\n[annotations]\nread_existing=true\ninject_generated=true\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\ntimeout_ms=1000\n")).unwrap();
         let server = start_receiver(listener);
         let output = success(cli(&["rust", file], root.path()));
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), result);

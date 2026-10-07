@@ -39,26 +39,28 @@ class LanguageBenchmarkTests(unittest.TestCase):
                 self.assertIn(f"examples.apps.{language}_async_latency.process_order", (output / "policy.toml").read_text())
 
     def test_rust_compiles_unchanged_baseline_and_runs_live_adapter(self):
-        for rust_async in (False, True):
-            with self.subTest(rust_async=rust_async):
-                self.check_rust_benchmark(rust_async)
+        for rust_async, rust_closures in ((False, False), (True, False), (False, True)):
+            with self.subTest(rust_async=rust_async, rust_closures=rust_closures):
+                self.check_rust_benchmark(rust_async, rust_closures)
 
-    def check_rust_benchmark(self, rust_async):
+    def check_rust_benchmark(self, rust_async, rust_closures):
         with tempfile.TemporaryDirectory() as directory:
             root, output = self.fixture(directory)
-            name = "rust_async_latency" if rust_async else "rust_latency"
+            name = "rust_async_latency" if rust_async else "rust_closure_latency" if rust_closures else "rust_latency"
             (root / f"examples/apps/{name}.rs").write_text("unchanged Rust application")
             (root / "examples/rust.toml").write_text('[functions]\ninclude=["examples.apps.rust_app.*"]\n[resource]\nservice_name="test"\n')
             samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 10}] * 2 for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
             with patch.object(benchmark.platform, "platform", return_value="test"), patch.object(benchmark.platform, "machine", return_value="arm64"), patch.object(benchmark.subprocess, "run") as compile_app, patch.object(benchmark.subprocess, "Popen", side_effect=lambda *a, **k: Process()) as launch, patch.object(benchmark, "read_line", return_value="ready"), patch.object(benchmark, "batch"), patch.object(benchmark.subprocess, "check_output", side_effect=['{"pid":42}', 'rustc 1.98.1']), patch.object(benchmark, "measure", return_value=samples):
-                report = benchmark.run(root, output, 10, 2, "rust", rust_async=rust_async)
+                report = benchmark.run(root, output, 10, 2, "rust", rust_async=rust_async, rust_closures=rust_closures)
             self.assertEqual(report["language"], "rust")
             self.assertEqual(report["toolchain"], "rustc 1.98.1")
             self.assertIn("--edition=2024", compile_app.call_args.args[0])
             self.assertEqual(launch.call_args_list[0].args[0], [str(output.resolve() / "plain-rust")])
             self.assertIn("rust", launch.call_args_list[1].args[0])
-            self.assertIn(f"examples.apps.{name}.process_order", (output / "policy.toml").read_text())
+            function = "main.<closure>@*" if rust_closures else "process_order"
+            self.assertIn(f"examples.apps.{name}.{function}", (output / "policy.toml").read_text())
             self.assertEqual(report["rust_async"], rust_async)
+            self.assertEqual(report["rust_closures"], rust_closures)
 
     def fixture(self, directory, valid=True):
         root = Path(directory)
@@ -91,6 +93,9 @@ class LanguageBenchmarkTests(unittest.TestCase):
                 kill.assert_called_once()
 
     def test_bounds_and_command_line(self):
+        for language, rust_async in (("python", False), ("rust", True)):
+            with self.assertRaisesRegex(ValueError, "Rust closure benchmark"):
+                benchmark.run("unused", "unused", 1, 2, language, rust_async=rust_async, rust_closures=True)
         with self.assertRaisesRegex(ValueError, "requires language=javascript"):
             benchmark.run("unused", "unused", 1, 2, "rust", node_async=True)
         with self.assertRaisesRegex(ValueError, "requires language=rust"):
