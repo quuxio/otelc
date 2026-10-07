@@ -102,3 +102,5 @@ If port 4318 is occupied by another Collector, choose a different loopback host 
 Configuration follows the [OpenTelemetry Docker setup](https://opentelemetry.io/docs/collector/install/docker/), [Prometheus exporter](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/prometheusexporter/README.md) and [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/) documentation.
 
 For Java method spans, use `examples/java-traces.toml` and set the trace dashboard service to `otelc-java-traces`; see the [Java span guide](java-spans.md).
+
+For JavaScript function spans, use `examples/javascript-traces.toml` and set the trace dashboard service to `otelc-javascript-traces`; see the [JavaScript span guide](javascript-spans.md).

@@ -38,7 +38,7 @@ export class PromiseObserver {
     }
   }
   init(promise) {
-    if (!this.runtime.enabled || this.runtime.closed) return;
+    if (!this.runtime.observing || this.runtime.closed) return;
     const frames = this.native.frames();
     const index = frames.findIndex(frame => this.origins.has(JSON.stringify([physical(frame[0]), ...position(frame)])));
     if (index < 0) return;
@@ -50,10 +50,10 @@ export class PromiseObserver {
     this.records.set(promise, record);
   }
   enter(name, id) {
-    if (!this.runtime.enabled || this.runtime.closed) return;
+    if (!this.runtime.observing || this.runtime.closed) return 0;
     this.flush();
     const site = this.sites.get(id);
-    if (!site) { this.runtime.losses.async_origin++; return; }
+    if (!site) { this.runtime.losses.async_origin++; return this.runtime.rejectTrace('async_origin'); }
     const frames = this.native.frames();
     const index = frames.findIndex(frame => physical(frame[0]) === site.filename && compare(position(frame), site.start) >= 0 && compare(position(frame), site.end) <= 0);
     const key = index < 0 ? null : caller(frames, index, site.origin);
@@ -61,12 +61,13 @@ export class PromiseObserver {
     if (!record || !record.promise.deref()) {
       if (this.roots.size + this.active.size >= this.runtime.plan.runtime.max_active_calls) this.runtime.losses.active_call_capacity++;
       else this.runtime.losses.async_origin++;
-      return;
+      return this.runtime.rejectTrace('async_origin');
     }
     this.roots.delete(key);
     record.token = this.runtime.enter(name);
     if (record.token) this.active.set(record.token, record);
     else record.tracked = false;
+    return record.token;
   }
   settle(promise) {
     const record = this.records.get(promise);

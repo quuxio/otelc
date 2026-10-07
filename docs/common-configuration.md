@@ -79,3 +79,5 @@ Adapter conformance requires the same defaults, wildcard/exclusion rules, enviro
 See the [developer 101](developer-101.md) for complete unchanged/annotated sources, validated commands, live controls and paired latency measurements. Control sockets are disabled by default; their parent directory must be private and owned by the process user.
 
 The Java agent consumes the same trace policy and independent transport settings for bounded [method-body spans](java-spans.md). Existing bytecode annotations remain optional; a returned asynchronous stage is timed only until the method returns.
+
+JavaScript consumes the common trace policy through its in-memory loader, with private direct-call/await contexts and an independent trace phase. See [JavaScript spans](javascript-spans.md); TypeScript tracing remains unavailable pending its qualification PR.

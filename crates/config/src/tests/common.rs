@@ -80,6 +80,29 @@ fn java_traces_consume_the_common_independent_signal_policy() {
     assert_eq!(resolved.traces.root_sample_ratio, 0.5);
     assert!(!config.resolve(Language::Go).unwrap().execution_available);
 }
+
+#[test]
+fn javascript_traces_resolve_independently_while_typescript_remains_unqualified() {
+    let mut config = policy();
+    config.traces.enabled = true;
+    config.export.timeout_ms = 111;
+    config
+        .apply_environment(|key| match key {
+            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT" => Some("555".into()),
+            _ => None,
+        })
+        .unwrap();
+    let resolved = config.resolve(Language::JavaScript).unwrap();
+    assert!(resolved.execution_available);
+    assert_eq!(resolved.export.timeout_ms, 111);
+    assert_eq!(resolved.trace_export.unwrap().timeout_ms, 555);
+    assert!(
+        !config
+            .resolve(Language::TypeScript)
+            .unwrap()
+            .execution_available
+    );
+}
 #[test]
 fn python_traces_share_the_independent_signal_policy() {
     let mut config = policy();
