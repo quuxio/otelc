@@ -10,7 +10,7 @@ use std::{
     path::Path,
 };
 pub(super) struct Thread {
-    pub handle: std::thread::JoinHandle<()>,
+    pub handle: thread::Handle,
     pub done: mpsc::Receiver<()>,
 }
 pub(super) struct Bound {
