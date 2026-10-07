@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
-import { createRequire } from 'node:module';
+import { createRequire, Module } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { Selection, sourceName } from '../policy.mjs';
@@ -15,6 +15,51 @@ import { headers } from '../exporter.mjs';
 import { root, plan, receiver, control, child } from './helpers.mjs';
 
 const require = createRequire(import.meta.url);
+function evaluateCjs(code, filename) {
+  const module = new Module(filename);
+  module._compile(code, filename);
+  return module.exports;
+}
+
+test('enabled async instrumentation preserves Promise microtasks and reads then getters once', async () => {
+  const r = await receiver();
+  const runtime = new Runtime(plan(r.endpoint)); globalThis[RUNTIME] = runtime;
+  const { transpile } = await import('../typescript.mjs');
+  const execute = async (code, filename) => {
+    const selected = evaluateCjs(code, filename);
+    const events = [];
+    selected(events).then(value => events.push(['result', value]), error => events.push(['error', error.message]));
+    queueMicrotask(() => events.push('queued'));
+    await new Promise(resolve => setImmediate(resolve));
+    return events;
+  };
+  try {
+    for (const language of ['javascript', 'typescript']) {
+      const p = { ...runtime.plan, language };
+      const filename = language === 'typescript' ? '/tmp/faithful.cts' : '/tmp/faithful.cjs';
+      for (const body of ['return Promise.resolve(7);', "return Promise.reject(new Error('original'));", "try { return Promise.resolve(7); } finally { events.push('finally'); }"] ) {
+        const source = `module.exports = async function selected(events) { ${body} };`;
+        const prepared = language === 'typescript' ? transpile(source, filename, path.basename(filename), p, '/tmp') : null;
+        const original = prepared?.code ?? source;
+        const output = transform(original, filename, path.basename(filename), p, runtime, prepared);
+        assert.deepEqual(await execute(output.code, filename), await execute(original, filename), `${language}: ${body}`);
+      }
+      const source = 'module.exports = async function selected(value) { return value; };';
+      const prepared = language === 'typescript' ? transpile(source, filename, path.basename(filename), p, '/tmp') : null;
+      const original = prepared?.code ?? source;
+      const output = transform(original, filename, path.basename(filename), p, runtime, prepared);
+      const selected = evaluateCjs(output.code, filename);
+      let reads = 0;
+      const value = { get then() { if (++reads !== 1) throw new Error('then read twice'); return undefined; } };
+      assert.equal(await selected(value), value);
+      assert.equal(reads, 1);
+    }
+    const report = runtime.report();
+    assert.equal(report.function_calls, 8, JSON.stringify(report));
+    assert.equal(Object.values(report.functions).reduce((sum, value) => sum + value.unwinds, 0), 2);
+    assert.ok(Object.values(report.losses).every(value => value === 0), JSON.stringify(report.losses));
+  } finally { await runtime.close(); delete globalThis[RUNTIME]; await r.close(); }
+});
 
 test('shutdown includes an idle control connection in its deadline', async () => {
   const r = await receiver(); const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otelc-idle-'));
@@ -39,7 +84,7 @@ test('async completion follows returned Promise settlement and preserves user fi
       async function overridden(promise) { try { return promise; } finally { return 7; } }
       module.exports = { selected, overridden };`;
     const output = transform(source, '/tmp/async.cjs', 'async.cjs', runtime.plan, runtime);
-    const module = { exports: {} }; new Function('require', 'module', output.code)(require, module);
+    const module = { exports: evaluateCjs(output.code, '/tmp/async.cjs') };
     const events = []; let resolve;
     const result = module.exports.selected(new Promise(done => { resolve = done; }), events);
     assert.deepEqual(events, ['finally']);
@@ -137,7 +182,7 @@ test('in-memory bodies preserve signatures, recursion, throws, generators, const
       const arrow = (value) => value+1;
       module.exports={f, recursive, generator, a, Derived, arrow};`;
     const output = transform(source, '/tmp/application.cjs', 'application.cjs', runtime.plan, runtime);
-    const module = { exports: {} }; new Function('require', 'module', output.code)(require, module);
+    const module = { exports: evaluateCjs(output.code, '/tmp/application.cjs') };
     const api = module.exports;
     assert.equal(api.f.length, 3); assert.equal(api.f(2, 8, 5), 7);
     assert.throws(() => api.f(-1, new Error('same'), 5), /same/);

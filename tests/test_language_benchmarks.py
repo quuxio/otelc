@@ -25,6 +25,19 @@ class Process:
 
 
 class LanguageBenchmarkTests(unittest.TestCase):
+    def test_node_async_uses_unchanged_app_and_selects_correct_function(self):
+        for language, extension in (("javascript", "mjs"), ("typescript", "mts")):
+            with self.subTest(language=language), tempfile.TemporaryDirectory() as directory:
+                root, output = self.fixture(directory)
+                (root / f"examples/apps/{language}_async_latency.{extension}").write_text("unchanged async app")
+                (root / f"examples/{language}.toml").write_text(f'[functions]\ninclude=["examples.apps.{language}_app.*"]\n[resource]\nservice_name="test"\n')
+                samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 10}] * 2 for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
+                with patch.object(benchmark.platform, "platform", return_value="test"), patch.object(benchmark.platform, "machine", return_value="arm64"), patch.object(benchmark.subprocess, "Popen", side_effect=lambda *a, **k: Process()) as launch, patch.object(benchmark, "read_line", return_value="ready"), patch.object(benchmark, "batch"), patch.object(benchmark.subprocess, "check_output", side_effect=['{"pid":42}', 'v26.10.0']), patch.object(benchmark, "measure", return_value=samples):
+                    report = benchmark.run(root, output, 10, 2, language, node_async=True)
+                self.assertTrue(report["node_async"])
+                self.assertIn(f"{language}_async_latency.{extension}", launch.call_args_list[0].args[0][-1])
+                self.assertIn(f"examples.apps.{language}_async_latency.process_order", (output / "policy.toml").read_text())
+
     def test_rust_compiles_unchanged_baseline_and_runs_live_adapter(self):
         for rust_async in (False, True):
             with self.subTest(rust_async=rust_async):
@@ -78,6 +91,8 @@ class LanguageBenchmarkTests(unittest.TestCase):
                 kill.assert_called_once()
 
     def test_bounds_and_command_line(self):
+        with self.assertRaisesRegex(ValueError, "requires language=javascript"):
+            benchmark.run("unused", "unused", 1, 2, "rust", node_async=True)
         with self.assertRaisesRegex(ValueError, "requires language=rust"):
             benchmark.run("unused", "unused", 1, 2, "python", rust_async=True)
         for iterations, runs, language in ((0, 2, "python"), (1, 1, "python"), (1, 2, "unknown")):

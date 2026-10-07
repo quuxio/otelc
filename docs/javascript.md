@@ -56,9 +56,21 @@ function selected(value) {
 }
 ```
 
-Async functions adopt returned promises after original cleanup completes, so their duration and unwind count follow final promise settlement. Body-level function declarations retain hoisting, lexical captures and mutable self-reference when moved into generated timing blocks.
+Async functions retain their original return, throw, await and finally statements. A body-entry probe associates the call with the function's native outer Promise; public V8 Promise hooks capture settlement time and a small native addon reads its final state. The observer adds no Promise reaction, extra await, then-property read or rejection handler. Original rejection identity, user microtask order and unhandled-rejection reporting are covered by regression tests. Body-level declarations in synchronous timing blocks retain hoisting, lexical captures and mutable self-reference.
 
-Unmeasured calls, including calls started with metrics disabled or rejected by a capacity limit, keep the original async return path and microtask ordering. Primitive async results also return without an extra suspension. Admitted async calls returning objects or functions add an `await` after cleanup to observe possible Promise/thenable settlement; this can change ordering relative to other queued microtasks. Applications that depend on that ordering need qualification with metrics enabled.
+The generated async body has this shape (the numeric origin ID is generated):
+
+```js
+async function selected(value) {
+  probes.enterAsync('examples.apps.javascript_annotated.selected', 1);
+  try { return value; }
+  finally { originalCleanup(); }
+}
+```
+
+`make build` and `make node-build` compile `target/debug/otelc_node_observer.node` against the exact running Node version and module ABI. Rebuild it after upgrading Node. The build reads that Node installation's `include/node` headers; set `OTELC_NODE_INCLUDE` for another matching header directory and `OTELC_NODE_OBSERVER` for a separately installed addon. Doctor rejects a missing or incompatible addon before launch. There is no fallback to async return rewriting.
+
+Settlement hooks run just before V8 changes Promise state. otelc finalises completed observations on the next probe, metrics collection, status/report or shutdown, using the timestamp captured by the hook rather than the later collection time. The observer never reads a returned value or attaches a handler to its Promise. It holds a settled Promise until the next finalisation so garbage collection cannot turn a completed call into a false incomplete call; this can briefly extend the lifetime of its result or rejection reason. Retention is bounded by `max_active_calls` and normally ends at the next probe or collection. An unresolved or discarded pending Promise remains an incomplete call at shutdown.
 
 Inline source maps refer to the original filename and lines. `annotations.inject_generated = true` adds an annotation comment to the generated probe only. The generated marker rejects accidental repeated instrumentation.
 
@@ -95,12 +107,18 @@ make node-check
 make benchmark-language LANGUAGE=javascript LANGUAGE_BENCHMARK_ARGS="--output build/benchmarks/javascript --iterations 10000 --runs 8"
 ```
 
-The benchmark launches the same untouched workload plain and instrumented, alternates metrics off/on inside the same instrumented PID, and checks checksums, source hashes, exact observation counts, losses and final export completion. The report includes baseline overhead, disabled-probe overhead and incremental metrics cost per call. Results are measurements on this host, not a general latency guarantee.
+The benchmark launches the same untouched workload plain and instrumented, alternates metrics off/on inside the same instrumented PID, and checks checksums, source hashes, exact observation counts, losses and final export completion. The report includes baseline overhead, disabled-probe overhead and incremental metrics cost per call. Results are measurements on this host, not a general latency guarantee. Add `--node-async` to measure the unchanged `javascript_async_latency.mjs` app, which returns resolved Promises; the baseline and enabled run execute the same async workload:
 
-`node-check` requires at least 80% product line coverage and exercises real loaders, SDK histogram/counter data, protobuf export, optional annotations, private control sockets, normal/exceptional exits and transport failures.
+```sh
+make benchmark-language LANGUAGE=javascript LANGUAGE_BENCHMARK_ARGS="--node-async --output build/benchmarks/javascript-async --iterations 10000 --runs 8"
+```
+
+Enabled Promise observation captures native stacks, so its cost can be substantially higher than synchronous function timing. Measure the actual workload before deployment.
+
+`node-check` requires at least 80% JavaScript product line coverage; `rust-coverage` separately requires at least 80% for the native Promise observer. The suite exercises real loaders, SDK histogram/counter data, protobuf export, optional annotations, private control sockets, normal/exceptional exits and transport failures.
 
 ## Supported boundaries
 
-This implementation targets project-local Node `.js`, `.mjs` and `.cjs` modules, including dynamic imports. It excludes dependency files under `node_modules`, the adapter itself and modules outside the project root. Timing begins inside the function body after parameter initialisation; async/generator timing includes suspension. An escaping rejection from an `async` function is an unwind; a regular function returning a Promise ends at its synchronous return. Generator abandonment is an incomplete observation rather than a fabricated completion.
+This implementation targets project-local Node `.js`, `.mjs` and `.cjs` modules, including dynamic imports. It excludes dependency files under `node_modules`, the adapter itself and modules outside the project root. Timing begins inside the function body after parameter initialisation; a failure in a default parameter is outside that interval. Native async origins are qualified for Node 24 in CI and Node 26.10 locally on macOS ARM64. Origin metadata is bounded by `max_functions`; pending origin/call records share `max_active_calls`. Raw stack capture is limited to 128 frames. Unidentifiable origins, including dynamically evaluated anonymous scripts, sourceURL overrides and deeper stacks, produce explicit `async_origin` loss rather than fabricated observations or rewritten returns. These cases preserve application results but do not provide complete metrics. Other Node/V8 versions and platforms require separate qualification; async/generator timing includes suspension. An escaping rejection from an `async` function is an unwind; a regular function returning a Promise ends at its synchronous return. Generator abandonment is an incomplete observation rather than a fabricated completion.
 
 Direct `eval` within selected functions and top-level CommonJS `require` shadowing fail clearly because transformation could change their lexical semantics. TypeScript, JSX, browsers, workers/child-process propagation, application custom loaders and packaged distributions are separate capabilities. Worker bootstrap does not re-use the main process's plan or socket. Natural process exit flushes metrics; forced termination, fatal uncaught exceptions and `process.exit()` cannot promise a final asynchronous export. Automatic object lifetimes and spans are unavailable and rejected by policy resolution.

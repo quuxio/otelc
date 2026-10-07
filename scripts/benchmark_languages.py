@@ -17,20 +17,22 @@ except ModuleNotFoundError:
     from benchmark_live import batch, compare, measure, read_line
 
 
-def run(root, output, iterations, runs, language="python", endpoint=None, rust_async=False):
+def run(root, output, iterations, runs, language="python", endpoint=None, rust_async=False, node_async=False):
     if not 1 <= iterations <= 1000000 or not 2 <= runs <= 100:
         raise ValueError("iterations must be 1..1000000 and runs 2..100")
     if language not in ("python", "javascript", "typescript", "java", "go", "rust"):
         raise ValueError("language benchmark adapter is not implemented")
     if rust_async and language != "rust":
         raise ValueError("async Rust benchmark requires language=rust")
+    if node_async and language not in ("javascript", "typescript"):
+        raise ValueError("async Node benchmark requires language=javascript or typescript")
     root, output = Path(root).resolve(), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     private = Path(tempfile.mkdtemp(prefix="control-", dir=output))
     socket = private / "metrics.sock"
     config = output / "policy.toml"
     extension, adapter, interpreter = ("py", "python", sys.executable) if language == "python" else ("mts" if language == "typescript" else "mjs", "ts" if language == "typescript" else "node", os.environ.get("OTELC_NODE", shutil.which("node") or "node"))
-    source = root / f"examples/apps/{language}_latency.{extension}"
+    source = root / f"examples/apps/{language}_{'async_' if node_async else ''}latency.{extension}"
     if language == "java":
         adapter, interpreter = "java", os.environ.get("OTELC_JAVA", shutil.which("java") or "java")
         source = root / "examples/apps/JavaLatency.java"
@@ -46,6 +48,8 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         config.write_text(config.read_text().replace("examples.apps.JavaApp*.*", "examples.apps.JavaLatency.process_order(*)"))
     elif rust_async:
         config.write_text(config.read_text().replace("examples.apps.rust_latency.process_order", "examples.apps.rust_async_latency.process_order"))
+    elif node_async:
+        config.write_text(config.read_text().replace(f"examples.apps.{language}_latency.process_order", f"examples.apps.{language}_async_latency.process_order"))
     if endpoint:
         config.write_text(config.read_text().replace("http://127.0.0.1:4318", endpoint))
     cli = root / "target/debug/quux-otelc"
@@ -90,7 +94,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         if not complete or source.read_bytes() != original:
             raise ValueError("Incomplete telemetry or modified source")
         toolchain = sys.version.split()[0] if language == "python" else subprocess.check_output([interpreter, "version" if language == "go" else "--version"], text=True).strip()
-        report = {"language": language, "rust_async": rust_async, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
+        report = {"language": language, "rust_async": rust_async, "node_async": node_async, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
     finally:
@@ -111,8 +115,9 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("build/benchmarks/python"))
     parser.add_argument("--endpoint")
     parser.add_argument("--rust-async", action="store_true", help="Measure Rust async first-poll-to-completion probes")
+    parser.add_argument("--node-async", action="store_true", help="Measure faithful Node async Promise completion observation")
     args = parser.parse_args()
-    result = run(Path(__file__).resolve().parents[1], args.output, args.iterations, args.runs, args.language, args.endpoint, args.rust_async)
+    result = run(Path(__file__).resolve().parents[1], args.output, args.iterations, args.runs, args.language, args.endpoint, args.rust_async, args.node_async)
     print(json.dumps(result["summary"], indent=2))
 
 
