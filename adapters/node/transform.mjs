@@ -9,6 +9,64 @@ const probes = fileURLToPath(new URL('./probes.cjs', import.meta.url));
 let nextAsyncSite = 1;
 export const MARKER = '@quux.otelc.generated';
 export const IDENTITY = '@quux.otelc.identity ';
+function instrumentTraceBody(path, body, helper, name, id, plan) {
+  if (path.node.async && path.node.generator) throw path.buildCodeFrameError('selected async generators with traces are not qualified');
+  if (path.findParent(parent => parent.isWithStatement())) throw path.buildCodeFrameError('selected functions within with scopes with traces are not qualified');
+  const token = path.scope.generateUidIdentifier('otelc_token');
+  const scope = path.scope.generateUidIdentifier('otelc_scope');
+  const resume = path.scope.generateUidIdentifier('otelc_resume');
+  const value = path.scope.generateUidIdentifier('otelc_value');
+  const error = path.scope.generateUidIdentifier('otelc_error');
+  const unwound = path.scope.generateUidIdentifier('otelc_unwound');
+  const call = (method, args) => t.callExpression(t.memberExpression(t.cloneNode(helper), t.identifier(method)), args.map(arg => t.cloneNode(arg, true)));
+  const attach = () => t.expressionStatement(t.assignmentExpression('=', t.cloneNode(scope), call('attach', [token, scope])));
+  path.traverse({
+    Function(nested) { nested.skip(); },
+    WithStatement(statement) { throw statement.buildCodeFrameError('selected with statements with traces are not qualified'); },
+    ForOfStatement(loop) { if (loop.node.await) throw loop.buildCodeFrameError('selected for-await loops with traces are not qualified'); },
+    AwaitExpression: { exit(awaited) {
+      const original = awaited.node.argument;
+      awaited.replaceWith(t.callExpression(t.cloneNode(resume), [t.awaitExpression(call('suspend', [scope, original]))])); awaited.skip();
+    } },
+    YieldExpression: { exit(yielded) {
+      if (yielded.node.delegate) throw yielded.buildCodeFrameError('selected delegated yields with traces are not qualified');
+      const original = yielded.node.argument ?? t.unaryExpression('void', t.numericLiteral(0));
+      yielded.replaceWith(t.callExpression(t.cloneNode(resume), [t.yieldExpression(call('suspend', [scope, original]))])); yielded.skip();
+    } },
+    TryStatement: { exit(statement) {
+      const handler = statement.node.handler;
+      if (handler) {
+        if (handler.param && !t.isIdentifier(handler.param)) {
+          const caught = path.scope.generateUidIdentifier('otelc_caught');
+          const pattern = handler.param; handler.param = t.cloneNode(caught);
+          handler.body.body.unshift(attach(), t.variableDeclaration('let', [t.variableDeclarator(pattern, t.cloneNode(caught))]));
+        } else handler.body.body.unshift(attach());
+      }
+      if (statement.node.finalizer) statement.node.finalizer.body.unshift(attach());
+    } }
+  });
+  // Concise arrows have no body path to mutate during the traversal.
+  if (!t.isBlockStatement(path.node.body)) body = t.blockStatement([t.returnStatement(path.node.body)]);
+  const declarations = body.body.filter(statement => t.isFunctionDeclaration(statement));
+  if (declarations.length) body.body = [
+    ...declarations.map(declaration => t.variableDeclaration('var', [t.variableDeclarator(t.cloneNode(declaration.id), t.functionExpression(null, declaration.params, declaration.body, declaration.generator, declaration.async))])),
+    ...body.body.filter(statement => !t.isFunctionDeclaration(statement))
+  ];
+  const begin = t.variableDeclaration('const', [t.variableDeclarator(t.cloneNode(token), call(id === null ? 'enter' : 'enterAsync', id === null ? [t.stringLiteral(name)] : [t.stringLiteral(name), t.numericLiteral(id)]))]);
+  begin.leadingComments = [{ type: 'CommentBlock', value: MARKER }];
+  if (plan.annotations.inject_generated) begin.leadingComments.push({ type: 'CommentBlock', value: 'otelc.instrument' });
+  const finish = [attach(), t.expressionStatement(call('detach', [scope]))];
+  if (id === null) finish.push(t.expressionStatement(call('exit', [token, unwound])));
+  path.node.body = t.blockStatement([
+    begin,
+    t.variableDeclaration('let', [t.variableDeclarator(t.cloneNode(scope), call('attach', [token]))]),
+    t.variableDeclaration('const', [t.variableDeclarator(t.cloneNode(resume), t.arrowFunctionExpression([t.cloneNode(value)], t.blockStatement([attach(), t.returnStatement(t.cloneNode(value))])))]),
+    t.variableDeclaration('let', [t.variableDeclarator(t.cloneNode(unwound), t.booleanLiteral(false))]),
+    t.tryStatement(t.blockStatement(body.body), t.catchClause(t.cloneNode(error), t.blockStatement([t.expressionStatement(t.assignmentExpression('=', t.cloneNode(unwound), t.booleanLiteral(true))), t.throwStatement(t.cloneNode(error))])), t.blockStatement(finish))
+  ]);
+  path.node.body.directives = body.directives;
+  path.node.expression = false;
+}
 function localName(path) {
   const node = path.node;
   if (node.id?.name) return node.id.name;
@@ -75,12 +133,18 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
       const tag = plan.annotations.read_existing ? metadata ? metadata.annotation : annotation(path) : null;
       const selected = tag !== 'otelc.exclude' && selection.accepts(name, tag === 'otelc.instrument');
       inventory.push({ name, selected, line: metadata?.line ?? path.node.loc.start.line });
-      if (!selected || !runtime.register(name)) return;
+      if (!selected || (!plan.traces?.enabled && !runtime.register(name))) return;
       instrumented = true;
       path.traverse({ CallExpression(call) {
         if (t.isIdentifier(call.node.callee, { name: 'eval' }) && !call.scope.getBinding('eval')) throw call.buildCodeFrameError('direct eval in a selected function is unsupported');
       } });
       const body = t.isBlockStatement(path.node.body) ? path.node.body : t.blockStatement([t.returnStatement(path.node.body)]);
+      if (plan.traces?.enabled) {
+        const id = path.node.async ? nextAsyncSite++ : null;
+        if (id !== null) asyncSites.set(id, name);
+        instrumentTraceBody(path, body, helper, name, id, plan);
+        return;
+      }
       if (path.node.async && !path.node.generator) {
         const id = nextAsyncSite++;
         asyncSites.set(id, name);
@@ -120,7 +184,8 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
     const visit = node => {
       if (!node || typeof node !== 'object') return;
       if (node.async && !node.generator && t.isBlockStatement(node.body)) {
-        const call = node.body.body[0]?.expression;
+        const first = node.body.body[0];
+        const call = first?.expression ?? first?.declarations?.[0]?.init;
         const id = call?.arguments?.[1]?.value;
         if (t.isMemberExpression(call?.callee) && t.isIdentifier(call.callee.object, { name: helper.name }) && t.isIdentifier(call.callee.property, { name: 'enterAsync' }) && asyncSites.has(id)) {
           const token = ast.tokens.find(token => token.start >= (node.key?.end ?? node.id?.end ?? node.start) && token.end <= node.body.start && token.value === undefined && token.type.label === '(');

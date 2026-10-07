@@ -5,9 +5,11 @@ import { ProtobufMetricsSerializer } from '@opentelemetry/otlp-transformer';
 import { AggregationTemporality } from '@opentelemetry/sdk-metrics';
 import { ExportResultCode } from '@opentelemetry/core';
 
-export function headers(environment = process.env) {
+export function headers(environment = process.env, signal = 'OTEL_EXPORTER_OTLP_METRICS_HEADERS') {
   const result = {};
-  for (const item of (environment.OTEL_EXPORTER_OTLP_METRICS_HEADERS ?? environment.OTEL_EXPORTER_OTLP_HEADERS ?? '').split(',')) {
+  const source = environment[signal] ?? environment.OTEL_EXPORTER_OTLP_HEADERS ?? '';
+  if (Buffer.byteLength(source) > 8192) throw new Error('OTLP headers exceed 8192 bytes');
+  for (const item of source.split(',')) {
     if (!item.trim()) continue;
     const separator = item.indexOf('=');
     if (separator < 1) throw new Error('invalid OTLP headers');
@@ -31,12 +33,11 @@ export class Exporter {
   export(data, callback) {
     if (this.requests.size >= 1) { this.runtime.exportLoss++; callback({ code: ExportResultCode.FAILED }); return; }
     const signature = JSON.stringify(data.scopeMetrics.flatMap(scope => scope.metrics
-      .filter(metric => metric.descriptor.name !== 'otelc.export.dropped_batches')
       .map(metric => [metric.descriptor.name, metric.dataPoints.map(point => [point.attributes, typeof point.value === 'object' ? point.value.count : point.value])])));
-    if (signature === this.signature) { callback({ code: ExportResultCode.SUCCESS }); return; }
+    if (signature === this.signature) { this.finish(callback, true); return; }
     let payload;
     try { payload = ProtobufMetricsSerializer.serializeRequest(data); }
-    catch { this.runtime.exportLoss++; callback({ code: ExportResultCode.FAILED }); return; }
+    catch { this.runtime.exportLoss++; this.finish(callback, false); return; }
     const endpoint = new URL(this.runtime.plan.metrics_endpoint);
     let completed = false;
     let timer;
@@ -47,12 +48,12 @@ export class Exporter {
       this.requests.delete(request);
       if (success) this.signature = signature;
       if (!success) this.runtime.exportLoss++;
-      callback({ code: success ? ExportResultCode.SUCCESS : ExportResultCode.FAILED });
+      this.finish(callback, success);
     };
     const request = (endpoint.protocol === 'https:' ? https : http).request(endpoint, {
       method: 'POST', headers: { ...this.headers, 'Content-Type': 'application/x-protobuf', 'Content-Length': payload.length }
     }, response => {
-      if (response.statusCode !== 200) { response.resume(); finish(false); return; }
+      if (response.statusCode !== 200) { finish(false); response.destroy(); request.destroy(); return; }
       const chunks = [];
       let size = 0;
       response.on('data', chunk => {
@@ -72,6 +73,11 @@ export class Exporter {
     request.on('error', () => finish(false));
     timer = setTimeout(() => { request.destroy(); finish(false); }, this.runtime.timeoutMs);
     request.end(payload);
+  }
+  finish(callback, metricsSuccess) {
+    // The SDK metric reader caps exports at its interval. Trace transport has its own deadline.
+    this.runtime.traces?.flush().catch(() => { this.runtime.exportLoss++; });
+    callback({ code: metricsSuccess ? ExportResultCode.SUCCESS : ExportResultCode.FAILED });
   }
   async forceFlush() {}
   async shutdown() {

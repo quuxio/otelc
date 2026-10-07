@@ -1576,6 +1576,108 @@ fn java_method_spans_preserve_unedited_and_annotated_apps_and_original_class_fil
     }
 }
 
+#[test]
+fn javascript_spans_preserve_unedited_esm_and_annotated_commonjs_with_typed_otlp() {
+    for annotated in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let source = if annotated {
+            include_str!("../../../examples/apps/javascript_annotated.cjs")
+        } else {
+            include_str!("../../../examples/apps/javascript_trace_app.mjs")
+        };
+        let filename = if annotated { "trace.cjs" } else { "trace.mjs" };
+        std::fs::write(root.path().join(filename), source).unwrap();
+        let node = std::env::var("OTELC_NODE").unwrap_or_else(|_| "node".into());
+        let baseline = success(
+            Command::new(node)
+                .arg(filename)
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        let (metrics_port, metrics_listener) = receiver();
+        let (trace_port, trace_listener) = receiver();
+        let selection = if annotated { "[]" } else { "['trace.*']" };
+        std::fs::write(root.path().join("otelc.toml"), format!("schema_version=2\nlanguages=['javascript']\n[sources]\ninclude=['trace.*']\n[functions]\ninclude={selection}\n[annotations]\nread_existing=true\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[runtime]\nshutdown_timeout_ms=5000\n[export]\nendpoint='http://127.0.0.1:{metrics_port}'\ninterval_ms=60000\ntimeout_ms=2000\n")).unwrap();
+        let expected = if annotated { 1 } else { 11 };
+        let roots = if annotated { 1 } else { 5 };
+        let traces = start_trace_receiver(trace_listener, roots, Duration::from_secs(60));
+        let (stopped, metrics) = start_repeated_metric_receiver(metrics_listener);
+        let report = root.path().join("report.json");
+        let measured = success(
+            Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+                .args(["node", filename])
+                .current_dir(root.path())
+                .env_remove("OTELC_CONFIG")
+                .env_remove("OTELC_LANGUAGE")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                .env(
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    format!("http://127.0.0.1:{trace_port}/custom-traces"),
+                )
+                .env("OTELC_REPORT_PATH", &report)
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(measured.stdout, baseline.stdout);
+        assert_eq!(measured.stderr, baseline.stderr);
+        assert_eq!(
+            source.as_bytes(),
+            std::fs::read(root.path().join(filename)).unwrap()
+        );
+        stopped.store(true, std::sync::atomic::Ordering::Release);
+        let metrics = metrics.join().unwrap();
+        assert!(metrics
+            .iter()
+            .any(|request| counter(request, "otelc.function.calls", None) == expected));
+        let requests = traces.join().unwrap();
+        let spans: Vec<_> = requests
+            .iter()
+            .flat_map(|request| &request.resource_spans)
+            .flat_map(|resource| &resource.scope_spans)
+            .flat_map(|scope| &scope.spans)
+            .collect();
+        assert_eq!(spans.len(), expected as usize);
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.parent_span_id.is_empty())
+                .count(),
+            roots
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.status.as_ref().is_some_and(|status| status.code == 2))
+                .count(),
+            usize::from(!annotated)
+        );
+        assert!(spans
+            .iter()
+            .all(|span| span.end_time_unix_nano >= span.start_time_unix_nano));
+        for span in &spans {
+            assert_eq!(span.trace_id.len(), 16);
+            assert_eq!(span.span_id.len(), 8);
+            assert!(span.trace_id.iter().any(|byte| *byte != 0));
+            assert!(span.span_id.iter().any(|byte| *byte != 0));
+            assert!(
+                span.parent_span_id.is_empty()
+                    || spans.iter().any(|parent| parent.trace_id == span.trace_id
+                        && parent.span_id == span.parent_span_id)
+            );
+        }
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["function_calls"], expected);
+        assert_eq!(report["export_finished"], true);
+        assert_eq!(report["export_loss"], 0);
+        assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+        let doctor = success(cli(&["--language", "javascript", "doctor"], root.path()));
+        assert!(String::from_utf8_lossy(&doctor.stdout).contains("function spans"));
+    }
+}
+
 fn read_metric_request(stream: &mut std::net::TcpStream) -> ExportMetricsServiceRequest {
     let mut bytes = Vec::new();
     let mut byte = [0];

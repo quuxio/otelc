@@ -100,6 +100,8 @@ node-build:
 node-check: node-build
 	cargo build -p quux-otelc-cli --locked
 	npm test --prefix adapters/node
+	cd adapters/node && node --test --experimental-test-coverage --test-coverage-include='**/adapters/node/traces.mjs' --test-coverage-lines=80 tests/spans.test.mjs
+	cd adapters/node && node --test --experimental-test-coverage --test-coverage-include='**/adapters/node/trace-exporter.mjs' --test-coverage-lines=80 tests/spans.test.mjs
 
 java-build:
 	cd adapters/java && mvn -B -DskipTests package
