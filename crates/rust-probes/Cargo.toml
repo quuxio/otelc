@@ -15,6 +15,7 @@ opentelemetry_sdk.workspace = true
 opentelemetry-proto.workspace = true
 quux-otelc-config = { path = "../config" }
 quux-otelc-export = { path = "../export" }
+pin-project-lite.workspace = true
 [dev-dependencies]
 tempfile = "3"
 toml.workspace = true

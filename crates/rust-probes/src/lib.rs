@@ -4,6 +4,7 @@ pub mod policy;
 mod reader;
 #[cfg(test)]
 mod tests;
+mod traces;
 use anyhow::Result;
 use opentelemetry::{
     metrics::{Counter, Histogram, MeterProvider},
@@ -29,12 +30,15 @@ use std::{
 };
 
 struct Function {
+    name: Arc<str>,
     count: u64,
     unwinds: u64,
     cancellations: u64,
     attributes: Vec<KeyValue>,
 }
 struct Frame {
+    metrics: bool,
+    trace: Option<traces::Context>,
     name: String,
     started: Instant,
     was_panicking: bool,
@@ -45,6 +49,7 @@ struct Data {
     pending: HashMap<u64, Frame>,
     next: u64,
     losses: BTreeMap<&'static str, u64>,
+    traces: traces::Store,
 }
 struct State {
     data: Mutex<Data>,
@@ -56,6 +61,7 @@ struct State {
     finished: AtomicBool,
 }
 pub struct Runtime {
+    owner: u64,
     plan: policy::Plan,
     state: Arc<State>,
     provider: SdkMeterProvider,
@@ -66,9 +72,17 @@ pub struct Runtime {
     stop: mpsc::SyncSender<mpsc::SyncSender<()>>,
     control: Mutex<Option<control::Control>>,
 }
+static NEXT_OWNER: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: OnceLock<Arc<Runtime>> = OnceLock::new();
 impl Runtime {
     pub fn new(plan: policy::Plan) -> Result<Arc<Self>> {
+        plan.validate()?;
+        let owner = NEXT_OWNER
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("Rust runtime identity exhausted"))?
+            + 1;
         let mut data = Data::default();
         for reason in [
             "function_capacity",
@@ -99,14 +113,17 @@ impl Runtime {
                 .iter()
                 .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
         );
+        let resource = Resource::builder_empty()
+            .with_attributes(attributes)
+            .build();
+        let trace_resource =
+            opentelemetry_proto::transform::common::tonic::ResourceAttributesWithSchema::from(
+                &resource,
+            );
         let maximum = plan.runtime.max_functions + 1;
         let provider = SdkMeterProvider::builder()
             .with_reader(reader.clone())
-            .with_resource(
-                Resource::builder_empty()
-                    .with_attributes(attributes)
-                    .build(),
-            )
+            .with_resource(resource)
             .with_view(move |instrument| {
                 if instrument.name().starts_with("otelc.function.") {
                     Stream::builder()
@@ -154,7 +171,23 @@ impl Runtime {
                 observer.observe(lost.export_loss.load(Ordering::Relaxed), &[])
             })
             .build();
+        let lost = state.clone();
+        meter
+            .u64_observable_counter("otelc.trace.dropped_trees")
+            .with_callback(move |observer| {
+                if let Ok(data) = lost.data.lock() {
+                    for (reason, count) in &data.traces.losses {
+                        observer.observe(*count, &[KeyValue::new("reason", *reason)]);
+                    }
+                }
+            })
+            .build();
         let headers = quux_otelc_config::export_headers()?;
+        let trace_headers = if plan.traces.enabled {
+            quux_otelc_config::export_signal_headers("OTEL_EXPORTER_OTLP_TRACES_HEADERS")?
+        } else {
+            BTreeMap::new()
+        };
         let (stop, receiver) = mpsc::sync_channel::<mpsc::SyncSender<()>>(1);
         let worker_state = state.clone();
         let worker_plan = plan.clone();
@@ -205,6 +238,46 @@ impl Runtime {
                             worker_state.export_loss.fetch_add(1, Ordering::Relaxed);
                         }
                     }
+                    if let Some(export) = &worker_plan.trace_export {
+                        for _ in 0..worker_plan.export.max_queued_batches {
+                            let spans = worker_state
+                                .data
+                                .lock()
+                                .ok()
+                                .and_then(|mut data| data.traces.pop());
+                            let Some(spans) = spans else {
+                                break;
+                            };
+                            if spans.is_empty() {
+                                worker_state.revision.fetch_add(1, Ordering::Release);
+                                continue;
+                            }
+                            let payload = opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest {
+                                resource_spans: opentelemetry_proto::transform::trace::tonic::group_spans_by_resource_and_scope(spans, &trace_resource),
+                            }
+                            .encode_to_vec();
+                            let remaining = worker_state
+                                .deadline
+                                .lock()
+                                .ok()
+                                .and_then(|value| *value)
+                                .map(|end| end.saturating_duration_since(Instant::now()))
+                                .unwrap_or(Duration::from_millis(export.timeout_ms))
+                                .min(Duration::from_millis(export.timeout_ms));
+                            if payload.len() > 16 * 1024 * 1024
+                                || remaining.is_zero()
+                                || quux_otelc_export::send_traces(
+                                    &export.endpoint,
+                                    &trace_headers,
+                                    &payload,
+                                    remaining,
+                                )
+                                .is_err()
+                            {
+                                worker_state.export_loss.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
                     if let Some(reply) = finishing {
                         worker_state.finished.store(true, Ordering::Release);
                         let _ = reply.send(());
@@ -213,6 +286,7 @@ impl Runtime {
                 }
             })?;
         let runtime = Arc::new(Self {
+            owner,
             plan,
             state,
             provider,
@@ -241,61 +315,91 @@ impl Runtime {
         Ok(runtime)
     }
     pub fn enter(self: &Arc<Self>, name: &str) -> Guard {
-        let mut token = 0;
-        if self.state.enabled.load(Ordering::Acquire) && !self.state.closed.load(Ordering::Acquire)
-        {
-            if let Ok(mut data) = self.state.data.lock() {
-                if !self.state.enabled.load(Ordering::Acquire)
-                    || self.state.closed.load(Ordering::Acquire)
-                {
-                    return Guard {
-                        runtime: None,
-                        token: 0,
-                    };
-                }
-                if !data.functions.contains_key(name) {
-                    if data.functions.len() >= self.plan.runtime.max_functions || name.len() > 1024
-                    {
-                        self.lose(&mut data, "function_capacity");
-                    } else {
-                        data.functions.insert(
-                            name.into(),
-                            Function {
-                                count: 0,
-                                unwinds: 0,
-                                cancellations: 0,
-                                attributes: vec![KeyValue::new(
-                                    "code.function.name",
-                                    name.to_owned(),
-                                )],
-                            },
-                        );
-                    }
-                }
-                if data.functions.contains_key(name) {
-                    if data.pending.len() >= self.plan.runtime.max_active_calls {
-                        self.lose(&mut data, "active_call_capacity");
-                    } else if let Some(next) = data.next.checked_add(1) {
-                        data.next = next;
-                        token = next;
-                        data.pending.insert(
-                            next,
-                            Frame {
-                                name: name.into(),
-                                started: Instant::now(),
-                                was_panicking: std::thread::panicking(),
-                            },
-                        );
-                    } else {
-                        self.lose(&mut data, "invalid");
-                    }
-                }
+        let mut guard = Guard {
+            runtime: None,
+            token: 0,
+            context: None,
+        };
+        if self.state.closed.load(Ordering::Acquire) {
+            return guard;
+        }
+        let metrics = self.state.enabled.load(Ordering::Acquire);
+        if !metrics && !self.plan.traces.enabled {
+            return guard;
+        }
+        if let Ok(mut data) = self.state.data.lock() {
+            if self.state.closed.load(Ordering::Acquire) {
+                return guard;
             }
+            let metrics = metrics && self.state.enabled.load(Ordering::Acquire);
+            if !metrics && !self.plan.traces.enabled {
+                return guard;
+            }
+            let parent = traces::current(self.owner);
+            let reason = if name.len() > 1024
+                || !data.functions.contains_key(name)
+                    && data.functions.len() >= self.plan.runtime.max_functions
+            {
+                Some("function_capacity")
+            } else if data.pending.len() >= self.plan.runtime.max_active_calls {
+                Some("active_call_capacity")
+            } else if data.next == u64::MAX {
+                Some("invalid")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                self.lose(&mut data, reason);
+                if self.plan.traces.enabled {
+                    guard.context = Some(data.traces.reject(self.owner, parent, reason));
+                }
+                return guard;
+            }
+            data.functions.entry(name.into()).or_insert_with(|| {
+                let name = Arc::<str>::from(name);
+                Function {
+                    name: name.clone(),
+                    count: 0,
+                    unwinds: 0,
+                    cancellations: 0,
+                    attributes: vec![KeyValue::new("code.function.name", name)],
+                }
+            });
+            let started = Instant::now();
+            let trace_name = data.functions[name].name.clone();
+            let context = self.plan.traces.enabled.then(|| {
+                data.traces
+                    .enter(self.owner, parent, trace_name, started, &self.plan.traces)
+            });
+            guard.context = context;
+            if !metrics && context.is_some_and(|context| !context.sampled) {
+                return guard;
+            }
+            data.next += 1;
+            guard.token = data.next;
+            guard.context = context;
+            guard.runtime = Some(self.clone());
+            data.pending.insert(
+                guard.token,
+                Frame {
+                    name: name.into(),
+                    started,
+                    was_panicking: std::thread::panicking(),
+                    metrics,
+                    trace: context,
+                },
+            );
         }
-        Guard {
-            runtime: if token == 0 { None } else { Some(self.clone()) },
-            token,
-        }
+        guard
+    }
+    pub fn enter_scoped(self: &Arc<Self>, name: &str) -> SyncGuard {
+        let guard = self.enter(name);
+        let scope = self
+            .plan
+            .traces
+            .enabled
+            .then(|| traces::Scope::attach(guard.context));
+        SyncGuard { scope, guard }
     }
     fn lose(&self, data: &mut Data, reason: &'static str) {
         if let Some(count) = data.losses.get_mut(reason) {
@@ -314,25 +418,36 @@ impl Runtime {
             };
             let escaped = std::thread::panicking() && !frame.was_panicking;
             let cancelled = cancelled && !escaped;
-            function.count = function.count.saturating_add(1);
-            if escaped {
-                function.unwinds = function.unwinds.saturating_add(1);
+            if frame.metrics {
+                function.count = function.count.saturating_add(1);
+                if escaped {
+                    function.unwinds = function.unwinds.saturating_add(1);
+                }
+                if cancelled {
+                    function.cancellations = function.cancellations.saturating_add(1);
+                }
+                // Serialize recording with close: completed reports and the final
+                // SDK snapshot must agree even when another thread is shutting down.
+                self.calls.add(1, &function.attributes);
+                self.duration.record(
+                    ended.duration_since(frame.started).as_secs_f64(),
+                    &function.attributes,
+                );
+                if escaped {
+                    self.unwinds.add(1, &function.attributes);
+                }
+                if cancelled {
+                    self.cancellations.add(1, &function.attributes);
+                }
             }
-            if cancelled {
-                function.cancellations = function.cancellations.saturating_add(1);
-            }
-            // Serialize recording with close: completed reports and the final
-            // SDK snapshot must agree even when another thread is shutting down.
-            self.calls.add(1, &function.attributes);
-            self.duration.record(
-                ended.duration_since(frame.started).as_secs_f64(),
-                &function.attributes,
-            );
-            if escaped {
-                self.unwinds.add(1, &function.attributes);
-            }
-            if cancelled {
-                self.cancellations.add(1, &function.attributes);
+            if let Some(context) = frame.trace {
+                data.traces.finish(
+                    context,
+                    ended,
+                    escaped,
+                    cancelled,
+                    self.plan.export.max_queued_batches,
+                );
             }
             self.state.revision.fetch_add(1, Ordering::Release);
         }
@@ -341,6 +456,7 @@ impl Runtime {
         let mut values = BTreeMap::new();
         let mut losses = BTreeMap::new();
         let mut count = 0;
+        let mut traces = serde_json::Value::Null;
         if let Ok(data) = self.state.data.lock() {
             for (name, function) in &data.functions {
                 count += function.count;
@@ -349,10 +465,11 @@ impl Runtime {
                     serde_json::json!({"count":function.count,"unwinds":function.unwinds,"cancellations":function.cancellations}),
                 );
             }
+            traces = data.traces.report();
             losses = data.losses.clone();
             *losses.entry("incomplete").or_default() += data.pending.len() as u64;
         }
-        serde_json::json!({"schema_version":1,"language":"rust","pid":std::process::id(),"function_calls":count,"functions":values,"losses":losses,"export_loss":self.state.export_loss.load(Ordering::Relaxed),"export_finished":self.state.finished.load(Ordering::Acquire)})
+        serde_json::json!({"schema_version":1,"traces":traces,"language":"rust","pid":std::process::id(),"function_calls":count,"functions":values,"losses":losses,"export_loss":self.state.export_loss.load(Ordering::Relaxed),"export_finished":self.state.finished.load(Ordering::Acquire)})
     }
     pub fn close(&self) {
         if self.state.closed.swap(true, Ordering::AcqRel) {
@@ -371,6 +488,7 @@ impl Runtime {
             let pending = data.pending.len() as u64;
             *data.losses.entry("incomplete").or_default() += pending;
             data.pending.clear();
+            data.traces.shutdown();
         }
         self.state.revision.fetch_add(1, Ordering::Release);
         let (tx, rx) = mpsc::sync_channel(1);
@@ -390,6 +508,7 @@ impl Runtime {
     }
 }
 pub struct Guard {
+    context: Option<traces::Context>,
     runtime: Option<Arc<Runtime>>,
     token: u64,
 }
@@ -421,14 +540,26 @@ impl Drop for AsyncGuard {
 /// Observe one async body from its first poll through completion or drop.
 /// Awaiting the original future adds no scheduling or executor requirement.
 pub async fn observe_future<F: std::future::Future>(name: &str, future: F) -> F::Output {
-    observe_with_guard(enter(name), future).await
+    let guard = ACTIVE
+        .get()
+        .map(|runtime| runtime.enter(name))
+        .unwrap_or(Guard {
+            runtime: None,
+            token: 0,
+            context: None,
+        });
+    observe_with_guard(guard, future).await
 }
 async fn observe_with_guard<F: std::future::Future>(guard: Guard, future: F) -> F::Output {
     let mut guard = AsyncGuard {
         guard,
         completed: false,
     };
-    let output = future.await;
+    let output = traces::InContext {
+        future: Some(future),
+        context: guard.guard.context,
+    }
+    .await;
     guard.completed = true;
     output
 }
@@ -457,13 +588,28 @@ pub fn launch() -> Shutdown {
     }
     Shutdown
 }
-pub fn enter(name: &str) -> Guard {
+/// Synchronous guards restore thread context before recording completion.
+pub struct SyncGuard {
+    scope: Option<traces::Scope>,
+    guard: Guard,
+}
+impl Drop for SyncGuard {
+    fn drop(&mut self) {
+        self.scope.take();
+        self.guard.finish(false);
+    }
+}
+pub fn enter(name: &str) -> SyncGuard {
     if let Some(runtime) = ACTIVE.get() {
-        runtime.enter(name)
+        runtime.enter_scoped(name)
     } else {
-        Guard {
-            runtime: None,
-            token: 0,
+        SyncGuard {
+            scope: None,
+            guard: Guard {
+                runtime: None,
+                token: 0,
+                context: None,
+            },
         }
     }
 }

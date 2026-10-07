@@ -77,10 +77,16 @@ fn receiver() -> (u16, TcpListener) {
     (port, listener)
 }
 fn start_receiver(listener: TcpListener) -> thread::JoinHandle<ExportMetricsServiceRequest> {
+    start_receiver_timeout(listener, Duration::from_secs(10))
+}
+fn start_receiver_timeout(
+    listener: TcpListener,
+    timeout: Duration,
+) -> thread::JoinHandle<ExportMetricsServiceRequest> {
     // Start the telemetry deadline after compilation, which can be slow in CI.
     listener.set_nonblocking(true).unwrap();
     thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + timeout;
         let mut stream = loop {
             match listener.accept() {
                 Ok((s, _)) => break s,
@@ -1340,4 +1346,122 @@ fn invalid_annotation_metadata_and_control_responses_are_rejected() {
         handle.join().unwrap();
         std::fs::remove_file(path).unwrap();
     }
+}
+#[test]
+fn common_rust_spans_preserve_original_source_and_results_with_signal_specific_export() {
+    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    let source = include_str!("../../../examples/apps/rust_trace_app.rs");
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("trace.rs"), source).unwrap();
+    success(
+        Command::new("rustc")
+            .args(["--edition=2024", "trace.rs", "-o", "plain"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let baseline = success(Command::new(root.path().join("plain")).output().unwrap());
+    let (metrics_port, metrics_listener) = receiver();
+    let (trace_port, trace_listener) = receiver();
+    std::fs::write(root.path().join("otelc.toml"),format!("schema_version=2\nlanguages=['rust']\n[sources]\ninclude=['trace.rs']\n[functions]\ninclude=['*.recursive','*.parent','*.child','*.cancelled','*.escaping']\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[export]\nendpoint='http://127.0.0.1:{metrics_port}'\ninterval_ms=60000\n")).unwrap();
+    // The plain baseline is compiled first. Instrumented compilation follows.
+    // The Rust adapter compiles and launches in one command, so allow 60 seconds.
+    trace_listener.set_nonblocking(true).unwrap();
+    let trace_server = thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut requests = Vec::new();
+        for _ in 0..4 {
+            let mut stream = loop {
+                match trace_listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(std::time::Instant::now() < deadline, "missing trace export");
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut header = Vec::new();
+            let mut byte = [0];
+            while !header.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+                assert!(header.len() < 65536);
+            }
+            let header = String::from_utf8(header).unwrap();
+            assert!(header.starts_with("POST /custom-traces HTTP/1.1"));
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    line.to_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            requests.push(ExportTraceServiceRequest::decode(body.as_slice()).unwrap());
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+        requests
+    });
+    let metrics_server = start_receiver_timeout(metrics_listener, Duration::from_secs(60));
+    let report = root.path().join("report.json");
+    let instrumented = success(
+        Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+            .args(["rust", "trace.rs"])
+            .current_dir(root.path())
+            .env_remove("OTELC_CONFIG")
+            .env_remove("OTELC_LANGUAGE")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+            .env(
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                format!("http://127.0.0.1:{trace_port}/custom-traces"),
+            )
+            .env("OTELC_REPORT_PATH", &report)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(baseline.stdout, instrumented.stdout);
+    assert_eq!(baseline.stderr, instrumented.stderr);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("trace.rs")).unwrap(),
+        source
+    );
+    let metrics = metrics_server.join().unwrap();
+    assert_eq!(counter(&metrics, "otelc.function.calls", None), 8);
+    let requests = trace_server.join().unwrap();
+    let spans: Vec<_> = requests
+        .iter()
+        .flat_map(|request| &request.resource_spans)
+        .flat_map(|resource| &resource.scope_spans)
+        .flat_map(|scope| &scope.spans)
+        .collect();
+    assert_eq!(spans.len(), 8);
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.parent_span_id.is_empty())
+            .count(),
+        4
+    );
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.status.as_ref().is_some_and(|status| status.code == 2))
+            .count(),
+        2
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["export_loss"], 0);
+    assert_eq!(report["traces"]["completed_trees"], 4);
+    assert_eq!(report["traces"]["losses"], serde_json::json!({}));
 }

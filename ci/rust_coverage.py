@@ -103,6 +103,7 @@ def write_reports(environment):
         raise ValueError("Rust/native line coverage is below 80%")
     enforce_rust_adapter_coverage(report)
     enforce_node_observer_coverage(report)
+    enforce_rust_trace_coverage(report)
 
 
 def enforce_rust_adapter_coverage(report):
@@ -134,6 +135,21 @@ def enforce_node_observer_coverage(report):
     print(f"Node native observer line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
     if percentage < 80:
         raise ValueError("Node native observer line coverage is below 80%")
+
+
+def enforce_rust_trace_coverage(report):
+    """Keep the new whole-tree span store above its own 80% coverage floor."""
+    selected = []
+    include = False
+    for line in report.splitlines():
+        if line.startswith("SF:"):
+            include = line.endswith("/crates/rust-probes/src/traces.rs")
+        if include:
+            selected.append(line)
+    percentage = line_coverage("\n".join(selected))
+    print(f"Rust trace store line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
+    if percentage < 80:
+        raise ValueError("Rust trace store line coverage is below 80%")
 
 
 def main():

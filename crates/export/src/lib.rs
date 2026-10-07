@@ -231,6 +231,24 @@ pub fn send(
     payload: &[u8],
     timeout: Duration,
 ) -> Result<()> {
+    send_signal(endpoint, headers, payload, timeout, false)
+}
+/// Send an OTLP trace request and validate the trace-specific acknowledgement.
+pub fn send_traces(
+    endpoint: &str,
+    headers: &BTreeMap<String, String>,
+    payload: &[u8],
+    timeout: Duration,
+) -> Result<()> {
+    send_signal(endpoint, headers, payload, timeout, true)
+}
+fn send_signal(
+    endpoint: &str,
+    headers: &BTreeMap<String, String>,
+    payload: &[u8],
+    timeout: Duration,
+    traces: bool,
+) -> Result<()> {
     let deadline = std::time::Instant::now() + timeout;
     for attempt in 0..3 {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -260,12 +278,17 @@ pub fn send(
                         .limit(65536)
                         .read_to_vec()
                         .map_err(|_| anyhow::anyhow!("invalid OTLP response"))?;
-                    let decoded = ExportMetricsServiceResponse::decode(body.as_slice())
-                        .map_err(|_| anyhow::anyhow!("invalid OTLP protobuf response"))?;
-                    if decoded
-                        .partial_success
-                        .is_some_and(|p| p.rejected_data_points > 0)
-                    {
+                    let rejected = if traces {
+                        opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceResponse::decode(body.as_slice())
+                            .map_err(|_|anyhow::anyhow!("invalid OTLP trace protobuf response"))?
+                            .partial_success.is_some_and(|partial| partial.rejected_spans > 0)
+                    } else {
+                        ExportMetricsServiceResponse::decode(body.as_slice())
+                            .map_err(|_| anyhow::anyhow!("invalid OTLP protobuf response"))?
+                            .partial_success
+                            .is_some_and(|partial| partial.rejected_data_points > 0)
+                    };
+                    if rejected {
                         bail!("OTLP partially rejected the batch");
                     }
                     return Ok(());

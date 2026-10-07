@@ -377,7 +377,10 @@ pub fn validate_endpoint(endpoint: &str) -> Result<()> {
 }
 /// Read only supported OTLP header variables; never store headers in a manifest.
 pub fn export_headers() -> Result<BTreeMap<String, String>> {
-    let value = std::env::var("OTEL_EXPORTER_OTLP_METRICS_HEADERS")
+    export_signal_headers("OTEL_EXPORTER_OTLP_METRICS_HEADERS")
+}
+pub fn export_signal_headers(signal: &str) -> Result<BTreeMap<String, String>> {
+    let value = std::env::var(signal)
         .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_HEADERS"))
         .unwrap_or_default();
     if value.len() > 8192 {

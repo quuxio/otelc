@@ -62,6 +62,12 @@ config_section!(NativeLimits {
     queue_capacity: usize = 4096
 });
 config_section!(Adapter { backend: String = "auto".into(), native: Option<NativeLimits> = None });
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TraceExport {
+    pub endpoint: String,
+    pub protocol: String,
+    pub timeout_ms: u64,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -86,6 +92,8 @@ pub struct CommonConfig {
     pub export: Export,
     #[serde(skip)]
     metrics_endpoint_override: Option<String>,
+    #[serde(skip)]
+    trace_export_override: Option<TraceExport>,
     #[serde(default)]
     pub resource: Resource,
     #[serde(default)]
@@ -123,10 +131,21 @@ pub struct ResolvedConfig {
     pub export: Export,
     pub resource: Resource,
     pub metrics_endpoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_export: Option<TraceExport>,
     pub execution_available: bool,
     pub unavailable: Vec<String>,
 }
 impl CommonConfig {
+    fn trace_export(&self) -> TraceExport {
+        self.trace_export_override
+            .clone()
+            .unwrap_or_else(|| TraceExport {
+                endpoint: format!("{}/v1/traces", self.export.endpoint.trim_end_matches('/')),
+                protocol: self.export.protocol.clone(),
+                timeout_ms: self.export.timeout_ms,
+            })
+    }
     pub fn load(path: &Path, environment: bool) -> Result<Self> {
         let text = std::fs::read_to_string(path).context("read common configuration")?;
         Self::from_text(&text, environment)
@@ -142,6 +161,23 @@ impl CommonConfig {
         Ok(config)
     }
     pub fn apply_environment(&mut self, get: impl Fn(&str) -> Option<String>) -> Result<()> {
+        if self.traces.enabled {
+            let base =
+                get("OTEL_EXPORTER_OTLP_ENDPOINT").unwrap_or_else(|| self.export.endpoint.clone());
+            self.trace_export_override = Some(TraceExport {
+                endpoint: get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+                    .unwrap_or_else(|| format!("{}/v1/traces", base.trim_end_matches('/'))),
+                protocol: get("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")
+                    .or_else(|| get("OTEL_EXPORTER_OTLP_PROTOCOL"))
+                    .unwrap_or_else(|| self.export.protocol.clone()),
+                timeout_ms: match get("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT")
+                    .or_else(|| get("OTEL_EXPORTER_OTLP_TIMEOUT"))
+                {
+                    Some(value) => value.parse().context("invalid trace export timeout")?,
+                    None => self.export.timeout_ms,
+                },
+            });
+        }
         let mut shared = self.native_template(NativeLimits::default());
         shared.apply_environment(&get)?;
         self.metrics_endpoint_override = get("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT");
@@ -216,6 +252,24 @@ impl CommonConfig {
         self.native_template(NativeLimits::default()).validate()?;
         if let Some(endpoint) = &self.metrics_endpoint_override {
             validate_endpoint(endpoint)?;
+        }
+        if self.traces.enabled {
+            let trace = self.trace_export();
+            validate_endpoint(&trace.endpoint)?;
+            if trace.protocol != "http/protobuf"
+                || trace.timeout_ms == 0
+                || trace.timeout_ms > 60000
+            {
+                bail!("trace export requires http/protobuf and a timeout of 1..60000 ms");
+            }
+            if self
+                .traces
+                .max_active_traces
+                .checked_mul(self.traces.max_spans_per_trace)
+                .is_none_or(|slots| slots > 1048576)
+            {
+                bail!("trace record capacity exceeds 1048576 spans");
+            }
         }
         for (language, adapter) in &self.adapters {
             if !self.languages.contains(language) {
@@ -321,9 +375,6 @@ impl CommonConfig {
             if self.lifetimes.enabled {
                 unavailable.push("automatic Rust lifetimes are not implemented".into());
             }
-            if self.traces.enabled {
-                unavailable.push("Rust span export is not implemented".into());
-            }
         } else {
             if backend == "source" {
                 unavailable.push("source-processing backend is not implemented".into());
@@ -370,6 +421,7 @@ impl CommonConfig {
             metrics_endpoint: self.metrics_endpoint_override.clone().unwrap_or_else(|| {
                 format!("{}/v1/metrics", self.export.endpoint.trim_end_matches('/'))
             }),
+            trace_export: self.traces.enabled.then(|| self.trace_export()),
             execution_available: unavailable.is_empty(),
             unavailable,
         })

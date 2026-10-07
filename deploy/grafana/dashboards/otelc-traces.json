@@ -1,0 +1,129 @@
+{
+  "uid": "otelc-traces",
+  "title": "otelc function traces",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "tags": [
+    "otelc"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "traceId",
+        "label": "Trace ID",
+        "type": "textbox",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [
+          {
+            "text": "",
+            "value": "",
+            "selected": true
+          }
+        ],
+        "hide": 0
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "textbox",
+        "current": {
+          "text": "otelc-rust-traces",
+          "value": "otelc-rust-traces"
+        },
+        "options": [
+          {
+            "text": "otelc-rust-traces",
+            "value": "otelc-rust-traces",
+            "selected": true
+          }
+        ],
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Trace search \u2014 click a trace name to view it",
+      "type": "table",
+      "datasource": {
+        "type": "tempo",
+        "uid": "otelc-tempo"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "otelc-tempo"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"${service}\" }",
+          "limit": 20,
+          "tableType": "traces"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "links": [
+            {
+              "title": "Open this trace",
+              "url": "/d/otelc-traces?var-traceId=${__data.fields.traceID}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 2,
+      "title": "Selected trace",
+      "type": "traces",
+      "datasource": {
+        "type": "tempo",
+        "uid": "otelc-tempo"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "otelc-tempo"
+          },
+          "queryType": "traceql",
+          "query": "${traceId}"
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    }
+  ]
+}
