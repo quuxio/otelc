@@ -1,13 +1,13 @@
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 MARKDOWNLINT ?= $(if $(wildcard ci/markdownlint/node_modules/.bin/markdownlint),ci/markdownlint/node_modules/.bin/markdownlint,markdownlint)
 SONAR_SCANNER ?= sonar-scanner
-STATICCHECK ?= staticcheck
-GOVULNCHECK ?= govulncheck
+STATICCHECK ?= $(CURDIR)/build/go-tools/staticcheck
+GOVULNCHECK ?= $(CURDIR)/build/go-tools/govulncheck
 
-.PHONY: help setup lint test check build examples benchmark benchmark-live benchmark-language python-check node-check java-build java-check go-build go-check developer-examples stack-up stack-down rust-check model-check rust-coverage sonar-policy scan
+.PHONY: help setup lint test check build examples benchmark benchmark-live benchmark-language python-check node-check java-build java-check go-build go-tools go-check developer-examples stack-up stack-down rust-check model-check rust-coverage sonar-policy scan
 
 help:
-	@printf '%s\n' 'setup         Install local validation dependencies' 'lint          Lint all Markdown' 'test          Run offline tests and enforce 90% coverage' 'check         Run all local quality and coverage gates' 'sonar-policy  Verify the remote Previous version policy' 'scan          Analyze a clean commit and wait for its quality gate' 'build         Build the local Rust CLI and native runtime' 'examples      Build the instrumented C and C++ example apps' 'benchmark     Paired plain/probes-disabled/metrics benchmark' 'benchmark-live Same-process metrics-off/on latency comparison' 'developer-examples Build unchanged/annotated/live developer examples' 'python-check  Validate Python adapter with 80% product coverage' 'node-check    Validate Node adapter with 80% product coverage' 'java-check    Build Java agent and enforce 80% product coverage' 'go-check      Validate Go adapter, vulnerabilities and 80% coverage' 'benchmark-language Live metrics comparison for LANGUAGE=python|javascript|typescript|java|go|rust' 'stack-up      Start the local Docker metrics stack' 'stack-down    Stop/remove stack containers, keep data' 'rust-check    Rust format, Clippy, unit and native integration tests' 'model-check   Model-check runtime queue publication with Loom' 'rust-coverage Enforce 80% Rust and native-runtime line coverage'
+	@printf '%s\n' 'setup         Install local validation dependencies' 'lint          Lint all Markdown' 'test          Run offline tests and enforce 90% coverage' 'check         Run all local quality and coverage gates' 'sonar-policy  Verify the remote Previous version policy' 'scan          Analyze a clean commit and wait for its quality gate' 'build         Build the local Rust CLI and native runtime' 'examples      Build the instrumented C and C++ example apps' 'benchmark     Paired plain/probes-disabled/metrics benchmark' 'benchmark-live Same-process metrics-off/on latency comparison' 'developer-examples Build unchanged/annotated/live developer examples' 'python-check  Validate Python adapter with 80% product coverage' 'node-check    Validate Node adapter with 80% product coverage' 'java-check    Build Java agent and enforce 80% product coverage' 'go-tools      Build locked Go analysers' 'go-check      Validate Go adapter, vulnerabilities and 80% coverage' 'benchmark-language Live metrics comparison for LANGUAGE=python|javascript|typescript|java|go|rust' 'stack-up      Start the local Docker metrics stack' 'stack-down    Stop/remove stack containers, keep data' 'rust-check    Rust format, Clippy, unit and native integration tests' 'model-check   Model-check runtime queue publication with Loom' 'rust-coverage Enforce 80% Rust and native-runtime line coverage'
 
 setup:
 	python3 -m venv .venv
@@ -100,7 +100,12 @@ go-build:
 	cd adapters/go && go build ./runtime
 	cd adapters/go && go build -o build/otelc-go ./cmd/otelc-go
 
-go-check: go-build
+go-tools:
+	mkdir -p build/go-tools
+	cd ci/go-tools && go build -mod=readonly -o ../../build/go-tools/staticcheck honnef.co/go/tools/cmd/staticcheck
+	cd ci/go-tools && go build -mod=readonly -o ../../build/go-tools/govulncheck golang.org/x/vuln/cmd/govulncheck
+
+go-check: go-build go-tools
 	cd adapters/go && test -z "$$(gofmt -l policy runtime adapter cmd)"
 	cd adapters/go && go vet ./...
 	cd adapters/go && $(STATICCHECK) ./...

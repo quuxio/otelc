@@ -32,6 +32,44 @@ import org.objectweb.asm.tree.ClassNode;
 
 class AgentTest {
   @TempDir Path directory;
+  @Test void disabledAdmissionDoesNotWaitForTheRuntimeMonitor() throws Exception {
+    try (var receiver = new Receiver(); var runtime = new Telemetry(new Plan(policy(receiver.endpoint())))) {
+      runtime.enabled = false;
+      var executor = Executors.newSingleThreadExecutor();
+      try {
+        var field = Telemetry.class.getDeclaredField("observations"); field.setAccessible(true);
+        var lock = (java.util.concurrent.locks.ReentrantLock)field.get(runtime); lock.lock();
+        try {
+          assertEquals(0L, executor.submit(() -> runtime.enter("disabled")).get(100, java.util.concurrent.TimeUnit.MILLISECONDS));
+        } finally { lock.unlock(); }
+      } finally { executor.shutdownNow(); }
+    }
+  }
+  @Test void classOnlyApplicationsUseLogicalSourcePathsAndKeepExclusions() throws Exception {
+    byte[] original = compile("BinaryOnly", "package example; public class BinaryOnly { public static int selected(){return 9;} }");
+    Files.delete(directory.resolve("BinaryOnly.java"));
+    try (var receiver = new Receiver(); var runtime = new Telemetry(new Plan(policy(receiver.endpoint())))) {
+      var sources = new Sources(directory, runtime.plan);
+      assertEquals("example/BinaryOnly.java", sources.name("example/BinaryOnly", "BinaryOnly.java"));
+      assertEquals("example/BinaryOnly.java", sources.name("example/BinaryOnly$Nested", null));
+      Probes.runtime = runtime;
+      var loader = new Loader();
+      var weaver = new Weaver(runtime.plan, sources, runtime, null);
+      byte[] changed = weaver.transform(null, loader, "example/BinaryOnly", null, null, original);
+      assertNotNull(changed);
+      assertEquals(9, loader.define(changed).getMethod("selected").invoke(null));
+      assertEquals(1, runtime.count());
+      var node = new ClassNode(); new ClassReader(original).accept(node, 0); node.sourceFile = null;
+      assertTrue(weaver.inventory(node).stream().anyMatch(Weaver.Function::selected));
+      var data = policy(receiver.endpoint()); data.getAsJsonObject("source_matchers").getAsJsonArray("exclude").add("(?-u)example/.*");
+      assertNull(new Sources(directory, new Plan(data)).name("example/BinaryOnly", "BinaryOnly.java"));
+      Files.writeString(directory.resolve("BinaryOnly.java"), "package example; public class BinaryOnly {} ");
+      var local = policy(receiver.endpoint()); local.getAsJsonObject("source_matchers").getAsJsonArray("exclude").add("(?-u)BinaryOnly\\.java");
+      var indexed = new Sources(directory, new Plan(local));
+      assertNull(indexed.name("example/BinaryOnly", "BinaryOnly.java"));
+      assertEquals("other/BinaryOnly.java", indexed.name("other/BinaryOnly", "BinaryOnly.java"));
+    } finally { Probes.runtime = null; }
+  }
   static JsonObject policy(String endpoint) {
     return JsonParser.parseString("""
       {"language":"java","execution_available":true,
@@ -131,7 +169,7 @@ class AgentTest {
     assertEquals(List.of("example.Annotated.selected()"), weaver.inventory(node).stream().filter(Weaver.Function::selected).map(Weaver.Function::name).toList());
     data.getAsJsonObject("annotations").addProperty("inject_generated", true); assertNotNull(weaver.weave(original, new Loader()));
     data.getAsJsonObject("annotations").addProperty("read_existing", false); assertNull(weaver.weave(original, new Loader()));
-    assertNull(sources.name("example/Missing", "Missing.java")); assertNull(sources.name("example/Annotated", null));
+    assertEquals("example/Missing.java", sources.name("example/Missing", "Missing.java")); assertEquals("Annotated.java", sources.name("example/Annotated", null));
   }
   @Test void liveControlCapacityAndAdmittedCallsRemainBounded() throws Exception {
     Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"));
@@ -206,7 +244,7 @@ class AgentTest {
       assertTrue(events.contains("addTransformer")); assertNotNull(Probes.runtime);
       assertThrows(IllegalArgumentException.class, () -> Agent.premain(planFile.toString(), instrumentation));
       Probes.runtime.close(); Probes.runtime = null;
-      var empty = new Sources(directory.resolve("classes"), runtime.plan); assertNull(empty.name("example/Entry", "Entry.java"));
+      var empty = new Sources(directory.resolve("classes"), runtime.plan); assertEquals("example/Entry.java", empty.name("example/Entry", "Entry.java"));
       Files.createDirectories(directory.resolve("duplicate")); Files.copy(directory.resolve("Entry.java"), directory.resolve("duplicate/Entry.java"));
       assertThrows(IllegalArgumentException.class, () -> new Sources(directory, runtime.plan));
     } finally { if (Probes.runtime != null) { Probes.runtime.close(); Probes.runtime = null; } }

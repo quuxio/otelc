@@ -238,7 +238,9 @@ impl Runtime {
         if self.state.enabled.load(Ordering::Acquire) && !self.state.closed.load(Ordering::Acquire)
         {
             if let Ok(mut data) = self.state.data.lock() {
-                if self.state.closed.load(Ordering::Acquire) {
+                if !self.state.enabled.load(Ordering::Acquire)
+                    || self.state.closed.load(Ordering::Acquire)
+                {
                     return Guard {
                         runtime: None,
                         token: 0,

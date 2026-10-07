@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 
 /** Bounded pending observations and language-native SDK metrics. */
 public final class Telemetry implements AutoCloseable {
@@ -32,6 +33,8 @@ public final class Telemetry implements AutoCloseable {
   final ConcurrentHashMap<Long, Frame> pending = new ConcurrentHashMap<>();
   private final AtomicLong next = new AtomicLong();
   private final AtomicBoolean closed = new AtomicBoolean();
+  private final ReentrantLock observations = new ReentrantLock();
+  private volatile boolean discardCompletions;
   volatile boolean enabled;
   private volatile boolean exportFinished;
   private final Exporter exporter;
@@ -71,27 +74,40 @@ public final class Telemetry implements AutoCloseable {
     meter.counterBuilder("otelc.runtime.dropped_observations").setUnit("{observation}").buildWithCallback(observer -> losses.forEach((reason, count) -> observer.record(count.get(), Attributes.builder().put("reason", reason).build())));
     meter.counterBuilder("otelc.export.dropped_batches").setUnit("{batch}").buildWithCallback(observer -> observer.record(exportLoss.get()));
   }
-  synchronized boolean register(String name) {
-    if (functions.containsKey(name)) return true;
-    if (functions.size() >= plan.integer("runtime", "max_functions") || name.getBytes(StandardCharsets.UTF_8).length > 1024) { lose("function_capacity"); return false; }
-    functions.put(name, new Function(name)); return true;
+  boolean register(String name) {
+    observations.lock();
+    try {
+      if (functions.containsKey(name)) return true;
+      if (functions.size() >= plan.integer("runtime", "max_functions") || name.getBytes(StandardCharsets.UTF_8).length > 1024) { lose("function_capacity"); return false; }
+      functions.put(name, new Function(name)); return true;
+    } finally { observations.unlock(); }
   }
-  synchronized long enter(String name) {
+  long enter(String name) {
     if (!enabled || closed.get()) return 0;
-    if (!register(name)) return 0;
-    if (pending.size() >= plan.integer("runtime", "max_active_calls")) { lose("active_call_capacity"); return 0; }
-    long token = next.incrementAndGet();
-    if (token <= 0) { lose("invalid"); return 0; }
-    pending.put(token, new Frame(name, System.nanoTime())); return token;
+    observations.lock();
+    try {
+      if (!enabled || closed.get()) return 0;
+      if (!register(name)) return 0;
+      if (pending.size() >= plan.integer("runtime", "max_active_calls")) { lose("active_call_capacity"); return 0; }
+      long token = next.incrementAndGet();
+      if (token <= 0) { lose("invalid"); return 0; }
+      pending.put(token, new Frame(name, System.nanoTime())); return token;
+    } finally { observations.unlock(); }
   }
   void exit(long token, boolean escaped) {
     if (token == 0) return;
     long ended = System.nanoTime();
-    var frame = pending.remove(token); if (frame == null) return;
-    var function = functions.get(frame.name()); function.calls.incrementAndGet();
-    if (escaped) function.unwinds.incrementAndGet();
-    calls.add(1, function.attributes); duration.record((ended - frame.started()) / 1e9, function.attributes);
-    if (escaped) unwinds.add(1, function.attributes);
+    observations.lock();
+    try {
+      var frame = pending.get(token); if (frame == null) return;
+      var function = functions.get(frame.name());
+      calls.add(1, function.attributes); duration.record((ended - frame.started()) / 1e9, function.attributes);
+      if (escaped) unwinds.add(1, function.attributes);
+      pending.remove(token);
+      if (discardCompletions) { lose("incomplete"); return; }
+      function.calls.incrementAndGet();
+      if (escaped) function.unwinds.incrementAndGet();
+    } finally { observations.unlock(); }
   }
   void lose(String reason) { losses.get(reason).incrementAndGet(); }
   void bindControl() throws IOException { if (plan.controlSocket() != null) control = new Control(this); }
@@ -106,14 +122,20 @@ public final class Telemetry implements AutoCloseable {
   @Override public void close() {
     if (!closed.compareAndSet(false, true)) return;
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(plan.integer("runtime", "shutdown_timeout_ms"));
-    losses.get("incomplete").addAndGet(pending.size()); pending.clear();
     try {
       if (control != null) control.close();
+      if (!observations.tryLock(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS)) {
+        discardCompletions = true; exportLoss.incrementAndGet(); exporter.shutdown();
+        provider.shutdown().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+        return;
+      }
+      try { losses.get("incomplete").addAndGet(pending.size()); pending.clear(); }
+      finally { observations.unlock(); }
       var flushed = provider.forceFlush().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
       var stopped = provider.shutdown().join(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
       exportFinished = flushed.isDone() && stopped.isDone();
       if (!exportFinished) { exportLoss.incrementAndGet(); exporter.shutdown(); }
     } catch (Exception ignored) { exportLoss.incrementAndGet(); exporter.shutdown(); }
-    try { report(); } catch (IOException ignored) { /* Reporting must not change application exit. */ }
+    finally { try { report(); } catch (IOException ignored) { /* Reporting must not change application exit. */ } }
   }
 }

@@ -8,6 +8,14 @@ from pathlib import Path
 from .policy import Selection, source_name
 
 
+def function_identity(source: str, code) -> str:
+    display = source.removesuffix(".py").replace("/", ".") + "." + code.co_qualname
+    if code.co_name.startswith("<"):
+        column = next((position[2] for position in code.co_positions() if position[2]), 0)
+        display += f"@{code.co_firstlineno}:{column + 1}"
+    return display
+
+
 def annotations(path: Path) -> dict[int, str]:
     with tokenize.open(path) as source:
         text = source.read()
@@ -57,10 +65,12 @@ class Monitor:
         tag = self.tags.get(str(Path(code.co_filename).resolve()), {}).get(code.co_firstlineno)
         if tag == "otelc.exclude":
             return None
-        display = name.removesuffix(".py").replace("/", ".") + "." + code.co_qualname
+        display = function_identity(name, code)
         return display if self.functions.accepts(display, tag == "otelc.instrument") else None
 
     def start(self, code, _):
+        if not self.runtime.enabled or self.runtime.closed:
+            return
         name = self.names.get(code)
         if name is None:
             name = self.display_name(code)
@@ -74,7 +84,10 @@ class Monitor:
 
     def returned(self, code, _, value):
         if code not in self.names:
-            return sys.monitoring.DISABLE
+            # A selected frame may have started while monitoring was off.
+            # Disabling its return location would also silence later admitted
+            # invocations of that same code after live enable.
+            return sys.monitoring.DISABLE if self.runtime.enabled and self.display_name(code) is None else None
         self.runtime.exit(id(sys._getframe(1)), False)
 
     def unwound(self, code, _, exception):
@@ -94,7 +107,16 @@ class Monitor:
         monitoring.register_callback(self.tool, events.PY_START, self.start)
         monitoring.register_callback(self.tool, events.PY_RETURN, self.returned)
         monitoring.register_callback(self.tool, events.PY_UNWIND, self.unwound)
-        monitoring.set_events(self.tool, events.PY_START | events.PY_RETURN | events.PY_UNWIND)
+        self.runtime.monitor = self
+        self.refresh()
+
+    def refresh(self):
+        if self.tool is None:
+            return
+        events = sys.monitoring.events
+        mask = events.PY_START | events.PY_RETURN | events.PY_UNWIND if self.runtime.enabled else (
+            events.PY_RETURN | events.PY_UNWIND if self.runtime.pending else 0)
+        sys.monitoring.set_events(self.tool, mask)
 
     def close(self):
         if self.tool is None:
@@ -105,3 +127,4 @@ class Monitor:
             monitoring.register_callback(self.tool, event, None)
         monitoring.free_tool_id(self.tool)
         self.tool = None
+        self.runtime.monitor = None

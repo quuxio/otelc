@@ -76,8 +76,8 @@ class Exporter(MetricExporter):
             result = MetricExportResult.FAILURE
         if result != MetricExportResult.SUCCESS:
             runtime.export_loss += 1
-        # Cumulative state will be retried only after another observation/control change.
-        self.signature = signature
+        else:
+            self.signature = signature
         return result
 
     def force_flush(self, timeout_millis=10000):
@@ -90,6 +90,7 @@ class Exporter(MetricExporter):
 class Runtime:
     def __init__(self, plan: dict, delegate=None):
         self.closed = False
+        self.monitor = None
         self.report = None
         self.plan = plan
         self.enabled = plan["metrics"]["enabled"]
@@ -127,12 +128,24 @@ class Runtime:
         with self.lock:
             return [Observation(value, {"reason": key}) for key, value in self.loss.items()]
 
+    @property
+    def enabled(self):
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value):
+        self._enabled = value
+        if self.monitor is not None:
+            self.monitor.refresh()
+
     def enter(self, key: int, name: str):
+        if not self.enabled or self.closed:
+            return
         with self.lock:
+            if not self.enabled or self.closed:
+                return
             if self.pending.pop(key, None) is not None:
                 self.loss["incomplete"] += 1
-            if not self.enabled:
-                return
             if name not in self.calls:
                 if len(self.calls) >= self.plan["runtime"]["max_functions"]:
                     self.loss["function_capacity"] += 1
@@ -160,6 +173,8 @@ class Runtime:
                     self.unwinds.add(1, item["attributes"])
             except Exception:
                 self.loss["invalid"] += 1
+            if not self.enabled and not self.pending and self.monitor is not None:
+                self.monitor.refresh()
 
     def bind_control(self, value: str):
         path = Path(value)

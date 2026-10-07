@@ -98,7 +98,7 @@ final class Weaver implements ClassFileTransformer {
     reader.accept(visitor, ClassReader.EXPAND_FRAMES); return writer.toByteArray();
   }
   @Override public byte[] transform(Module module, ClassLoader loader, String name, Class<?> redefining, ProtectionDomain domain, byte[] original) {
-    if (name == null || name.startsWith("quux/otelc/java/") || name.startsWith("quux/otelc/shaded/") || redefining != null) return null;
+    if (name == null || loader == null || loader == ClassLoader.getPlatformClassLoader() || name.startsWith("quux/otelc/java/") || name.startsWith("quux/otelc/shaded/") || redefining != null) return null;
     try {
       var reader = new ClassReader(original); var node = new ClassNode(); reader.accept(node, ClassReader.SKIP_CODE);
       if (sources.name(node.name, node.sourceFile) == null || inventory(node).stream().noneMatch(Function::selected)) return null;

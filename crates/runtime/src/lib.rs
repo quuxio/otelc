@@ -53,6 +53,8 @@ struct State {
     completed: AtomicU64,
     control_thread: std::sync::Mutex<Option<control::Thread>>,
     writers: AtomicUsize,
+    active_calls: AtomicUsize,
+    active_capacity: AtomicU64,
     admission: AtomicU64,
     stack: AtomicU64,
     queue_loss: AtomicU64,
@@ -160,6 +162,8 @@ fn initialize() -> Result<()> {
             slots,
             running: AtomicBool::new(false),
             writers: AtomicUsize::new(0),
+            active_calls: AtomicUsize::new(0),
+            active_capacity: AtomicU64::new(0),
             admission: AtomicU64::new(0),
             stack: AtomicU64::new(0),
             queue_loss: AtomicU64::new(0),
@@ -290,6 +294,9 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
                 for _ in 0..producer.depth {
                     increment(&state.incomplete);
                 }
+                state
+                    .active_calls
+                    .fetch_sub(producer.depth, Ordering::AcqRel);
                 producer.depth = 0;
                 producer.suppressed = 0;
                 slot.state.store(0, Ordering::Release);
@@ -309,9 +316,13 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
             }
         }
         if last.elapsed() >= Duration::from_millis(state.config.export.interval_ms) || stopping {
-            if state.metrics_enabled.load(Ordering::Acquire) || dirty {
+            if state.metrics_enabled.load(Ordering::Acquire) || dirty || stopping {
                 let losses = [
                     ("thread_admission", state.admission.load(Ordering::Relaxed)),
+                    (
+                        "active_call_capacity",
+                        state.active_capacity.load(Ordering::Relaxed),
+                    ),
                     (
                         "object_capacity",
                         state.object_capacity.load(Ordering::Relaxed),
@@ -406,7 +417,7 @@ pub extern "C" fn otelc_shutdown() {
     }
     if let Some(path) = &state.report_path {
         let summary = state.summary.get();
-        let report = serde_json::json!({"drained": summary.is_some(), "export_finished": export_finished, "function_calls": summary.map(|s|s.0), "object_lifetimes":summary.map(|s|s.1), "losses": { "thread_admission":state.admission.load(Ordering::Relaxed), "stack":state.stack.load(Ordering::Relaxed),"queue":state.queue_loss.load(Ordering::Relaxed),"invalid_exit":state.invalid.load(Ordering::Relaxed),"incomplete":state.incomplete.load(Ordering::Relaxed),"object_capacity":state.object_capacity.load(Ordering::Relaxed),"object_incomplete":state.objects.active()},"export_dropped_batches":state.export_loss.load(Ordering::Relaxed)});
+        let report = serde_json::json!({"drained": summary.is_some(), "export_finished": export_finished, "function_calls": summary.map(|s|s.0), "object_lifetimes":summary.map(|s|s.1), "losses": { "thread_admission":state.admission.load(Ordering::Relaxed), "active_call_capacity":state.active_capacity.load(Ordering::Relaxed), "stack":state.stack.load(Ordering::Relaxed),"queue":state.queue_loss.load(Ordering::Relaxed),"invalid_exit":state.invalid.load(Ordering::Relaxed),"incomplete":state.incomplete.load(Ordering::Relaxed),"object_capacity":state.object_capacity.load(Ordering::Relaxed),"object_incomplete":state.objects.active()},"export_dropped_batches":state.export_loss.load(Ordering::Relaxed)});
         if serde_json::to_vec(&report)
             .ok()
             .and_then(|bytes| std::fs::write(path, bytes).ok())
@@ -458,6 +469,21 @@ fn writer() -> Option<Writer<'static>> {
     }
     Some(Writer(state))
 }
+fn reserve_call(count: &AtomicUsize, maximum: usize) -> bool {
+    count
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+            (value < maximum).then_some(value + 1)
+        })
+        .is_ok()
+}
+fn admit_call(state: &State) -> bool {
+    if reserve_call(&state.active_calls, state.config.runtime.max_active_calls) {
+        true
+    } else {
+        increment(&state.active_capacity);
+        false
+    }
+}
 #[no_mangle]
 pub extern "C" fn otelc_record_enter(index: isize, address: usize) {
     let Some(writer) = writer() else { return };
@@ -475,6 +501,10 @@ pub extern "C" fn otelc_record_enter(index: isize, address: usize) {
     if producer.depth == producer.frames.len() || producer.suppressed > 0 {
         producer.suppressed = producer.suppressed.saturating_add(1);
         increment(&state.stack);
+        return;
+    }
+    if !admit_call(state) {
+        producer.suppressed = 1;
         return;
     }
     producer.frames[producer.depth] = Frame {
@@ -517,7 +547,11 @@ pub extern "C" fn otelc_record_exit(index: isize, address: usize) {
     }
     let frame = producer.frames[producer.depth - 1];
     producer.depth -= 1;
+    state.active_calls.fetch_sub(1, Ordering::AcqRel);
     if frame.address != address as u64 {
+        state
+            .active_calls
+            .fetch_sub(producer.depth, Ordering::AcqRel);
         producer.depth = 0;
         increment(&state.invalid);
         return;
@@ -579,6 +613,9 @@ pub extern "C" fn otelc_record_token_enter(index: isize, address: usize) -> u64 
         increment(&state.stack);
         return 0;
     }
+    if !admit_call(state) {
+        return 0;
+    }
     let token = producer.next_token;
     producer.next_token += 1;
     producer.frames[producer.depth] = Frame {
@@ -608,7 +645,11 @@ pub extern "C" fn otelc_record_token_exit(index: isize, token: u64, kind: u32) {
     }
     let frame = producer.frames[producer.depth - 1];
     producer.depth -= 1;
+    state.active_calls.fetch_sub(1, Ordering::AcqRel);
     if frame.token != token || kind > 1 {
+        state
+            .active_calls
+            .fetch_sub(producer.depth, Ordering::AcqRel);
         producer.depth = 0;
         increment(&state.invalid);
         return;

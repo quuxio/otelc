@@ -5,7 +5,7 @@ import runpy
 import sys
 from pathlib import Path
 
-from quux_otelc_python.monitor import Monitor
+from quux_otelc_python.monitor import Monitor, function_identity
 from quux_otelc_python.telemetry import Runtime
 
 
@@ -32,7 +32,7 @@ def main(args: list[str]) -> int:
             for value in block.co_consts:
                 if hasattr(value, "co_consts"):
                     if value.co_flags & inspect.CO_NEWLOCALS:
-                        functions.append({"name": source.relative_to(Path.cwd()).as_posix().removesuffix(".py").replace("/", ".") + "." + value.co_qualname, "selected": monitor.display_name(value) is not None})
+                        functions.append({"name": function_identity(source.relative_to(Path.cwd()).as_posix(), value), "selected": monitor.display_name(value) is not None})
                     visit(value)
 
         visit(code)

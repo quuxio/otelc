@@ -20,6 +20,7 @@ export class Runtime {
     this.closed = false;
     this.exportFinished = false;
     this.server = null;
+    this.connections = new Set();
     this.socketInode = null;
     this.exporter = new Exporter(this);
     this.reader = new PeriodicExportingMetricReader({ exporter: this.exporter, exportIntervalMillis: plan.export.interval_ms, exportTimeoutMillis: this.timeoutMs });
@@ -77,6 +78,9 @@ export class Runtime {
     const metadata = fs.lstatSync(parent);
     if (parent === '.' || !metadata.isDirectory() || metadata.uid !== process.getuid() || metadata.mode & 0o077) throw new Error('control directory must be owned by this user with mode 0700');
     const server = net.createServer(connection => {
+      this.connections.add(connection);
+      connection.once('close', () => this.connections.delete(connection));
+      if (this.closed) { connection.destroy(); return; }
       connection.unref();
       connection.setTimeout(200, () => connection.end('{"error":"invalid or incomplete control request"}\n'));
       let request = '';
@@ -109,16 +113,19 @@ export class Runtime {
     this.closed = true;
     this.losses.incomplete += this.pending.size;
     this.pending.clear();
-    if (this.server) {
-      await new Promise(resolve => this.server.close(resolve));
-      const filename = this.plan.runtime.control_socket;
-      if (fs.existsSync(filename) && fs.lstatSync(filename).ino === this.socketInode) fs.unlinkSync(filename);
-    }
     let timer;
     try {
-      await Promise.race([this.provider.shutdown().then(() => { this.exportFinished = true; }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('shutdown deadline')), this.plan.runtime.shutdown_timeout_ms); })]);
+      const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('shutdown deadline')), this.plan.runtime.shutdown_timeout_ms); });
+      const controlClosed = this.server ? new Promise(resolve => this.server.close(resolve)) : Promise.resolve();
+      for (const connection of this.connections) connection.destroy();
+      const stopped = Promise.all([controlClosed, this.provider.shutdown()]).then(() => { this.exportFinished = true; });
+      await Promise.race([stopped, deadline]);
     } catch { this.exportLoss++; await this.exporter.shutdown(); }
-    finally { clearTimeout(timer); }
+    finally {
+      clearTimeout(timer);
+      const filename = this.plan.runtime.control_socket;
+      if (this.server && fs.existsSync(filename) && fs.lstatSync(filename).ino === this.socketInode) fs.unlinkSync(filename);
+    }
     return this.report();
   }
 }

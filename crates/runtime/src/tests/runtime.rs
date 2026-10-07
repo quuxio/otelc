@@ -14,3 +14,11 @@ fn saturating_loss() {
     increment(&c);
     assert_eq!(c.load(Ordering::Relaxed), u64::MAX);
 }
+#[test]
+fn admission_reserves_only_up_to_the_global_limit() {
+    let count = AtomicUsize::new(0);
+    assert!(reserve_call(&count, 1));
+    assert!(!reserve_call(&count, 1));
+    count.fetch_sub(1, Ordering::AcqRel);
+    assert!(reserve_call(&count, 1));
+}

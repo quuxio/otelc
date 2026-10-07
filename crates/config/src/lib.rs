@@ -43,6 +43,7 @@ config_section!(Functions { include: Vec<String> = vec![], exclude: Vec<String> 
 config_section!(Objects { classes: Vec<String> = vec![], max_live: usize = 4096 });
 config_section!(Runtime {
     max_functions: usize = 4096,
+    max_active_calls: usize = 4096,
     max_threads: usize = 128,
     stack_depth: usize = 256,
     queue_capacity: usize = 4096,
@@ -264,6 +265,7 @@ impl Config {
         }
         for (name, value, max) in [
             ("max_functions", self.runtime.max_functions, 65536),
+            ("max_active_calls", self.runtime.max_active_calls, 65536),
             ("max_threads", self.runtime.max_threads, 4096),
             ("stack_depth", self.runtime.stack_depth, 4096),
             ("queue_capacity", self.runtime.queue_capacity, 65536),

@@ -31,7 +31,8 @@ function functionName(node, parents, file) {
   if (node.name && (ts.isIdentifier(node.name) || ts.isPrivateIdentifier(node.name) || ts.isStringLiteral(node.name) || ts.isNumericLiteral(node.name))) return node.name.text;
   const parent = parents.at(-1);
   if (parent && (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent) || ts.isPropertyDeclaration(parent)) && parent.name && ts.isIdentifier(parent.name)) return parent.name.text;
-  return `<anonymous>@${file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1}`;
+  const position = file.getLineAndCharacterOfPosition(node.getStart(file));
+  return `<anonymous>@${position.line + 1}:${position.character + 1}`;
 }
 function tag(node, parents, file) {
   let result = null;
@@ -57,9 +58,12 @@ export function transpile(source, filename, sourceName, plan, root = process.cwd
     const prefix = sourceName.replace(/\.(?:ts|mts|cts)$/, '').replaceAll('/', '.');
     function visit(node, parents = [], names = []) {
       const callable = ts.isFunctionLike(node) && node.body;
-      const name = callable ? functionName(node, parents, file) : null;
+      const name = callable ? (ts.isGetAccessorDeclaration(node) ? 'get ' : ts.isSetAccessorDeclaration(node) ? 'set ' : '') + functionName(node, parents, file) : null;
       const container = ts.isClassLike(node) || ts.isModuleDeclaration(node);
-      const nested = callable ? [...names, name] : container ? [...names, node.name?.text ?? '<class>'] : names;
+      const position = file.getLineAndCharacterOfPosition(node.getStart(file));
+      const owner = parents.at(-1);
+      const object = ts.isObjectLiteralExpression(node) ? owner && (ts.isVariableDeclaration(owner) || ts.isPropertyAssignment(owner)) && ts.isIdentifier(owner.name) ? owner.name.text : `<object>@${position.line + 1}:${position.character + 1}` : null;
+      const nested = callable ? [...names, name] : container ? [...names, node.name?.text ?? '<class>'] : object ? [...names, object] : names;
       const updated = ts.visitEachChild(node, child => visit(child, [...parents, node], nested), context);
       if (callable) {
         const metadata = { name: [prefix, ...names, name].join('.'), line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, annotation: plan.annotations.read_existing ? tag(node, parents, file) : null };

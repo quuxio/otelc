@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
@@ -14,6 +15,71 @@ import { headers } from '../exporter.mjs';
 import { root, plan, receiver, control, child } from './helpers.mjs';
 
 const require = createRequire(import.meta.url);
+
+test('shutdown includes an idle control connection in its deadline', async () => {
+  const r = await receiver(); const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otelc-idle-'));
+  fs.chmodSync(directory, 0o700);
+  const p = plan(r.endpoint); p.runtime.control_socket = path.join(directory, 'metrics.sock'); p.runtime.shutdown_timeout_ms = 50;
+  const runtime = new Runtime(p); let connection;
+  try {
+    await runtime.bindControl();
+    connection = net.createConnection(p.runtime.control_socket); connection.on('error', () => {});
+    await new Promise(resolve => connection.once('connect', resolve));
+    const started = performance.now();
+    await Promise.race([runtime.close(), new Promise((_, reject) => setTimeout(() => reject(new Error('shutdown exceeded 150ms')), 150))]);
+    assert.ok(performance.now() - started < 150);
+    assert.equal(fs.existsSync(p.runtime.control_socket), false);
+  } finally { connection?.destroy(); await runtime.close(); await r.close(); fs.rmSync(directory, { recursive: true }); }
+});
+
+test('async completion follows returned Promise settlement and preserves user finally ordering', async () => {
+  const r = await receiver(); const runtime = new Runtime(plan(r.endpoint)); globalThis[RUNTIME] = runtime;
+  try {
+    const source = `async function selected(promise, events) { try { return promise; } finally { events.push('finally'); } }
+      async function overridden(promise) { try { return promise; } finally { return 7; } }
+      module.exports = { selected, overridden };`;
+    const output = transform(source, '/tmp/async.cjs', 'async.cjs', runtime.plan, runtime);
+    const module = { exports: {} }; new Function('require', 'module', output.code)(require, module);
+    const events = []; let resolve;
+    const result = module.exports.selected(new Promise(done => { resolve = done; }), events);
+    assert.deepEqual(events, ['finally']);
+    assert.equal(runtime.report().function_calls, 0);
+    await new Promise(done => setTimeout(done, 20)); resolve(5); assert.equal(await result, 5);
+    assert.equal(runtime.report().function_calls, 1);
+    const failure = new Error('same rejection'); let reject;
+    const rejected = module.exports.selected(new Promise((_, fail) => { reject = fail; }), events);
+    assert.equal(runtime.report().function_calls, 1); reject(failure);
+    await assert.rejects(rejected, error => error === failure);
+    assert.equal(runtime.report().functions['async.selected'].unwinds, 1);
+    assert.equal(await module.exports.overridden(new Promise(() => {})), 7);
+    assert.equal(runtime.report().function_calls, 3);
+  } finally { await runtime.close(); delete globalThis[RUNTIME]; await r.close(); }
+});
+
+test('function-body declarations preserve hoisting, var redeclarations and lexical closures', () => {
+  const source = `function selected() { 'use strict'; var inner; let value = 7; return inner(); function inner() { return value; } }
+    function mutable() { function inner() { return inner; } const original=inner; inner=9; return original(); }
+    async function asynchronous() { var inner; let value=11; return inner(); function inner() { return value; } }
+    module.exports={selected,mutable,asynchronous};`;
+  const runtime = { register: () => true }; const p = plan('http://127.0.0.1:1/v1/metrics');
+  const output = transform(source, '/tmp/declarations.cjs', 'declarations.cjs', p, runtime);
+  const module = { exports: {} }; new Function('require', 'module', output.code)(require, module);
+  assert.equal(module.exports.selected(), 7); assert.equal(module.exports.mutable(), 9);
+  return module.exports.asynchronous().then(value => assert.equal(value, 11));
+});
+
+test('distinct object methods, accessors and same-line callbacks have distinct identities', async () => {
+  const source = 'const a={run(){return 1},get value(){return 1},set value(v){}}; const b={run(){return 2}}; const callbacks=[()=>1,()=>2];';
+  const p = plan('http://127.0.0.1:1/v1/metrics'); const runtime = { register: () => true };
+  const plain = transform(source, '/tmp/identities.cjs', 'identities.cjs', p, runtime);
+  assert.equal(new Set(plain.functions.map(f => f.name)).size, 6);
+  assert.ok(plain.functions.some(f => f.name === 'identities.a.run'));
+  assert.ok(plain.functions.some(f => f.name === 'identities.b.run'));
+  const { transpile } = await import('../typescript.mjs');
+  const prepared = transpile(source, '/tmp/identities.cts', 'identities.cts', p, '/tmp');
+  const typed = transform(prepared.code, '/tmp/identities.cts', 'identities.cts', p, runtime, prepared);
+  assert.equal(new Set(typed.functions.map(f => f.name)).size, 6);
+});
 
 test('selection uses authoritative UTF-8 byte globs and exclusion precedence', () => {
   const selection = new Selection({ include: ['(?-u).*'], exclude: ['(?-u)blocked'] });

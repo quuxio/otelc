@@ -170,6 +170,7 @@ impl CommonConfig {
             },
             runtime: Runtime {
                 max_functions: self.runtime.max_functions,
+                max_active_calls: self.runtime.max_active_calls,
                 max_threads: native.max_threads,
                 stack_depth: native.stack_depth,
                 queue_capacity: native.queue_capacity,

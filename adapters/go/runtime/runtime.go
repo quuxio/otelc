@@ -109,7 +109,7 @@ func (rt *Runtime) start(name string) uint64 {
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if rt.closed.Load() {
+	if !rt.enabled.Load() || rt.closed.Load() {
 		return 0
 	}
 	if _, ok := rt.functions[name]; !ok {

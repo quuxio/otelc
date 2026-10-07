@@ -7,9 +7,8 @@ The Go adapter parses original source with Go's AST and adds deferred probes thr
 Use Go 1.26+; the local and CI qualification uses Go 1.27.1. Install the pinned validation tools, build the launcher and start the [metrics stack](observability-stack.md):
 
 ```sh
-go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
-go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-export PATH="$(go env GOPATH)/bin:$PATH"
+make go-tools
+export PATH="$PWD/build/go-tools:$PATH"
 make build go-check
 ./target/debug/quux-otelc --config examples/go.toml --language go doctor
 ./target/debug/quux-otelc --config examples/go.toml --language go inspect examples/apps/go_app.go --json
@@ -92,3 +91,7 @@ Go workspaces, project cgo packages, vendor mode, conflicting overlay/modfile/to
 Duration includes deferred cleanup. `runtime.Goexit` runs defers and records completion; it has no normal-return claim. `os.Exit`, a fatal panic in another goroutine and forced termination cannot guarantee final export. SDK admission and pending calls are bounded; incomplete calls and capacity losses remain explicit. Automatic object lifetimes, spans and context propagation remain unavailable and are rejected.
 
 The pinned SDK performs aggregation and protobuf encoding. The bounded HTTP transport permits serial exports, rejects redirects, malformed/partial acknowledgements and bodies over 64 KiB, closes idle connections at shutdown and keeps response content out of diagnostics. Failed cumulative snapshots can be retried at the next interval. Go vulnerability analysis checks compiled package/call-graph exposure: the SDK's broader module graph includes the deprecated OpenPGP advisory, but no OpenPGP package is imported by this adapter or runtime.
+
+Duplicate export suppression fingerprints the collected cumulative SDK snapshot, with observation timestamps removed. A concurrent completion cannot label an older snapshot as current or suppress its successor. Admission rechecks live enable state after acquiring the runtime lock.
+
+Development analysers are pinned separately in `ci/go-tools/go.mod` and `go.sum`. `make go-tools` builds them with `-mod=readonly`; CI and `make go-check` use these locked binaries. The development tool build uses Go 1.27.1.

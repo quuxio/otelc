@@ -28,3 +28,7 @@ updates:
     directory: /adapters/go
     schedule:
       interval: weekly
+  - package-ecosystem: gomod
+    directory: /ci/go-tools
+    schedule:
+      interval: weekly

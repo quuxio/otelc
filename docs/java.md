@@ -17,7 +17,7 @@ Both executions print `72`. The instrumented example records 11 calls, including
 ./target/debug/quux-otelc --config examples/java.toml java examples/apps/JavaAnnotated.java
 ```
 
-The wrapper also accepts normal JDK launch arguments: `java -cp build/classes package.Main` or `java -jar application.jar`. Run from the project root with original selected `.java` files present. The agent uses the JDK parser to map package and `SourceFile` metadata to project-relative paths; compile with debug source information. Duplicate package/source filenames require narrower source filters.
+The wrapper also accepts normal JDK launch arguments: `java -cp build/classes package.Main` or `java -jar application.jar`. Run from the project root. When original `.java` files are present, the agent uses the JDK parser to map package and `SourceFile` metadata to project-relative paths. Class-only/JAR applications can use the logical package/source paths described below. Duplicate package/source filenames require narrower source filters.
 
 Ordinary unchanged code is selected externally:
 
@@ -93,3 +93,5 @@ The pinned Java SDK provides metric aggregation and OTLP protobuf encoding. The 
 Normal application class loaders that can access the agent are supported; named modules gain the required read edge. An isolated loader or unresolved stack-frame type produces an explicit `unsupported_class` loss rather than changing application behaviour. Check loss counters before trusting a benchmark. Retransformation and already-instrumented classes are rejected. Agent dependencies are shaded to avoid application dependency collisions.
 
 A method returning a future is timed until it returns the future, not until that future completes. Executor methods selected independently are timed on their execution thread. Automatic object lifetimes, spans and AspectJ are unavailable and rejected by configuration. Forced JVM termination cannot guarantee a final export.
+
+For class-only/JAR applications, source selection falls back to the logical package/`SourceFile` path (for example `example/App.java`), or the outer class name if debug source metadata is absent. Local source exclusions still win. Bootstrap/platform classes are protected from this fallback. Disabled admission checks avoid the observation lock. Normal shutdown serialises completed SDK recording with its final snapshot; if recording cannot drain within the shutdown deadline, the report marks incomplete observations and export failure instead of claiming successful completion.

@@ -20,7 +20,7 @@ The unchanged example produces `151`. It exercises selected functions, recursive
 
 ## Common selection and optional metadata
 
-Use `examples/python.toml` or the same schema-2 document used for other languages. `sources` matches original files relative to the launch working directory. Function display names are the relative Python path without `.py`, with `/` changed to `.`, followed by `code.co_qualname`. For example, `examples.apps.python_app.process_order`. Anonymous/nested names remain visible in the optional report.
+Use `examples/python.toml` or the same schema-2 document used for other languages. `sources` matches original files relative to the launch working directory. Function display names are the relative Python path without `.py`, with `/` changed to `.`, followed by `code.co_qualname`. For example, `examples.apps.python_app.process_order`. Anonymous code identities append their original line and column, keeping same-line lambdas distinct. Nested names remain visible in the optional report.
 
 No annotations are required. If `annotations.read_existing = true`, existing comments immediately preceding a function/decorator block can select or exclude it:
 
@@ -38,7 +38,7 @@ External exclusions and `otelc.exclude` always win. Unknown otelc comments are r
 
 ## Metrics and live control
 
-The adapter exports cumulative `otelc.function.calls`, `otelc.function.unwinds`, duration histograms in seconds, dropped-observation counters and dropped-batch counters through OTLP/HTTP protobuf. Shared service/resource settings, explicit histogram buckets, final signal endpoint and environment/header precedence apply. The SDK exporter operates on one batch at a time, below `export.max_queued_batches`; export happens away from application threads. An idle successful exporter stops sending unchanged snapshots, including after metrics-off frames have drained.
+The adapter exports cumulative `otelc.function.calls`, `otelc.function.unwinds`, duration histograms in seconds, dropped-observation counters and dropped-batch counters through OTLP/HTTP protobuf. Shared service/resource settings, explicit histogram buckets, final signal endpoint and environment/header precedence apply. The SDK exporter operates on one batch at a time, below `export.max_queued_batches`; export happens away from application threads. Failed snapshots are retried on the next collection; only successful snapshots enter duplicate suppression. An idle successful exporter stops sending unchanged snapshots, including after metrics-off frames have drained.
 
 To enable owner-only live control, add `runtime.control_socket` and create its private parent directory:
 
@@ -53,7 +53,7 @@ chmod 700 build/python-control
 ./target/debug/quux-otelc enable --socket build/python-control/metrics.sock
 ```
 
-Calls admitted before disable finish normally, including exceptional exits. Calls started while disabled stay unmeasured after enable. There is no restart or rebuild between phases. The interpreter callbacks remain installed, so disabled instrumentation still has measurable overhead. A socket cannot replace an occupied path and normal shutdown removes only the socket it owns.
+Calls admitted before disable finish normally, including exceptional exits. Calls started while disabled stay unmeasured after enable. There is no restart or rebuild between phases. When metrics are off, start callbacks are disabled. Return/unwind callbacks remain only until admitted frames drain, then monitoring events are switched off. Enabling during an unobserved coroutine does not silence the return event of future measured calls. The launcher and SDK remain present; disabled overhead is still measured by the benchmark. A socket cannot replace an occupied path and normal shutdown removes only the socket it owns.
 
 Set `OTELC_REPORT_PATH` to retain bounded function names, counts, unwind counts, losses, application PID and exporter shutdown evidence. `runtime.max_functions` bounds selected identities and `runtime.max_active_calls` bounds outstanding observations, including suspended frames. Unfinished/abandoned frames are counted as incomplete at shutdown; their objects are not retained merely to collect metrics.
 

@@ -61,12 +61,12 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
         with:
           go-version: '1.27.1'
-          cache-dependency-path: adapters/go/go.sum
+          cache-dependency-path: |
+            adapters/go/go.sum
+            ci/go-tools/go.sum
       - name: Build Go adapter and install pinned analysers
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
-          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
-          make go-build
+          make go-tools go-build
       - name: Install Rust and matching coverage tools
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview

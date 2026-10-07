@@ -22,7 +22,7 @@ The unchanged function is ordinary JavaScript:
 export function process_order(value) { return value * 3; }
 ```
 
-The example policy includes `examples/apps/javascript*.*` and functions matching `examples.apps.javascript_app.*`. Function identities use the project-relative filename without its extension, then enclosing classes/functions and the declared function name. For example, `examples.apps.javascript_app.Order.calculate`. Anonymous callbacks use their source line. Exclusion patterns always win, including against annotations. Use `inspect` to see names before running.
+The example policy includes `examples/apps/javascript*.*` and functions matching `examples.apps.javascript_app.*`. Function identities use the project-relative filename without its extension, then enclosing classes/functions and the declared function name. For example, `examples.apps.javascript_app.Order.calculate`. Object methods include their object binding or source position; getter/setter identities include `get`/`set`. Anonymous callbacks use their source line and column so callbacks on the same line remain distinct. Exclusion patterns always win, including against annotations. Use `inspect` to see names before running.
 
 ## Optional annotations
 
@@ -55,6 +55,8 @@ function selected(value) {
   finally { probes.exit(token, unwound); }
 }
 ```
+
+Async functions adopt returned promises after original cleanup completes, so their duration and unwind count follow final promise settlement. Body-level function declarations retain hoisting, lexical captures and mutable self-reference when moved into generated timing blocks.
 
 Inline source maps refer to the original filename and lines. `annotations.inject_generated = true` adds an annotation comment to the generated probe only. The generated marker rejects accidental repeated instrumentation.
 

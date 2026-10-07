@@ -471,6 +471,33 @@ fn llvm_case(
     request
 }
 #[test]
+fn native_active_call_limit_is_global_and_reusable() {
+    let request = llvm_case(
+        r#"#include <atomic>
+#include <thread>
+std::atomic<int> stage{0};
+__attribute__((noinline)) void selected_hold() { stage.store(1); while(stage.load()!=2) std::this_thread::yield(); }
+__attribute__((noinline)) int selected_value() { return 7; }
+int main() { std::thread t(selected_hold); while(stage.load()!=1) std::this_thread::yield();
+if(selected_value()!=7) return 1; stage.store(2); t.join(); return selected_value()==7 ? 0 : 2; }
+"#,
+        "active-calls",
+        "-O0",
+        "[runtime]\nmax_active_calls=1",
+        &[],
+    );
+    assert_eq!(counter(&request, "otelc.function.calls", None), 2);
+    assert_eq!(
+        counter(
+            &request,
+            "otelc.runtime.dropped_observations",
+            Some("active_call_capacity")
+        ),
+        1
+    );
+}
+
+#[test]
 fn llvm_exceptions_recursion_catch_rethrow_and_destructors() {
     for optimization in ["-O0", "-O2"] {
         let request = llvm_case(

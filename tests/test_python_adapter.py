@@ -114,7 +114,11 @@ class PythonAdapterTests(unittest.TestCase):
         runtime.reader.collect()
         self.assertEqual(runtime.export_loss, 1)
         runtime.reader.collect()
-        self.assertEqual(len(capture.batches), 1)
+        self.assertEqual(len(capture.batches), 2)
+        capture.result = MetricExportResult.SUCCESS
+        runtime.reader.collect()
+        runtime.reader.collect()
+        self.assertEqual(len(capture.batches), 3)
         runtime.enabled = True
         runtime.enter(5, "first")
         runtime.enter(5, "first")
@@ -125,6 +129,64 @@ class PythonAdapterTests(unittest.TestCase):
             runtime.exit(6, False)
         self.assertEqual(runtime.loss["invalid"], 1)
         runtime.exporter.force_flush()
+
+    def test_disabled_monitor_has_no_callbacks_after_inflight_completion(self):
+        if not hasattr(sys, "monitoring"):
+            self.skipTest("requires Python 3.12+")
+        runtime, _ = self.runtime()
+        monitor = Monitor(plan(), runtime)
+        monitor.install()
+        self.addCleanup(monitor.close)
+        runtime.enter(1, "admitted")
+        runtime.enabled = False
+        events = sys.monitoring.get_events(monitor.tool)
+        self.assertFalse(events & sys.monitoring.events.PY_START)
+        self.assertTrue(events & sys.monitoring.events.PY_RETURN)
+        runtime.exit(1, False)
+        self.assertEqual(sys.monitoring.get_events(monitor.tool), 0)
+        with patch.object(sys, "_getframe", side_effect=AssertionError("disabled frame lookup")):
+            monitor.start(compile("pass", "a.py", "exec"), 0)
+        with patch.object(runtime, "lock") as lock:
+            runtime.enter(2, "disabled")
+            lock.__enter__.assert_not_called()
+        runtime.enabled = True
+        self.assertTrue(sys.monitoring.get_events(monitor.tool) & sys.monitoring.events.PY_START)
+
+    def test_enable_during_unobserved_coroutine_keeps_future_returns(self):
+        import asyncio
+        policy = plan()
+        policy["metrics"]["enabled"] = False
+        policy["source_matchers"] = {"include": ["(?-u).*"], "exclude": []}
+        policy["function_matchers"] = {"include": ["(?-u)^review\\.target$"], "exclude": []}
+        runtime, _ = self.runtime(policy)
+        namespace = {}
+        exec(compile("async def target(gate):\n    await gate.wait()\n    return 7\n", str(ROOT / "review.py"), "exec"), namespace)
+        monitor = Monitor(policy, runtime)
+        self.addCleanup(monitor.close)
+        monitor.install()
+
+        async def exercise():
+            gate = asyncio.Event()
+            first = asyncio.create_task(namespace["target"](gate))
+            await asyncio.sleep(0)
+            runtime.enabled = True
+            gate.set()
+            self.assertEqual(await first, 7)
+            self.assertEqual(await namespace["target"](gate), 7)
+
+        asyncio.run(exercise())
+        self.assertEqual(runtime.calls["review.target"]["count"], 1)
+        self.assertFalse(runtime.pending)
+
+    def test_same_line_lambdas_have_distinct_function_identities(self):
+        policy = plan()
+        policy["source_matchers"] = {"include": ["(?-u).*"], "exclude": []}
+        policy["function_matchers"] = {"include": ["(?-u).*"], "exclude": []}
+        namespace = {}
+        exec(compile("callbacks = [lambda: 1, lambda: 2]", str(ROOT / "review.py"), "exec"), namespace)
+        monitor = Monitor(policy, None)
+        names = [monitor.display_name(value.__code__) for value in namespace["callbacks"]]
+        self.assertEqual(len(set(names)), 2, names)
 
     def test_annotations_and_monitor_tool_cleanup(self):
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:

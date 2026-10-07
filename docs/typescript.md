@@ -82,3 +82,5 @@ The adapter reads root `tsconfig.json`, including extended compiler settings. It
 JSX, declaration-only inputs, path aliases/baseUrl, decorator metadata emission, bundled outFile and non-Node module formats are rejected clearly. TypeScript compilation here is single-module emission, not project type checking: run your normal type checker/build as well. The pinned compiler supports its TypeScript release's syntax; newer compiler API support must be separately qualified.
 
 The JavaScript boundaries for direct eval, top-level CommonJS require shadowing, async/generator timing, forced termination, workers and custom loaders also apply. Timing begins in the body after argument/default initialisation. Automatic lifetimes, spans and browser bundles remain unavailable and are rejected rather than silently omitted.
+
+Function identities distinguish object bindings, getter/setter methods and same-line anonymous callbacks by their original source position. Returned promises follow the same completion rules as the JavaScript adapter.

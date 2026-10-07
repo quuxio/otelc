@@ -59,7 +59,7 @@ For exception-enabled C++, select `backend = "llvm"`. The wrapper uses the match
 
 The LLVM pass selects demangled names before optimisation, retains the probed function inventory, and supplies one invocation token to each normal return or escaping Itanium C++ exception path. Existing catches and cleanup are preserved; unprotected throwing calls get a cleanup landing pad. A catch inside the same function remains a normal completion. The runtime separately counts exceptional exits. Normal fatal-termination behaviour is preserved, without a guaranteed flush.
 
-The lifetime fixture currently includes an explicit guard and therefore does not demonstrate the required source-free object lifetime support. Automatic class instrumentation and the additional language adapters remain TODO under the [source-free contract](design.md#source-free-instrumentation-contract).
+The lifetime fixture currently includes an explicit guard and therefore does not demonstrate the required source-free object lifetime support. Automatic class instrumentation remains TODO under the [source-free contract](design.md#source-free-instrumentation-contract). Python, JavaScript, TypeScript, Java, Go and Rust now have function-metrics adapters; their supported constructs and remaining limits are documented in the language guides.
 
 See [object lifetimes](object-lifetimes.md), [paired benchmarks](benchmarks.md) and the [Docker metrics viewer](observability-stack.md) for the new workflows. `doctor` checks compiler/runtime/configuration availability; it does not run a compiler fixture or check Collector connectivity.
 

@@ -45,6 +45,10 @@ fn native_projection_uses_shared_policy_and_owned_buffer_settings() {
     assert_eq!(native.runtime.max_functions, config.runtime.max_functions);
     assert_eq!(native.runtime.max_threads, 32);
     assert_eq!(native.runtime.queue_capacity, 65536);
+    assert_eq!(
+        native.runtime.max_active_calls,
+        config.runtime.max_active_calls
+    );
     assert!(native.objects.classes.is_empty());
     assert!(!native.traces.enabled);
     assert!(config.for_native(Language::Java).is_err());

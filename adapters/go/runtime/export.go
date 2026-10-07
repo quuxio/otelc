@@ -3,11 +3,14 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -84,7 +87,7 @@ type exporter struct {
 	rt         *Runtime
 	transport  *http.Transport
 	mu         sync.Mutex
-	previous   uint64
+	previous   [32]byte
 	successful bool
 }
 
@@ -97,18 +100,64 @@ func (e *exporter) Shutdown(ctx context.Context) error {
 func (e *exporter) Export(ctx context.Context, data *metricdata.ResourceMetrics) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	revision := e.rt.revision.Load()
-	if e.successful && revision == e.previous {
+	signature, err := snapshotSignature(data)
+	if err != nil {
+		e.rt.exportLoss.Add(1)
+		return err
+	}
+	if e.successful && signature == e.previous {
 		return nil
 	}
-	err := e.Exporter.Export(ctx, data)
+	err = e.Exporter.Export(ctx, data)
 	if err != nil {
 		e.rt.exportLoss.Add(1)
 	} else {
-		e.previous = revision
+		e.previous = signature
 		e.successful = true
 	}
 	return err
+}
+
+// Fingerprint the collected snapshot, never live counters that can advance
+// between collection and Export. Timestamps and transport losses do not create
+// new observations; sorting removes SDK map iteration order from the identity.
+func snapshotSignature(data *metricdata.ResourceMetrics) ([32]byte, error) {
+	points := []string{}
+	for _, scope := range data.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name == "otelc.export.dropped_batches" {
+				continue
+			}
+			add := func(value any) error {
+				encoded, err := json.Marshal(value)
+				if err == nil {
+					points = append(points, metric.Name+":"+string(encoded))
+				}
+				return err
+			}
+			switch value := metric.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, point := range value.DataPoints {
+					point.StartTime, point.Time = time.Time{}, time.Time{}
+					if err := add(point); err != nil {
+						return [32]byte{}, err
+					}
+				}
+			case metricdata.Histogram[float64]:
+				for _, point := range value.DataPoints {
+					point.StartTime, point.Time = time.Time{}, time.Time{}
+					if err := add(point); err != nil {
+						return [32]byte{}, err
+					}
+				}
+			default:
+				return [32]byte{}, fmt.Errorf("unsupported otelc SDK aggregation")
+			}
+		}
+	}
+	sort.Strings(points)
+	encoded, err := json.Marshal(points)
+	return sha256.Sum256(encoded), err
 }
 func newExporter(rt *Runtime) (*exporter, error) {
 	signal, present := os.LookupEnv("OTEL_EXPORTER_OTLP_METRICS_HEADERS")
