@@ -58,7 +58,7 @@ class CoverageTests(unittest.TestCase):
             (target / "native-binaries/app").write_text("map")
             (target / "test.profraw").write_bytes(b"profile")
             environment = {"CARGO_TARGET_DIR": directory, "OTELC_COVERAGE_BIN_DIR": str(target / "native-binaries")}
-            for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\n", True)):
+            for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\nSF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\n", True)):
                 with patch.object(rust_coverage.subprocess, "run"), patch.object(Path, "write_text"):
                     with patch.object(rust_coverage.subprocess, "check_output", return_value=report) as export:
                         if passes:
@@ -108,3 +108,11 @@ class CoverageTests(unittest.TestCase):
             rust_coverage.enforce_node_observer_coverage("SF:/tmp/native/node/PromiseObserver.cpp\nDA:1,0\n")
         with self.assertRaisesRegex(ValueError, "no instrumented"):
             rust_coverage.enforce_node_observer_coverage(good)
+
+    def test_trace_store_has_its_own_coverage_floor(self):
+        good = "SF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\n"
+        rust_coverage.enforce_rust_trace_coverage(good)
+        with self.assertRaisesRegex(ValueError, "trace store"):
+            rust_coverage.enforce_rust_trace_coverage(good.replace("DA:1,1", "DA:1,0"))
+        with self.assertRaisesRegex(ValueError, "no instrumented"):
+            rust_coverage.enforce_rust_trace_coverage("SF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\n")

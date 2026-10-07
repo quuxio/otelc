@@ -37,6 +37,30 @@ fn one_document_resolves_all_languages_with_shared_policy() {
     assert!("c++".parse::<Language>().is_err());
 }
 #[test]
+fn rust_traces_resolve_independent_signal_settings() {
+    let mut config = policy();
+    config.traces.enabled = true;
+    config
+        .apply_environment(|key| match key {
+            "OTEL_EXPORTER_OTLP_ENDPOINT" => Some("http://127.0.0.1:4318".into()),
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" => Some("http://127.0.0.1:55682/metrics".into()),
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" => Some("http://127.0.0.1:55681/traces".into()),
+            "OTEL_EXPORTER_OTLP_TIMEOUT" => Some("777".into()),
+            "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT" => Some("222".into()),
+            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT" => Some("333".into()),
+            _ => None,
+        })
+        .unwrap();
+    let resolved = config.resolve(Language::Rust).unwrap();
+    assert!(resolved.execution_available);
+    assert_eq!(resolved.metrics_endpoint, "http://127.0.0.1:55682/metrics");
+    assert_eq!(resolved.export.timeout_ms, 222);
+    let trace = resolved.trace_export.unwrap();
+    assert_eq!(trace.endpoint, "http://127.0.0.1:55681/traces");
+    assert_eq!(trace.timeout_ms, 333);
+    assert!(!config.resolve(Language::Go).unwrap().execution_available);
+}
+#[test]
 fn native_projection_uses_shared_policy_and_owned_buffer_settings() {
     let config = policy();
     let native = config.for_native(Language::Cpp).unwrap();
@@ -238,4 +262,65 @@ fn annotation_and_live_control_capabilities_follow_backend_selection() {
     assert!(config.for_native(Language::Cpp).is_err());
     config.runtime.control_socket = Some("".into());
     assert!(config.validate().is_err());
+}
+#[test]
+fn trace_environment_defaults_validation_and_disabled_signal_are_independent() {
+    let mut config = policy();
+    config.traces.enabled = true;
+    config
+        .apply_environment(|key| match key {
+            "OTEL_EXPORTER_OTLP_ENDPOINT" => Some("http://localhost:4318/base/".into()),
+            "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT" => Some("500".into()),
+            _ => None,
+        })
+        .unwrap();
+    let trace = config
+        .resolve(Language::Rust)
+        .unwrap()
+        .trace_export
+        .unwrap();
+    assert_eq!(trace.endpoint, "http://localhost:4318/base/v1/traces");
+    assert_eq!(trace.timeout_ms, 1000);
+    assert_eq!(config.export.timeout_ms, 500);
+    for (key, value) in [
+        ("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "grpc"),
+        (
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://remote.example",
+        ),
+        ("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", "0"),
+        ("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", "60001"),
+    ] {
+        let mut config = policy();
+        config.traces.enabled = true;
+        config
+            .apply_environment(|candidate| (key == candidate).then(|| value.into()))
+            .unwrap();
+        assert!(config.validate().is_err());
+    }
+    let mut config = policy();
+    config.traces.enabled = true;
+    assert!(config
+        .apply_environment(
+            |key| (key == "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT").then(|| "invalid".into())
+        )
+        .is_err());
+    let mut config = policy();
+    config.traces.enabled = true;
+    config.traces.max_active_traces = 65536;
+    config.traces.max_spans_per_trace = 65536;
+    assert!(config.validate().is_err());
+    let mut config = policy();
+    config
+        .apply_environment(|key| {
+            key.starts_with("OTEL_EXPORTER_OTLP_TRACES_")
+                .then(|| "invalid".into())
+        })
+        .unwrap();
+    config.validate().unwrap();
+    assert!(config
+        .resolve(Language::Rust)
+        .unwrap()
+        .trace_export
+        .is_none());
 }

@@ -2,6 +2,8 @@
 
 The Rust adapter parses original Rust syntax and inserts body guards into a private source tree. Standalone files use rustc; Cargo projects use a compiler wrapper. Application source, Cargo manifests and lockfiles stay unchanged. The linked Rust OpenTelemetry SDK supplies cumulative function counters and duration histograms. No application SDK import or required annotation is needed.
 
+Function spans are available through the same selection policy; see [Rust spans](rust-spans.md) for unchanged examples, sampling, parents, loss handling and the Tempo viewer.
+
 ## Build and run
 
 Use the qualified Rust 1.98.1 toolchain. The probe library and application must use the same compiler, host target and compatible panic strategy. Build from the repository root and start the [Collector, Prometheus and Grafana stack](observability-stack.md):
@@ -166,6 +168,6 @@ The baseline and off/on runs use the same closure, compiler flags, source hash a
 
 This milestone supports synchronous and the qualified async named functions, methods, trait default methods, generics, nested functions, normal OS threads and panic unwinding on the qualified macOS ARM64 host. Const and naked functions are rejected when selected; async main is rejected. Parsed synchronous closures are supported; async/const closures and macro-generated functions or closures remain unsupported. Selected `include!` source fragments, test/procedural-macro/edition-2015 crates and existing compiler wrappers require separate qualification. Normal expression macros remain usable. Symlinked source modules require separate qualification. Build scripts execute unchanged and do not start instrumentation.
 
-Rust `panic=abort`, `process::exit`, forced termination and unjoined background work cannot guarantee final observations or export. Custom targets, cross-compilation, sanitizers and altered panic strategies require matching SDK qualification. Automatic value lifetime/move/drop metrics, distributed context and spans remain unavailable and are rejected by configuration. Timing a `Drop::drop` method measures that method body, not an object's entire lifetime.
+Rust `panic=abort`, `process::exit`, forced termination and unjoined background work cannot guarantee final observations or export. Custom targets, cross-compilation, sanitizers and altered panic strategies require matching SDK qualification. Automatic value lifetime/move/drop metrics and distributed context remain unavailable. Function spans are supported within the [qualified Rust boundaries](rust-spans.md); automatic value lifetimes remain rejected by configuration. Timing a `Drop::drop` method measures that method body, not an object's entire lifetime.
 
 The pinned SDK's custom-reader API is experimental in 0.32.1. A bounded worker pulls cumulative SDK snapshots and uses the existing OTLP/HTTP transport, with one total retry deadline, no redirects and at most 64 KiB of acknowledgement data. Malformed/partial acknowledgements and failed exports remain explicit losses. SDK aggregation and protobuf encoding stay language-native; the shared transport does not replace the SDK. Final shutdown is bounded by the common deadline; a Collector outage does not delay the application indefinitely.

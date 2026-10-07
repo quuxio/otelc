@@ -76,3 +76,44 @@ fn invalid_response_no_retry() {
     assert!(send(&endpoint, &BTreeMap::new(), b"test", Duration::from_secs(1)).is_err());
     assert_eq!(handle.join().unwrap(), 1);
 }
+#[test]
+fn trace_acknowledgements_retries_and_partial_rejection_are_signal_specific() {
+    use opentelemetry_proto::tonic::collector::trace::v1::{
+        ExportTracePartialSuccess, ExportTraceServiceResponse,
+    };
+    let (endpoint, handle) = response_server(vec![(503, vec![]), (200, vec![])]);
+    send_traces(
+        &endpoint,
+        &BTreeMap::new(),
+        b"trace",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    assert_eq!(handle.join().unwrap(), 2);
+    let partial = ExportTraceServiceResponse {
+        partial_success: Some(ExportTracePartialSuccess {
+            rejected_spans: 1,
+            error_message: "private details".into(),
+        }),
+    }
+    .encode_to_vec();
+    let (endpoint, handle) = response_server(vec![(200, partial)]);
+    let error = send_traces(
+        &endpoint,
+        &BTreeMap::new(),
+        b"trace",
+        Duration::from_secs(1),
+    )
+    .unwrap_err();
+    assert!(!error.to_string().contains("private"));
+    assert_eq!(handle.join().unwrap(), 1);
+    let (endpoint, handle) = response_server(vec![(200, vec![255])]);
+    assert!(send_traces(
+        &endpoint,
+        &BTreeMap::new(),
+        b"trace",
+        Duration::from_secs(1)
+    )
+    .is_err());
+    assert_eq!(handle.join().unwrap(), 1);
+}

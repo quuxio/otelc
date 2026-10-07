@@ -15,3 +15,5 @@ Each additional language lands separately on `main` after its unchanged-source e
 The common TOML policy remains the configuration entry point. Existing annotations are optional. The adapter must reject capabilities it cannot execute; a language implementation does not imply support for spans, every framework or every lifetime boundary. Automatic C++ lifetimes remain separate from the current explicit guard prototype.
 
 See the [common configuration](common-configuration.md), [Python guide](python.md), [JavaScript guide](javascript.md), [TypeScript guide](typescript.md), [Java guide](java.md), [Go guide](go.md), [Rust guide](rust.md), [developer 101](developer-101.md) and [support matrix](support.md).
+
+Rust function spans are available through the common trace policy; see [Rust spans](rust-spans.md). Other language trace backends, automatic task/distributed parenting and source-free lifetimes remain separate gaps.

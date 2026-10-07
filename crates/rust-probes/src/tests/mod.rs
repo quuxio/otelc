@@ -1,3 +1,4 @@
+mod spans;
 use super::*;
 use opentelemetry_proto::tonic::metrics::v1::{metric, number_data_point};
 use std::{
@@ -10,6 +11,9 @@ use std::{
 struct Receiver {
     endpoint: String,
     requests: Arc<Mutex<Vec<ExportMetricsServiceRequest>>>,
+    traces: Arc<
+        Mutex<Vec<opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest>>,
+    >,
     stop: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -19,6 +23,8 @@ impl Receiver {
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}/v1/metrics", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let traces = Arc::new(Mutex::new(Vec::new()));
+        let received_traces = traces.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let (received, stopping) = (requests.clone(), stop.clone());
         let worker = thread::spawn(move || {
@@ -38,7 +44,10 @@ impl Receiver {
                             header.push(byte[0]);
                         }
                         let header = String::from_utf8(header).unwrap();
-                        assert!(header.starts_with("POST /v1/metrics HTTP/1.1"));
+                        assert!(
+                            header.starts_with("POST /v1/metrics HTTP/1.1")
+                                || header.starts_with("POST /v1/traces HTTP/1.1")
+                        );
                         let length: usize = header
                             .lines()
                             .find_map(|line| {
@@ -49,10 +58,13 @@ impl Receiver {
                             .unwrap();
                         let mut body = vec![0; length];
                         stream.read_exact(&mut body).unwrap();
-                        received
-                            .lock()
-                            .unwrap()
-                            .push(ExportMetricsServiceRequest::decode(body.as_slice()).unwrap());
+                        if header.starts_with("POST /v1/traces ") {
+                            received_traces.lock().unwrap().push(opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest::decode(body.as_slice()).unwrap());
+                        } else {
+                            received.lock().unwrap().push(
+                                ExportMetricsServiceRequest::decode(body.as_slice()).unwrap(),
+                            );
+                        }
                         thread::sleep(delay);
                         let _ = stream.write_all(response);
                     }
@@ -65,6 +77,7 @@ impl Receiver {
         });
         Self {
             endpoint,
+            traces,
             requests,
             stop,
             worker: Some(worker),
