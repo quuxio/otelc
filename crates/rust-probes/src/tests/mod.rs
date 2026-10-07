@@ -463,9 +463,9 @@ fn rust_control_accepts_fragmented_commands_before_the_shared_deadline() {
     stream
         .set_read_timeout(Some(Duration::from_secs(1)))
         .unwrap();
-    thread::sleep(Duration::from_millis(25));
+    // Delivery timing is qualified by the shared reader tests; this integration
+    // sends separate writes without assuming a loaded CI scheduler latency.
     stream.write_all(b"dis").unwrap();
-    thread::sleep(Duration::from_millis(25));
     stream.write_all(b"able\n").unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
