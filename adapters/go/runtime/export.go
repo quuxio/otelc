@@ -30,13 +30,14 @@ func (t strictTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	if response.StatusCode != http.StatusOK {
+		response.Body.Close()
+		return nil, fmt.Errorf("OTLP HTTP status %d", response.StatusCode)
+	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, 65537))
 	response.Body.Close()
 	if err == nil && len(data) > 65536 {
 		err = fmt.Errorf("OTLP acknowledgement exceeds 64 KiB")
-	}
-	if err == nil && (response.StatusCode < 200 || response.StatusCode >= 300) {
-		err = fmt.Errorf("OTLP HTTP status %d", response.StatusCode)
 	}
 	if err == nil {
 		var ack collector.ExportMetricsServiceResponse
@@ -119,15 +120,12 @@ func (e *exporter) Export(ctx context.Context, data *metricdata.ResourceMetrics)
 }
 
 // Fingerprint the collected snapshot, never live counters that can advance
-// between collection and Export. Timestamps and transport losses do not create
-// new observations; sorting removes SDK map iteration order from the identity.
+// between collection and Export. A health-only change is still a new snapshot.
+// Sorting removes SDK map iteration order from the identity.
 func snapshotSignature(data *metricdata.ResourceMetrics) ([32]byte, error) {
 	points := []string{}
 	for _, scope := range data.ScopeMetrics {
 		for _, metric := range scope.Metrics {
-			if metric.Name == "otelc.export.dropped_batches" {
-				continue
-			}
 			add := func(value any) error {
 				encoded, err := json.Marshal(value)
 				if err == nil {
