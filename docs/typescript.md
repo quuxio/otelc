@@ -84,3 +84,5 @@ JSX, declaration-only inputs, path aliases/baseUrl, decorator metadata emission,
 The JavaScript boundaries for direct eval, top-level CommonJS require shadowing, async/generator timing, forced termination, workers and custom loaders also apply. Timing begins in the body after argument/default initialisation. Automatic lifetimes, spans and browser bundles remain unavailable and are rejected rather than silently omitted.
 
 Function identities distinguish object bindings, getter/setter methods and same-line anonymous callbacks by their original source position. Returned promises follow the same completion rules as the JavaScript adapter.
+
+Unmeasured async calls and primitive results retain original microtask ordering. Admitted async calls returning objects or functions add an `await` to observe possible Promise/thenable settlement, so applications that depend on ordering relative to queued microtasks need qualification with metrics enabled.

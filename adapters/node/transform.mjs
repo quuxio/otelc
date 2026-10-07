@@ -87,6 +87,7 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
         ...declarations.map(declaration => t.variableDeclaration('var', [t.variableDeclarator(t.cloneNode(declaration.id), t.functionExpression(null, declaration.params, declaration.body, declaration.generator, declaration.async))])),
         ...body.body.filter(statement => !t.isFunctionDeclaration(statement))
       ];
+      const token = path.scope.generateUidIdentifier('otelc_token');
       let completion = body.body;
       let result;
       if (path.node.async && !path.node.generator) {
@@ -105,9 +106,13 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
             returned.skip();
           }
         });
-        completion = [t.labeledStatement(label, t.blockStatement(body.body)), t.returnStatement(t.awaitExpression(t.cloneNode(result)))];
+        const needsAdoption = t.logicalExpression('&&', t.cloneNode(token),
+          t.logicalExpression('&&', t.cloneNode(result), t.logicalExpression('||',
+            t.binaryExpression('===', t.unaryExpression('typeof', t.cloneNode(result)), t.stringLiteral('object')),
+            t.binaryExpression('===', t.unaryExpression('typeof', t.cloneNode(result)), t.stringLiteral('function')))));
+        completion = [t.labeledStatement(label, t.blockStatement(body.body)), t.returnStatement(
+          t.conditionalExpression(needsAdoption, t.awaitExpression(t.cloneNode(result)), t.cloneNode(result)))];
       }
-      const token = path.scope.generateUidIdentifier('otelc_token');
       const unwound = path.scope.generateUidIdentifier('otelc_unwound');
       const error = path.scope.generateUidIdentifier('otelc_error');
       const runtimeNode = () => t.cloneNode(helper);

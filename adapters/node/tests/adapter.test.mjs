@@ -56,6 +56,40 @@ test('async completion follows returned Promise settlement and preserves user fi
   } finally { await runtime.close(); delete globalThis[RUNTIME]; await r.close(); }
 });
 
+test('async calls avoid unnecessary suspension for JavaScript and TypeScript', async () => {
+  const { transpile } = await import('../typescript.mjs');
+  const bodies = ['return 7;', 'return Promise.resolve(7);', 'return await Promise.resolve(7);',
+    "try { return Promise.resolve(7); } finally { events.push('cleanup'); }", "throw new Error('same');", ''];
+  let admitted = 0;
+  const runtime = { register: () => true, enter: () => admitted, exit: token => assert.equal(token, admitted) };
+  globalThis[RUNTIME] = runtime;
+  const execute = async code => {
+    const module = { exports: {} }; new Function('require', 'module', 'exports', code)(require, module, module.exports);
+    const events = [];
+    module.exports(events).then(value => events.push(['completed', value]), error => events.push(['rejected', error.message]));
+    queueMicrotask(() => events.push('queued task'));
+    await new Promise(resolve => setImmediate(resolve));
+    return events;
+  };
+  try {
+    for (const language of ['javascript', 'typescript']) {
+      const p = { ...plan('http://127.0.0.1:1/v1/metrics'), language };
+      for (const token of [0, 1]) {
+        admitted = token;
+        const selectedBodies = token ? ['return 7;', 'return await Promise.resolve(7);', "throw new Error('same');", '', 'return null;', 'return false;', "return 'value';", 'return 7n;'] : bodies;
+        for (const body of selectedBodies) {
+          const source = `module.exports = async function work(events) { ${body} };`;
+          const filename = language === 'typescript' ? '/tmp/scheduling.cts' : '/tmp/scheduling.cjs';
+          const prepared = language === 'typescript' ? transpile(source, filename, 'scheduling.cts', p, '/tmp') : null;
+          const original = prepared?.code ?? source;
+          const output = transform(original, filename, path.basename(filename), p, runtime, prepared);
+          assert.deepEqual(await execute(output.code), await execute(original), `${language}, token=${token}: ${body}`);
+        }
+      }
+    }
+  } finally { delete globalThis[RUNTIME]; }
+});
+
 test('function-body declarations preserve hoisting, var redeclarations and lexical closures', () => {
   const source = `function selected() { 'use strict'; var inner; let value = 7; return inner(); function inner() { return value; } }
     function mutable() { function inner() { return inner; } const original=inner; inner=9; return original(); }

@@ -58,6 +58,8 @@ function selected(value) {
 
 Async functions adopt returned promises after original cleanup completes, so their duration and unwind count follow final promise settlement. Body-level function declarations retain hoisting, lexical captures and mutable self-reference when moved into generated timing blocks.
 
+Unmeasured calls, including calls started with metrics disabled or rejected by a capacity limit, keep the original async return path and microtask ordering. Primitive async results also return without an extra suspension. Admitted async calls returning objects or functions add an `await` after cleanup to observe possible Promise/thenable settlement; this can change ordering relative to other queued microtasks. Applications that depend on that ordering need qualification with metrics enabled.
+
 Inline source maps refer to the original filename and lines. `annotations.inject_generated = true` adds an annotation comment to the generated probe only. The generated marker rejects accidental repeated instrumentation.
 
 ## Metrics and live controls
