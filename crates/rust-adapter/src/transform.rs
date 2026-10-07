@@ -281,6 +281,12 @@ impl Parser<'_> {
                         }
                     }
                 }
+                // Insert the outer closing wrapper first. Later inner edits at
+                // the same byte offset then precede it in the generated text.
+                self.edits.push((
+                    offset(self.source, body.brace_token.span.close()),
+                    "}).await".into(),
+                ));
                 if let syn::ReturnType::Type(_, output) = &sig.output {
                     let mut opaque = Opaque(false);
                     opaque.visit_type(output);
@@ -298,10 +304,6 @@ impl Parser<'_> {
                         }
                     }
                 }
-                self.edits.push((
-                    offset(self.source, body.brace_token.span.close()),
-                    "}).await".into(),
-                ));
             } else {
                 code.push_str(&format!(
                     "let {}=::quux_otelc_rust::enter({name:?});",

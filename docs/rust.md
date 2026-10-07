@@ -26,6 +26,8 @@ From an existing Cargo project, supply an absolute CLI and configuration path:
 
 An existing lockfile is required. Cargo keeps the original manifests, dependency resolution, build scripts and compiler flags. Only project Rust compiler inputs are substituted; registry and external dependency sources remain untouched. Build artefacts and generated inputs are temporary. Multiple binary targets require `--bin NAME`. Application arguments and exit codes pass through.
 
+Compact async bodies, including a return immediately before the closing brace, preserve their original delimiters and concrete return coercions. The [compact async fixture](../examples/apps/rust_async_compact.rs) covers primitive, borrowed, function-pointer and trait-object results, empty bodies and explicit returns.
+
 ## Source, policy and optional annotations
 
 An ordinary function remains ordinary Rust:
