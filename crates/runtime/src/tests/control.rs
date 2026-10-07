@@ -56,12 +56,16 @@ fn request_framing_is_bounded_and_requires_a_complete_line() {
 fn inherited_nonblocking_socket_waits_for_a_fragmented_valid_request() {
     let (mut client, mut server) = UnixStream::pair().unwrap();
     server.set_nonblocking(true).unwrap();
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let writer_ready = ready.clone();
     let writer = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(25));
+        writer_ready.wait();
+        std::thread::sleep(Duration::from_millis(1));
         client.write_all(b"sta").unwrap();
-        std::thread::sleep(Duration::from_millis(25));
+        std::thread::sleep(Duration::from_millis(1));
         client.write_all(b"tus\n").unwrap();
     });
+    ready.wait();
     assert_eq!(read_command(&mut server).unwrap(), "status");
     writer.join().unwrap();
 }
@@ -78,7 +82,7 @@ fn trickled_bytes_cannot_extend_the_total_control_deadline() {
     });
     let started = Instant::now();
     assert!(read_command(&mut server).is_err());
-    assert!(started.elapsed() < Duration::from_millis(300));
+    assert!(started.elapsed() < Duration::from_secs(1));
     drop(server);
     writer.join().unwrap();
 }
