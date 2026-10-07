@@ -1,6 +1,7 @@
 package quux.otelc.java;
 
 import com.sun.source.util.JavacTask;
+import com.sun.source.tree.ClassTree;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,6 +16,7 @@ import javax.tools.ToolProvider;
 /** Associate class SourceFile metadata with original paths using the JDK parser. */
 final class Sources {
   private final Map<String, List<String>> files = new HashMap<>();
+  private final Map<String, List<String>> classes = new HashMap<>();
   private final Set<String> localNames = new HashSet<>();
   private final Plan plan;
   Sources(Path root, Plan plan) throws IOException {
@@ -38,6 +40,9 @@ final class Sources {
         String prefix = unit.getPackageName() == null ? "" : unit.getPackageName().toString().replace('.', '/') + "/";
         String key = prefix + filename.getFileName();
         localNames.add(key);
+        for (var declaration : unit.getTypeDecls()) {
+          if (declaration instanceof ClassTree type) classes.computeIfAbsent(prefix + type.getSimpleName(), ignored -> new ArrayList<>()).add(relative);
+        }
         if (!plan.sources.accepts(relative, false)) continue;
         files.computeIfAbsent(key, ignored -> new ArrayList<>()).add(relative);
       }
@@ -45,10 +50,15 @@ final class Sources {
       if (error.isPresent()) throw new IllegalArgumentException("selected Java source is invalid: " + error.get().getCode());
     }
     if (files.values().stream().anyMatch(value -> value.size() > 1)) throw new IllegalArgumentException("ambiguous Java package/SourceFile paths; narrow source filters");
+    if (classes.values().stream().anyMatch(value -> value.stream().filter(path -> plan.sources.accepts(path, false)).count() > 1)) throw new IllegalArgumentException("ambiguous Java class/source paths; narrow source filters");
   }
   String name(String className, String sourceFile) {
     int slash = className.lastIndexOf('/');
     String outer = className.substring(slash + 1).split("\\$", 2)[0];
+    if (sourceFile == null) {
+      var known = classes.getOrDefault(className, classes.get(className.substring(0, slash + 1) + outer));
+      if (known != null) return known.stream().filter(path -> plan.sources.accepts(path, false)).findFirst().orElse(null);
+    }
     String filename = sourceFile == null ? outer + ".java" : sourceFile;
     if (filename.contains("/") || filename.contains("\\") || !filename.endsWith(".java")) return null;
     String key = className.substring(0, slash + 1) + filename;

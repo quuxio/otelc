@@ -68,6 +68,11 @@ class AgentTest {
       var indexed = new Sources(directory, new Plan(local));
       assertNull(indexed.name("example/BinaryOnly", "BinaryOnly.java"));
       assertEquals("other/BinaryOnly.java", indexed.name("other/BinaryOnly", "BinaryOnly.java"));
+      Files.writeString(directory.resolve("BinaryOnly.java"), "package example; class Secondary {} ");
+      assertNull(new Sources(directory, new Plan(local)).name("example/Secondary", null));
+      assertEquals("BinaryOnly.java", new Sources(directory, runtime.plan).name("example/Secondary", null));
+      Files.writeString(directory.resolve("Other.java"), "package example; class Secondary {} ");
+      assertThrows(IllegalArgumentException.class, () -> new Sources(directory, runtime.plan));
     } finally { Probes.runtime = null; }
   }
   static JsonObject policy(String endpoint) {
