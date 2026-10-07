@@ -188,6 +188,35 @@ class PythonAdapterTests(unittest.TestCase):
         names = [monitor.display_name(value.__code__) for value in namespace["callbacks"]]
         self.assertEqual(len(set(names)), 2, names)
 
+    def test_equal_code_in_different_files_respects_selection_and_identity(self):
+        for excluded in (False, True):
+            with self.subTest(excluded=excluded):
+                policy = plan()
+                policy["source_matchers"] = {"include": ["(?-u)^review_.*\\.py$"],
+                                             "exclude": ["(?-u)^review_second\\.py$"] if excluded else []}
+                policy["function_matchers"] = {"include": ["(?-u).*"], "exclude": []}
+                runtime, _ = self.runtime(policy)
+                namespaces = [{}, {}, {}]
+                filenames = [ROOT / "review_first.py", ROOT / "review_second.py", Path("/tmp/review_outside.py")]
+                for namespace, filename in zip(namespaces, filenames):
+                    exec(compile("def work(): return 7", str(filename), "exec"), namespace)
+                first, second = [namespace["work"].__code__ for namespace in namespaces[:2]]
+                self.assertIsNot(first, second)
+                self.assertEqual(first, second)
+                monitor = Monitor(policy, runtime)
+                monitor.install()
+                try:
+                    for namespace in namespaces:
+                        self.assertEqual(namespace["work"](), 7)
+                finally:
+                    monitor.close()
+                expected = {"review_first.work": 1}
+                if not excluded:
+                    expected["review_second.work"] = 1
+                self.assertEqual({name: value["count"] for name, value in runtime.calls.items()}, expected)
+                self.assertFalse(runtime.pending)
+                self.assertEqual(sum(runtime.loss.values()), 0)
+
     def test_annotations_and_monitor_tool_cleanup(self):
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             path = Path(directory) / "a.py"

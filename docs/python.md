@@ -36,6 +36,8 @@ def excluded():
 
 External exclusions and `otelc.exclude` always win. Unknown otelc comments are rejected. SDK, adapter, virtual-environment and external interpreter files are protected from self-instrumentation. The adapter consumes the shared resolver's byte-oriented selection expressions rather than translating globs independently.
 
+Selection is cached by code-object identity. Identical function bodies in separate files retain separate names and cannot bypass another file's exclusions.
+
 ## Metrics and live control
 
 The adapter exports cumulative `otelc.function.calls`, `otelc.function.unwinds`, duration histograms in seconds, dropped-observation counters and dropped-batch counters through OTLP/HTTP protobuf. Shared service/resource settings, explicit histogram buckets, final signal endpoint and environment/header precedence apply. The SDK exporter operates on one batch at a time, below `export.max_queued_batches`; export happens away from application threads. Failed snapshots are retried on the next collection; only successful snapshots enter duplicate suppression. An idle successful exporter stops sending unchanged snapshots, including after metrics-off frames have drained.

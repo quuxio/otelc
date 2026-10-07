@@ -71,19 +71,23 @@ class Monitor:
     def start(self, code, _):
         if not self.runtime.enabled or self.runtime.closed:
             return
-        name = self.names.get(code)
-        if name is None:
+        entry = self.names.get(id(code))
+        if entry is None:
             name = self.display_name(code)
             if name is None:
                 return sys.monitoring.DISABLE
             if len(self.names) >= self.plan["runtime"]["max_functions"] or len(name.encode()) > 1024:
                 self.runtime.loss["function_capacity"] += 1
                 return sys.monitoring.DISABLE
-            self.names[code] = name
+            # Code equality ignores filenames. Retain the object so its identity
+            # cannot be reused while this bounded selection cache holds it.
+            self.names[id(code)] = (code, name)
+        else:
+            name = entry[1]
         self.runtime.enter(id(sys._getframe(1)), name)
 
     def returned(self, code, _, value):
-        if code not in self.names:
+        if id(code) not in self.names:
             # A selected frame may have started while monitoring was off.
             # Disabling its return location would also silence later admitted
             # invocations of that same code after live enable.
@@ -91,7 +95,7 @@ class Monitor:
         self.runtime.exit(id(sys._getframe(1)), False)
 
     def unwound(self, code, _, exception):
-        if code in self.names:
+        if id(code) in self.names:
             self.runtime.exit(id(sys._getframe(1)), True)
 
     def install(self):
