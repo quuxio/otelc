@@ -138,18 +138,20 @@ def enforce_node_observer_coverage(report):
 
 
 def enforce_rust_trace_coverage(report):
-    """Keep the new whole-tree span store above its own 80% coverage floor."""
-    selected = []
-    include = False
-    for line in report.splitlines():
-        if line.startswith("SF:"):
-            include = line.endswith("/crates/rust-probes/src/traces.rs")
-        if include:
-            selected.append(line)
-    percentage = line_coverage("\n".join(selected))
-    print(f"Rust trace store line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
-    if percentage < 80:
-        raise ValueError("Rust trace store line coverage is below 80%")
+    """Require independent floors for Rust contexts and the shared span store."""
+    for path, label in (("/crates/rust-probes/src/traces.rs", "Rust trace context"),
+                        ("/crates/export/src/traces.rs", "Shared trace store")):
+        selected = []
+        include = False
+        for line in report.splitlines():
+            if line.startswith("SF:"):
+                include = line.endswith(path)
+            if include:
+                selected.append(line)
+        percentage = line_coverage("\n".join(selected))
+        print(f"{label} line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
+        if percentage < 80:
+            raise ValueError(f"{label} line coverage is below 80%")
 
 
 def main():

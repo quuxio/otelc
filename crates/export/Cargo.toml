@@ -11,3 +11,6 @@ opentelemetry-proto.workspace = true
 ureq.workspace = true
 quux-otelc-config = { path = "../config" }
 httpdate = "1"
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+serde_json.workspace = true

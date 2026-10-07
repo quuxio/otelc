@@ -173,24 +173,28 @@ fn timestamps_use_one_epoch_and_clamp_earlier_finish() {
     assert_eq!(spans[0].end_time, spans[0].start_time);
 }
 #[test]
-fn thread_scopes_restore_on_unwind_and_do_not_leak_to_other_threads() {
+fn supplied_producer_epoch_excludes_queue_drain_delay() {
     let mut store = Store::default();
-    let root = begin(&mut store, None, "root", &policy());
-    assert!(current(1).is_none());
-    let _outer = Scope::attach(Some(root));
-    assert!(current(1).is_some());
-    assert!(current(2).is_none());
-    std::thread::spawn(|| assert!(current(1).is_none()))
-        .join()
-        .unwrap();
-    let payload = std::panic::catch_unwind(|| {
-        let _nested = Scope::attach(None);
-        assert!(current(1).is_none());
-        panic!("original");
-    })
-    .unwrap_err();
-    assert_eq!(*payload.downcast::<&str>().unwrap(), "original");
-    assert!(current(1).is_some());
+    let origin = Instant::now() - Duration::from_secs(60);
+    let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
+    let root = store.enter_at_epoch(1, None, "root".into(), origin, epoch, &policy());
+    let child = store.enter_at_epoch(
+        1,
+        Some(root),
+        "child".into(),
+        origin + Duration::from_millis(2),
+        SystemTime::now(),
+        &policy(),
+    );
+    assert_eq!(store.retained(), 2);
+    store.finish(child, origin + Duration::from_millis(3), false, false, 2);
+    store.finish(root, origin + Duration::from_millis(5), false, false, 2);
+    let spans = store.pop().unwrap();
+    assert_eq!(spans[0].start_time, epoch);
+    assert_eq!(spans[0].end_time, epoch + Duration::from_millis(5));
+    assert_eq!(spans[1].start_time, epoch + Duration::from_millis(2));
+    assert_eq!(spans[1].end_time, epoch + Duration::from_millis(3));
+    assert_eq!(store.retained(), 0);
 }
 #[test]
 fn oversized_payload_discards_the_whole_tree_before_name_duplication() {

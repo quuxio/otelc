@@ -2,6 +2,7 @@
 mod control;
 mod objects;
 mod queue;
+mod traces;
 use anyhow::{Context, Result};
 use queue::{Queue, Record};
 use quux_otelc_config::{export_headers, Config};
@@ -576,10 +577,10 @@ mod tests;
 
 #[no_mangle]
 pub extern "C" fn otelc_record_denied(address: usize) {
-    if let Some(state) = STATE
-        .get()
-        .filter(|s| s.running.load(Ordering::Acquire) && s.metrics_enabled.load(Ordering::Acquire))
-    {
+    if let Some(state) = STATE.get().filter(|s| {
+        s.running.load(Ordering::Acquire)
+            && (s.metrics_enabled.load(Ordering::Acquire) || s.config.traces.enabled)
+    }) {
         if state
             .functions
             .binary_search_by_key(&address, |f| f.0)
@@ -596,7 +597,7 @@ pub extern "C" fn otelc_record_denied(address: usize) {
 pub extern "C" fn otelc_record_token_enter(index: isize, address: usize) -> u64 {
     if !STATE
         .get()
-        .is_some_and(|s| s.metrics_enabled.load(Ordering::Acquire))
+        .is_some_and(|s| s.metrics_enabled.load(Ordering::Acquire) || s.config.traces.enabled)
     {
         return 0;
     }
@@ -609,25 +610,72 @@ pub extern "C" fn otelc_record_token_enter(index: isize, address: usize) -> u64 
         return 0;
     };
     let producer = unsafe { &mut *slot.producer.get() };
-    if producer.depth == producer.frames.len() || producer.next_token == u64::MAX {
+    let tracing = state.config.traces.enabled;
+    if tracing && producer.suppressed != 0 {
+        producer.suppressed = producer.suppressed.saturating_add(1);
         increment(&state.stack);
-        return 0;
+        return u64::MAX;
     }
-    if !admit_call(state) {
+    let full = producer.depth == producer.frames.len() || producer.next_token == u64::MAX;
+    if full {
+        increment(&state.stack);
+    }
+    if full || !admit_call(state) {
+        if tracing {
+            if producer.depth != 0 {
+                producer.frames[0].padding[2] |= traces::INVALID_ROOT as u64;
+            }
+            producer.suppressed = 1;
+            return u64::MAX;
+        }
         return 0;
     }
     let token = producer.next_token;
     producer.next_token += 1;
+    let parent = if producer.depth == 0 {
+        0
+    } else {
+        producer.frames[producer.depth - 1].token
+    };
+    let root = if producer.depth == 0 {
+        token
+    } else {
+        producer.frames[0].token
+    };
+    let flags = if state.metrics_enabled.load(Ordering::Acquire) {
+        0
+    } else {
+        traces::METRIC_DISABLED as u64
+    };
+    let start = monotonic();
     producer.frames[producer.depth] = Frame {
         address: address as u64,
         key: key as u64,
-        start: monotonic(),
+        start,
         token,
-        padding: [0; 4],
+        padding: [parent, root, flags, 0],
     };
     producer.depth += 1;
+    if tracing {
+        producer.frames[0].padding[3] = producer.frames[0].padding[3].saturating_add(1);
+        if producer.depth == 1
+            && !slot.queue.push(Record {
+                function_key: key as u64,
+                invocation: token,
+                trace_root: token,
+                start_tick: start,
+                thread_slot: index as u32,
+                flags: traces::ROOT_ENTER,
+                ..Default::default()
+            })
+        {
+            increment(&state.queue_loss);
+            producer.frames[0].padding[2] |= traces::INVALID_ROOT as u64;
+        }
+    }
     token
 }
+
 #[no_mangle]
 pub extern "C" fn otelc_record_token_exit(index: isize, token: u64, kind: u32) {
     if token == 0 {
@@ -639,6 +687,12 @@ pub extern "C" fn otelc_record_token_exit(index: isize, token: u64, kind: u32) {
         return;
     };
     let producer = unsafe { &mut *slot.producer.get() };
+    if token == u64::MAX && state.config.traces.enabled {
+        if producer.suppressed != usize::MAX && producer.suppressed != 0 {
+            producer.suppressed -= 1;
+        }
+        return;
+    }
     if producer.depth == 0 {
         increment(&state.invalid);
         return;
@@ -664,9 +718,30 @@ pub extern "C" fn otelc_record_token_exit(index: isize, token: u64, kind: u32) {
         start_tick: frame.start,
         duration_tick: duration,
         thread_slot: index as u32,
-        flags: kind,
+        parent_invocation: frame.padding[0],
+        trace_root: if state.config.traces.enabled {
+            frame.padding[1]
+        } else {
+            0
+        },
+        flags: kind
+            | frame.padding[2] as u32
+            | if state.config.traces.enabled {
+                traces::TRACE_EXIT
+            } else {
+                0
+            }
+            | if frame.padding[3] > u32::MAX as u64 {
+                traces::INVALID_ROOT
+            } else {
+                0
+            },
+        reserved: frame.padding[3].min(u32::MAX as u64) as u32,
         ..Default::default()
     }) {
         increment(&state.queue_loss);
+        if state.config.traces.enabled && producer.depth != 0 {
+            producer.frames[0].padding[2] |= traces::INVALID_ROOT as u64;
+        }
     }
 }

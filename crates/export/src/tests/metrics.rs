@@ -28,6 +28,7 @@ fn toml_config() -> Config {
         runtime: Default::default(),
         metrics: Default::default(),
         traces: Default::default(),
+        trace_export: None,
         export: Default::default(),
         resource: Default::default(),
     }
