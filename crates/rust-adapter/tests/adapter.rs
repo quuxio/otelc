@@ -471,3 +471,35 @@ fn cargo_projects_keep_sources_manifests_lockfiles_and_build_scripts_unchanged()
     fs::remove_file(root.path().join("Cargo.lock")).unwrap();
     assert!(!run(root.path(), &plan, &["Cargo.toml"]).status.success());
 }
+#[test]
+fn compact_async_tails_keep_nested_delimiters_coercions_and_empty_bodies_valid() {
+    let source = include_str!("../../../examples/apps/rust_async_compact.rs");
+    let mut plan = policy();
+    plan.functions.include = vec!["main.*".into()];
+    plan.functions.exclude = vec!["*.main".into(), "*.drive".into(), "*.double".into()];
+    let (generated, _) = transform(source, "main", &plan, true, true, false).unwrap();
+    syn::parse_file(&generated).expect("generated compact async source must remain valid Rust");
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("main.rs");
+    fs::write(&input, source).unwrap();
+    let path = write_plan(root.path());
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["functions"]["include"] = serde_json::json!(plan.functions.include);
+    value["functions"]["exclude"] = serde_json::json!(plan.functions.exclude);
+    fs::write(&path, value.to_string()).unwrap();
+    success(
+        Command::new("rustc")
+            .args(["--edition=2024", "main.rs", "-o", "plain"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let baseline = success(Command::new(root.path().join("plain")).output().unwrap());
+    let instrumented = success(run(root.path(), &path, &["main.rs"]));
+    assert_eq!(baseline.stdout, instrumented.stdout);
+    assert_eq!(baseline.stderr, instrumented.stderr);
+    assert_eq!(fs::read_to_string(input).unwrap(), source);
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["function_calls"], 7);
+}
