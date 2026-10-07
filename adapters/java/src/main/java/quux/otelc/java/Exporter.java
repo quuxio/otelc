@@ -41,8 +41,12 @@ final class Exporter implements MetricExporter {
     client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofMillis(runtime.timeoutMs)).build();
   }
   static Map<String, String> headers(Map<String, String> environment) {
+    return headers(environment, "OTEL_EXPORTER_OTLP_METRICS_HEADERS");
+  }
+  static Map<String, String> headers(Map<String, String> environment, String signal) {
     var result = new HashMap<String, String>();
-    String source = environment.getOrDefault("OTEL_EXPORTER_OTLP_METRICS_HEADERS", environment.getOrDefault("OTEL_EXPORTER_OTLP_HEADERS", ""));
+    String source = environment.getOrDefault(signal, environment.getOrDefault("OTEL_EXPORTER_OTLP_HEADERS", ""));
+    if (source.getBytes(StandardCharsets.UTF_8).length > 8192) throw new IllegalArgumentException("OTLP headers exceed 8192 bytes");
     for (String item : source.split(",")) {
       if (item.isBlank()) continue;
       int separator = item.indexOf('=');
@@ -56,8 +60,8 @@ final class Exporter implements MetricExporter {
   }
   @Override public AggregationTemporality getAggregationTemporality(InstrumentType type) { return AggregationTemporality.CUMULATIVE; }
   @Override public CompletableResultCode export(Collection<MetricData> data) {
-    String current = data.stream().filter(metric -> !metric.getName().equals("otelc.export.dropped_batches")).map(metric -> metric.getName() + metric.getData().getPoints().stream().map(point -> point.getAttributes().toString() + ":" + (point instanceof LongPointData value ? value.getValue() : point instanceof HistogramPointData value ? value.getCount() : "unsupported")).toList()).sorted().toList().toString();
-    if (current.equals(signature)) return CompletableResultCode.ofSuccess();
+    String current = data.stream().map(metric -> metric.getName() + metric.getData().getPoints().stream().map(point -> point.getAttributes().toString() + ":" + (point instanceof LongPointData value ? value.getValue() : point instanceof HistogramPointData value ? value.getCount() : "unsupported")).toList()).sorted().toList().toString();
+    if (current.equals(signature)) { var unchanged = new CompletableResultCode(); finish(unchanged, true); return unchanged; }
     if (!busy.compareAndSet(false, true)) { runtime.exportLoss.incrementAndGet(); return CompletableResultCode.ofFailure(); }
     var result = new CompletableResultCode();
     try {
@@ -74,20 +78,26 @@ final class Exporter implements MetricExporter {
           if (failure == null && response.statusCode() == 200) success = ExportMetricsServiceResponse.parseFrom(response.body()).getPartialSuccess().getRejectedDataPoints() == 0;
         } catch (Exception ignored) { /* Invalid acknowledgements are failures. */ }
         busy.set(false);
-        if (success) { signature = current; result.succeed(); }
-        else { runtime.exportLoss.incrementAndGet(); future.cancel(true); result.fail(); }
+        if (success) signature = current;
+        else { runtime.exportLoss.incrementAndGet(); future.cancel(true); }
+        finish(result, success);
       });
-    } catch (Exception ignored) { busy.set(false); runtime.exportLoss.incrementAndGet(); result.fail(); }
+    } catch (Exception ignored) { busy.set(false); runtime.exportLoss.incrementAndGet(); finish(result, false); }
     return result;
+  }
+  private void finish(CompletableResultCode result, boolean metricsSuccess) {
+    if (runtime.traces == null) { if (metricsSuccess) result.succeed(); else result.fail(); }
+    else runtime.traces.flush().whenComplete((success, failure) -> { if (metricsSuccess && failure == null && Boolean.TRUE.equals(success)) result.succeed(); else result.fail(); });
   }
   @Override public CompletableResultCode flush() { return CompletableResultCode.ofSuccess(); }
   @Override public CompletableResultCode shutdown() {
     var request = active;
     if (request != null && !request.isDone()) request.cancel(true);
     client.shutdownNow();
+    if (runtime.traces != null) runtime.traces.close();
     return CompletableResultCode.ofSuccess();
   }
-  private static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
+  static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
     private final CompletableFuture<byte[]> result = new CompletableFuture<>();
     private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     private Flow.Subscription subscription;

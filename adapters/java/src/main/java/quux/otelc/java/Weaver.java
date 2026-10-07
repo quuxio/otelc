@@ -53,7 +53,8 @@ final class Weaver implements ClassFileTransformer {
   byte[] weave(byte[] original, ClassLoader loader) {
     var reader = new ClassReader(original); var node = new ClassNode(); reader.accept(node, ClassReader.EXPAND_FRAMES);
     if (node.attrs != null && node.attrs.stream().anyMatch(attribute -> attribute.type.equals(MARKER))) throw new IllegalArgumentException("class is already instrumented");
-    var selected = inventory(node).stream().filter(Function::selected).filter(value -> runtime == null || runtime.register(value.name())).toList();
+    // Trace mode must observe rejected calls so an enclosing tree cannot export incomplete data.
+    var selected = inventory(node).stream().filter(Function::selected).filter(value -> runtime == null || runtime.traces != null || runtime.register(value.name())).toList();
     if (selected.isEmpty()) return null;
     var writer = new ClassWriter(reader, ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS) {
       @Override protected String getCommonSuperClass(String left, String right) {

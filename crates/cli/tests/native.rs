@@ -104,28 +104,7 @@ fn start_receiver_timeout(
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
-        let mut bytes = Vec::new();
-        let mut byte = [0];
-        while !bytes.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).unwrap();
-            bytes.push(byte[0]);
-            assert!(bytes.len() < 65536);
-        }
-        let header = String::from_utf8(bytes).unwrap();
-        assert!(header.starts_with("POST /v1/metrics HTTP/1.1"));
-        let length = header
-            .lines()
-            .find_map(|l| {
-                l.to_lowercase()
-                    .strip_prefix("content-length:")
-                    .map(|v| v.trim().parse::<usize>().unwrap())
-            })
-            .unwrap();
-        let mut body = vec![0; length];
-        stream.read_exact(&mut body).unwrap();
-        let request = ExportMetricsServiceRequest::decode(body.as_slice()).unwrap();
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-        request
+        read_metric_request(&mut stream)
     })
 }
 fn run_metrics(settings: &str, cpp: bool, args: &[&str]) -> ExportMetricsServiceRequest {
@@ -142,15 +121,16 @@ fn run_metrics(settings: &str, cpp: bool, args: &[&str]) -> ExportMetricsService
     server.join().unwrap()
 }
 fn counter(request: &ExportMetricsServiceRequest, name: &str, label: Option<&str>) -> u64 {
-    let metrics = &request.resource_metrics[0].scope_metrics[0].metrics;
-    let Some(metric) = metrics.iter().find(|m| m.name == name) else {
-        return 0;
-    };
-    let Some(metric::Data::Sum(sum)) = &metric.data else {
-        panic!("not a sum")
-    };
-    sum.data_points
+    request
+        .resource_metrics
         .iter()
+        .flat_map(|resource| &resource.scope_metrics)
+        .flat_map(|scope| &scope.metrics)
+        .filter(|metric| metric.name == name)
+        .flat_map(|metric| match &metric.data {
+            Some(metric::Data::Sum(sum)) => &sum.data_points,
+            _ => panic!("not a sum"),
+        })
         .filter(|p| {
             label.is_none_or(|label| {
                 p.attributes
@@ -1349,7 +1329,6 @@ fn invalid_annotation_metadata_and_control_responses_are_rejected() {
 }
 #[test]
 fn common_rust_spans_preserve_original_source_and_results_with_signal_specific_export() {
-    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
     let source = include_str!("../../../examples/apps/rust_trace_app.rs");
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("trace.rs"), source).unwrap();
@@ -1366,51 +1345,7 @@ fn common_rust_spans_preserve_original_source_and_results_with_signal_specific_e
     std::fs::write(root.path().join("otelc.toml"),format!("schema_version=2\nlanguages=['rust']\n[sources]\ninclude=['trace.rs']\n[functions]\ninclude=['*.recursive','*.parent','*.child','*.cancelled','*.escaping']\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[export]\nendpoint='http://127.0.0.1:{metrics_port}'\ninterval_ms=60000\n")).unwrap();
     // The plain baseline is compiled first. Instrumented compilation follows.
     // The Rust adapter compiles and launches in one command, so allow 60 seconds.
-    trace_listener.set_nonblocking(true).unwrap();
-    let trace_server = thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
-        let mut requests = Vec::new();
-        for _ in 0..4 {
-            let mut stream = loop {
-                match trace_listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(std::time::Instant::now() < deadline, "missing trace export");
-                        thread::sleep(Duration::from_millis(2));
-                    }
-                    Err(error) => panic!("{error}"),
-                }
-            };
-            stream.set_nonblocking(false).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut header = Vec::new();
-            let mut byte = [0];
-            while !header.ends_with(b"\r\n\r\n") {
-                stream.read_exact(&mut byte).unwrap();
-                header.push(byte[0]);
-                assert!(header.len() < 65536);
-            }
-            let header = String::from_utf8(header).unwrap();
-            assert!(header.starts_with("POST /custom-traces HTTP/1.1"));
-            let length = header
-                .lines()
-                .find_map(|line| {
-                    line.to_lowercase()
-                        .strip_prefix("content-length:")
-                        .map(|value| value.trim().parse::<usize>().unwrap())
-                })
-                .unwrap();
-            let mut body = vec![0; length];
-            stream.read_exact(&mut body).unwrap();
-            requests.push(ExportTraceServiceRequest::decode(body.as_slice()).unwrap());
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                .unwrap();
-        }
-        requests
-    });
+    let trace_server = start_trace_receiver(trace_listener, 4, Duration::from_secs(60));
     let metrics_server = start_receiver_timeout(metrics_listener, Duration::from_secs(60));
     let report = root.path().join("report.json");
     let instrumented = success(
@@ -1464,4 +1399,243 @@ fn common_rust_spans_preserve_original_source_and_results_with_signal_specific_e
     assert_eq!(report["export_loss"], 0);
     assert_eq!(report["traces"]["completed_trees"], 4);
     assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+}
+
+fn start_trace_receiver(
+    trace_listener: TcpListener,
+    expected: usize,
+    timeout: Duration,
+) -> thread::JoinHandle<
+    Vec<opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest>,
+> {
+    use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+    trace_listener.set_nonblocking(true).unwrap();
+    thread::spawn(move || {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut requests = Vec::new();
+        for _ in 0..expected {
+            let mut stream = loop {
+                match trace_listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(std::time::Instant::now() < deadline, "missing trace export");
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut header = Vec::new();
+            let mut byte = [0];
+            while !header.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+                assert!(header.len() < 65536);
+            }
+            let header = String::from_utf8(header).unwrap();
+            assert!(header.starts_with("POST /custom-traces HTTP/1.1"));
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    line.to_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|value| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            requests.push(ExportTraceServiceRequest::decode(body.as_slice()).unwrap());
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+        requests
+    })
+}
+
+#[test]
+fn java_method_spans_preserve_unedited_and_annotated_apps_and_original_class_files() {
+    for annotated in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let source = if annotated {
+            include_str!("../../../examples/apps/JavaAnnotated.java")
+        } else {
+            include_str!("../../../examples/apps/JavaTraceApp.java")
+        };
+        let name = if annotated {
+            "JavaAnnotated"
+        } else {
+            "JavaTraceApp"
+        };
+        let source_name = format!("{name}.java");
+        std::fs::write(root.path().join(&source_name), source).unwrap();
+        success(
+            Command::new("javac")
+                .args(["-g", "-d", ".", &source_name])
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        let class = root.path().join(format!("examples/apps/{name}.class"));
+        let original_class = std::fs::read(&class).unwrap();
+        let entrypoint = format!("examples.apps.{name}");
+        let baseline = success(
+            Command::new("java")
+                .arg(&entrypoint)
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        let (metrics_port, metrics_listener) = receiver();
+        let (trace_port, trace_listener) = receiver();
+        let selection = if annotated {
+            "[]"
+        } else {
+            "['examples.apps.JavaTraceApp.*']"
+        };
+        std::fs::write(root.path().join("otelc.toml"),format!("schema_version=2\nlanguages=['java']\n[sources]\ninclude=['*.java']\n[functions]\ninclude={selection}\nexclude=['*.main(*)']\n[annotations]\nread_existing=true\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[runtime]\nshutdown_timeout_ms=5000\n[export]\nendpoint='http://127.0.0.1:{metrics_port}'\ninterval_ms=60000\ntimeout_ms=2000\n")).unwrap();
+        let expected = if annotated { 1 } else { 10 };
+        let roots = if annotated { 1 } else { 6 };
+        let trace_server = start_trace_receiver(trace_listener, roots, Duration::from_secs(60));
+        let (metrics_stopped, metrics_server) = start_repeated_metric_receiver(metrics_listener);
+        let report = root.path().join("report.json");
+        let measured = success(
+            Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+                .args(["java", &entrypoint])
+                .current_dir(root.path())
+                .env_remove("OTELC_CONFIG")
+                .env_remove("OTELC_LANGUAGE")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                .env(
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    format!("http://127.0.0.1:{trace_port}/custom-traces"),
+                )
+                .env("OTELC_REPORT_PATH", &report)
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(measured.stdout, baseline.stdout);
+        assert_eq!(measured.stderr, baseline.stderr);
+        assert_eq!(
+            source.as_bytes(),
+            std::fs::read(root.path().join(&source_name)).unwrap()
+        );
+        assert_eq!(original_class, std::fs::read(class).unwrap());
+        metrics_stopped.store(true, std::sync::atomic::Ordering::Release);
+        let metric_requests = metrics_server.join().unwrap();
+        // A final SDK batch may contain only observable health metrics. Omission
+        // does not reset an OTLP cumulative series; check its latest actual point.
+        let final_calls = metric_requests.iter().rev().find(|request| {
+            request.resource_metrics.iter().flat_map(|resource| &resource.scope_metrics)
+                .flat_map(|scope| &scope.metrics).any(|value| value.name == "otelc.function.calls"
+                    && matches!(&value.data, Some(metric::Data::Sum(sum)) if !sum.data_points.is_empty()))
+        }).expect("missing cumulative function counter");
+        assert_eq!(
+            counter(final_calls, "otelc.function.calls", None),
+            expected,
+            "report={} snapshots={:?}",
+            std::fs::read_to_string(&report).unwrap(),
+            metric_requests
+                .iter()
+                .map(|request| counter(request, "otelc.function.calls", None))
+                .collect::<Vec<_>>()
+        );
+        let requests = trace_server.join().unwrap();
+        let spans: Vec<_> = requests
+            .iter()
+            .flat_map(|request| &request.resource_spans)
+            .flat_map(|resource| &resource.scope_spans)
+            .flat_map(|scope| &scope.spans)
+            .collect();
+        assert_eq!(spans.len(), expected as usize);
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.parent_span_id.is_empty())
+                .count(),
+            roots
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.status.as_ref().is_some_and(|status| status.code == 2))
+                .count(),
+            if annotated { 0 } else { 2 }
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["export_finished"], true);
+        assert_eq!(report["export_loss"], 0);
+        assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+        let doctor = success(cli(&["--language", "java", "doctor"], root.path()));
+        assert!(String::from_utf8_lossy(&doctor.stdout).contains("method spans"));
+    }
+}
+
+fn read_metric_request(stream: &mut std::net::TcpStream) -> ExportMetricsServiceRequest {
+    let mut bytes = Vec::new();
+    let mut byte = [0];
+    while !bytes.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).unwrap();
+        bytes.push(byte[0]);
+        assert!(bytes.len() < 65536);
+    }
+    let header = String::from_utf8(bytes).unwrap();
+    assert!(header.starts_with("POST /v1/metrics HTTP/1.1"));
+    let length = header
+        .lines()
+        .find_map(|l| {
+            l.to_lowercase()
+                .strip_prefix("content-length:")
+                .map(|v| v.trim().parse::<usize>().unwrap())
+        })
+        .unwrap();
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).unwrap();
+    let request = ExportMetricsServiceRequest::decode(body.as_slice()).unwrap();
+    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    request
+}
+fn start_repeated_metric_receiver(
+    listener: TcpListener,
+) -> (
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread::JoinHandle<Vec<ExportMetricsServiceRequest>>,
+) {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    listener.set_nonblocking(true).unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let signal = stopped.clone();
+    let worker = thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let mut requests = Vec::new();
+        while !signal.load(Ordering::Acquire) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    requests.push(read_metric_request(&mut stream));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "producer did not finish"
+                    );
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+        requests
+    });
+    (stopped, worker)
 }
