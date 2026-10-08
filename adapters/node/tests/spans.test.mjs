@@ -314,3 +314,39 @@ test('final trace failure reaches an acknowledged shutdown health metric without
     assert.ok(metrics.requests.some(request => failedSnapshots.some(body => body.equals(request.body))), 'no acknowledged final metric contained the trace failure');
   } finally { await runtime.close(); await metrics.close(); await traces.close(); }
 });
+
+test('a chosen shutdown timeout is sticky even if the monotonic budget has time left', async () => {
+  const server = await receiver(), p = tracePlan(server.endpoint);
+  p.export.interval_ms = 60000; p.runtime.shutdown_timeout_ms = 37501;
+  const runtime = new Runtime(p);
+  const originalShutdown = runtime.provider.shutdown.bind(runtime.provider);
+  const originalForceFlush = runtime.provider.forceFlush.bind(runtime.provider);
+  const originalTimer = globalThis.setTimeout;
+  let entered, release, fireDeadline;
+  const shutdownEntered = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  runtime.provider.forceFlush = () => Promise.resolve();
+  runtime.provider.shutdown = () => { entered(); return pending; };
+  globalThis.setTimeout = (callback, milliseconds, ...args) => {
+    if (milliseconds !== p.runtime.shutdown_timeout_ms) return originalTimer(callback, milliseconds, ...args);
+    // Select the timeout branch without waiting for an imprecise wall-clock timer.
+    fireDeadline = () => callback(...args);
+    return originalTimer(() => {}, 0);
+  };
+  try {
+    const closing = runtime.close();
+    await shutdownEntered;
+    assert.equal(typeof fireDeadline, 'function');
+    fireDeadline(); await closing;
+    assert.ok(process.hrtime.bigint() < runtime.shutdownDeadline);
+    assert.equal(runtime.report().export_finished, false);
+    release(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(runtime.report().export_finished, false, 'a late SDK result overwrote the chosen failure');
+    assert.equal((await runtime.close()).export_finished, false);
+    assert.equal(runtime.report().export_loss, 1);
+  } finally {
+    globalThis.setTimeout = originalTimer;
+    release(); runtime.provider.shutdown = originalShutdown; runtime.provider.forceFlush = originalForceFlush;
+    await originalShutdown(); await server.close();
+  }
+});
