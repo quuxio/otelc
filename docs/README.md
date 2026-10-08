@@ -29,3 +29,5 @@ Local workflows: [metrics viewer](observability-stack.md), [paired benchmarks](b
 For complete tested source and commands, start with the [developer 101 guide](developer-101.md).
 
 See [language adapters](languages.md) for sequential implementation status and [Python instrumentation](python.md) for the first additional language.
+
+See [function traces and spans](traces.md) for the common trace policy, every language example and end-to-end storage verification.

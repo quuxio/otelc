@@ -43,7 +43,7 @@ Open the [otelc Grafana dashboard](http://localhost:3000/d/otelc-local) or [Prom
 | Endpoint | Purpose |
 | --- | --- |
 | `http://127.0.0.1:4318/v1/metrics` | Apps send OTLP/HTTP metric protobuf here |
-| `http://127.0.0.1:4318/v1/traces` | Rust sends OTLP/HTTP trace protobuf here |
+| `http://127.0.0.1:4318/v1/traces` | All qualified language adapters send OTLP/HTTP trace protobuf here |
 | `http://localhost:3200/ready` | Tempo readiness |
 | `http://localhost:3000/d/otelc-local` | Grafana dashboard |
 | `http://localhost:9090` | Prometheus queries and scrape status |
@@ -78,7 +78,7 @@ Use [paired benchmarks](benchmarks.md) for measured plain-versus-instrumented ov
 
 ## View function traces
 
-Use the [Rust span guide](rust-spans.md) or [Python span guide](python-spans.md) and their unchanged internal examples. Change the dashboard Service field to match the configured service. The [read-only trace dashboard](http://localhost:3000/d/otelc-traces) uses the provisioned **otelc Tempo** datasource. Filter by Service and click a trace name to show its spans, or paste a known Trace ID. Anonymous viewers cannot use Explore; this dashboard supplies the supported viewing path. The metrics dashboard remains available. Allow time for batching, Tempo ingestion and search indexing. Check `http://127.0.0.1:3200/ready` and the Collector/Tempo logs if traces are absent; an application export acknowledgement alone does not prove downstream storage.
+Use the [trace guide](traces.md) for all eight language examples and `make trace-check` to verify actual Tempo storage. Change the dashboard Service field to match the configured service. The [read-only trace dashboard](http://localhost:3000/d/otelc-traces) uses the provisioned **otelc Tempo** datasource. Filter by Service and click a trace name to show its spans, or paste a known Trace ID. Anonymous viewers cannot use Explore; this dashboard supplies the supported viewing path. The metrics dashboard remains available. Allow time for batching, Tempo ingestion and search indexing. Check `http://127.0.0.1:3200/ready` and the Collector/Tempo logs if traces are absent; an application export acknowledgement alone does not prove downstream storage.
 
 If testing from a temporary checkout, ensure its configuration path is shared with the Docker engine. Colima on the tested Mac shares the permanent `/Users/sclarke/github/otelc` tree, while a `/private/tmp` worktree is not automatically visible.
 
