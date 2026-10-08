@@ -175,21 +175,21 @@ class Runtime:
         if self.monitor is not None:
             self.monitor.refresh()
 
-    def reject_observation(self, reason, parent_key):
+    def reject_observation(self, reason, parent_key, parent_context=None):
         from .traces import SUPPRESSED
         with self.lock:
             self.loss[reason] += 1
             parent = None if parent_key is None else self.pending.get(parent_key)
-            context = None if parent_key is None else parent.trace if parent is not None else SUPPRESSED
+            context = parent_context if parent_key is None else parent.trace if parent is not None else SUPPRESSED
             self.traces.reject(context, reason)
 
-    def enter(self, key: int, name: str, parent_key=None):
+    def enter(self, key: int, name: str, parent_key=None, parent_context=None):
         if not self.observing or self.closed:
             return
         with self.lock:
             if not self.observing or self.closed:
                 return
-            parent = None
+            parent = parent_context
             if self.traces is not None and parent_key is not None:
                 from .traces import SUPPRESSED
                 frame = self.pending.get(parent_key)

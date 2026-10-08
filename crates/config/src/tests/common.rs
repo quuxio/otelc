@@ -383,3 +383,34 @@ fn trace_environment_defaults_validation_and_disabled_signal_are_independent() {
         .trace_export
         .is_none());
 }
+
+#[test]
+fn task_propagation_has_shared_policy_and_explicit_capabilities() {
+    let mut config = policy();
+    config.propagation.tasks = true;
+    assert!(config.validate().is_err());
+    config.traces.enabled = true;
+    config.validate().unwrap();
+    for language in &config.languages {
+        let resolved = config.resolve(*language).unwrap();
+        assert!(resolved.propagation.tasks);
+        assert_eq!(resolved.execution_available, *language == Language::Python);
+        if *language != Language::Python {
+            assert!(resolved
+                .unavailable
+                .iter()
+                .any(|reason| reason.contains("task context propagation")));
+        }
+    }
+    config.propagation.http = true;
+    assert!(
+        !config
+            .resolve(Language::Python)
+            .unwrap()
+            .execution_available
+    );
+    assert!(toml::from_str::<CommonConfig>(
+        "schema_version=2\nlanguages=[\"python\"]\n[propagation]\nunknown=true"
+    )
+    .is_err());
+}

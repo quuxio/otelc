@@ -16,6 +16,8 @@ Read the [system design](design.md) first, then the documents for the boundary y
 | Language, OS, and execution-model support | [Support matrix](support.md) |
 | Docker Collector, Prometheus and Grafana | [Local metrics viewer](observability-stack.md) |
 | Plain versus instrumented measurements | [Paired benchmarks](benchmarks.md) |
+| Task and service context plus automatic lifetime spans | [All-language implementation plan](context-and-lifetime-plan.md) |
+| Python standard asyncio context | [Task propagation example](python-task-context.md) |
 | Explicit C++ object lifetime guard | [Object lifetimes](object-lifetimes.md) |
 | Delivery sequence and release acceptance | [Roadmap and validation](roadmap.md) |
 | Architectural choices | [Design decisions](decisions.md) |

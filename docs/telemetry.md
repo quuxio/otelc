@@ -1,6 +1,6 @@
 # Telemetry semantics
 
-Function metrics and sampled function spans are implemented for C/C++, Rust, Python, Java, JavaScript, TypeScript and Go within their qualified boundaries. Callback-only native instrumentation supports metrics; native spans require the matched LLVM backend. Automatic task and distributed context propagation remain open. See the [trace guide](traces.md) and [current implementation](local-implementation.md).
+Function metrics and sampled function spans are implemented for C/C++, Rust, Python, Java, JavaScript, TypeScript and Go within their qualified boundaries. Callback-only native instrumentation supports metrics; native spans require the matched LLVM backend. Python standard asyncio task propagation is opt-in; other task integrations and distributed propagation remain open. See the [trace guide](traces.md) and [current implementation](local-implementation.md).
 
 ## Metrics
 
@@ -48,7 +48,7 @@ Retry transient errors within the bounded budget, then account for discarded bat
 
 ## Context and future signals
 
-Automatic cross-thread, task, or cross-process parenting requires explicit context handoff or a validated language/framework adapter. Until then, threads have independent roots. Manually instrumented OpenTelemetry spans and otelc spans are not automatically joined merely because they share a process.
+Automatic cross-thread, task, or cross-process parenting requires explicit context handoff or a validated language/framework adapter. The [Python standard asyncio adapter](python-task-context.md) qualifies task submission context; other integrations remain planned. Threads have independent roots. Manually instrumented OpenTelemetry spans and otelc spans are not automatically joined merely because they share a process.
 
 An adapter can later capture/attach a context at known boundaries without changing the minimal probe ABI. Error metrics, exemplars, exclusive timing, and profiles are deferred until each has a supported semantic contract. The initial product should report a few honest metrics rather than infer signals it cannot observe.
 

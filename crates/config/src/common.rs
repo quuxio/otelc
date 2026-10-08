@@ -43,6 +43,10 @@ config_section!(Annotations {
     read_existing: bool = false,
     inject_generated: bool = false
 });
+config_section!(Propagation {
+    tasks: bool = false,
+    http: bool = false
+});
 config_section!(Lifetimes {
     enabled: bool = false,
     boundary: String = "object".into(),
@@ -89,6 +93,8 @@ pub struct CommonConfig {
     #[serde(default)]
     pub traces: Traces,
     #[serde(default)]
+    pub propagation: Propagation,
+    #[serde(default)]
     pub export: Export,
     #[serde(skip)]
     metrics_endpoint_override: Option<String>,
@@ -128,6 +134,7 @@ pub struct ResolvedConfig {
     pub native: Option<NativeLimits>,
     pub metrics: Metrics,
     pub traces: Traces,
+    pub propagation: Propagation,
     pub export: Export,
     pub resource: Resource,
     pub metrics_endpoint: String,
@@ -225,6 +232,9 @@ impl CommonConfig {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        if (self.propagation.tasks || self.propagation.http) && !self.traces.enabled {
+            bail!("context propagation requires traces.enabled=true");
+        }
         if self.runtime.max_active_calls == 0 || self.runtime.max_active_calls > 65536 {
             bail!("max_active_calls must be between 1 and 65536");
         }
@@ -319,6 +329,16 @@ impl CommonConfig {
         let native = matches!(language, Language::C | Language::Cpp)
             .then(|| adapter.native.unwrap_or_default());
         let mut unavailable = Vec::new();
+        if self.propagation.tasks && language != Language::Python {
+            unavailable.push(format!(
+                "{language} task context propagation is not implemented"
+            ));
+        }
+        if self.propagation.http {
+            unavailable.push(format!(
+                "{language} HTTP context propagation is not implemented"
+            ));
+        }
         if language == Language::Python {
             if backend != "profile" {
                 unavailable.push("Python requires the profile backend".into());
@@ -405,6 +425,7 @@ impl CommonConfig {
             runtime: self.runtime.clone(),
             metrics: self.metrics.clone(),
             traces: self.traces.clone(),
+            propagation: self.propagation.clone(),
             export: self.export.clone(),
             resource: self.resource.clone(),
             metrics_endpoint: self.metrics_endpoint_override.clone().unwrap_or_else(|| {
