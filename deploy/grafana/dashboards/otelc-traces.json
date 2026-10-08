@@ -83,7 +83,7 @@
           "links": [
             {
               "title": "Open this trace",
-              "url": "/d/otelc-traces?var-traceId=${__data.fields.traceID}",
+              "url": "/d/otelc-traces?var-traceId=${__data.fields.traceID}&${service:queryparam}&from=${__from}&to=${__to}",
               "targetBlank": false
             }
           ]
