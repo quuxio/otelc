@@ -108,3 +108,5 @@ For JavaScript function spans, use `examples/javascript-traces.toml` and set the
 The [TypeScript trace example](typescript-spans.md) uses the same Collector/Tempo pipeline without editing its typed source. Set the trace dashboard service to `otelc-typescript-traces`.
 
 The [Go trace example](go-spans.md) produces same-goroutine function trees through the same Collector/Tempo pipeline. Set the trace dashboard service to `otelc-go-traces`.
+
+For C function spans, use `examples/c-traces.toml` and service `otelc-c-traces`; see [C spans](c-spans.md). The example exports seven spans in three trees without source edits.

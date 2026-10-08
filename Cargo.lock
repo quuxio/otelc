@@ -741,9 +741,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "httpdate",
+ "opentelemetry",
  "opentelemetry-proto",
+ "opentelemetry_sdk",
  "prost",
  "quux-otelc-config",
+ "serde_json",
  "ureq",
 ]
 
@@ -755,6 +758,10 @@ dependencies = [
  "cc",
  "libc",
  "loom",
+ "opentelemetry",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost",
  "quux-otelc-config",
  "quux-otelc-export",
  "quux-otelc-symbols",

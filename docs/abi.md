@@ -44,6 +44,8 @@ The token permits detection of an out-of-order exit even when a function recursi
 
 The pass emits cleanup so every accepted invocation gets a leave along each supported exit. Invalid tokens cause bounded loss accounting and a frame reset, not a panic across the C boundary. A leave never reads application arguments or return values.
 
+The implemented LLVM token ABI also returns an opaque nonzero suppression token for a rejected traced scope. The compiler must pass it to the matching leave; it records no function observation and prevents descendants from becoming false roots while an outer scope is rejected. This is distinct from the proposed descriptor ABI. Never interpret a nonzero interim token as proof that telemetry was recorded.
+
 ## Lifecycle
 
 Native module initialization registers descriptors and a module build identity before those probes are admitted. Registration may allocate; function probes may not. The runtime copies or owns all metadata needed after registration. Modules with unsupported unload behaviour remain excluded until the module-lifetime contract is implemented.

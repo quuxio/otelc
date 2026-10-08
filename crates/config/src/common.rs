@@ -219,6 +219,7 @@ impl CommonConfig {
                 enabled: false,
                 ..self.traces.clone()
             },
+            trace_export: None,
             export: self.export.clone(),
             resource: self.resource.clone(),
         }
@@ -379,8 +380,8 @@ impl CommonConfig {
             if self.lifetimes.enabled {
                 unavailable.push("automatic lifetime instrumentation is not implemented".into());
             }
-            if self.traces.enabled {
-                unavailable.push("span export is not implemented".into());
+            if self.traces.enabled && (language != Language::C || backend != "llvm") {
+                unavailable.push("native spans require the qualified C LLVM adapter".into());
             }
         }
         Ok(ResolvedConfig {
@@ -421,6 +422,8 @@ impl CommonConfig {
         }
         let mut config = self.native_template(resolved.native.context("native adapter required")?);
         config.build.backend = resolved.backend;
+        config.traces = resolved.traces;
+        config.trace_export = resolved.trace_export;
         if let Some(endpoint) = &self.metrics_endpoint_override {
             config.export.endpoint = endpoint.clone();
             config.metrics_endpoint_is_full = true;

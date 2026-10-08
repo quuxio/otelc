@@ -26,6 +26,8 @@ pub struct Config {
     pub metrics: Metrics,
     #[serde(default)]
     pub traces: Traces,
+    #[serde(skip)]
+    pub trace_export: Option<common::TraceExport>,
     #[serde(default)]
     pub export: Export,
     #[serde(default)]
@@ -262,8 +264,8 @@ impl Config {
         if unique.len() != self.objects.classes.len() {
             bail!("object classes must be unique");
         }
-        if self.traces.enabled {
-            bail!("span export is not implemented");
+        if self.traces.enabled && (self.build.backend != "llvm" || self.trace_export.is_none()) {
+            bail!("native spans require schema 2 and the LLVM backend");
         }
         for (name, value, max) in [
             ("max_functions", self.runtime.max_functions, 65536),

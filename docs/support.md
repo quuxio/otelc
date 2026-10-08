@@ -10,7 +10,7 @@ All target languages must meet the [source-free contract](design.md#source-free-
 
 | Language | Initial route | Planned support |
 | --- | --- | --- |
-| C | Clang callbacks | M1: synchronous normal-return functions |
+| C | LLVM 22 and Clang callbacks | Normal-return timing and live metrics controls; sampled same-thread function spans qualified on macOS ARM64 with LLVM; callback tracing unavailable |
 | C++ | Clang callbacks, then LLVM pass | Local callbacks: selected `-fno-exceptions` code; local LLVM: exception-enabled timing; traces planned |
 | Objective-C / Objective-C++ | Clang with language-specific fixtures | Later: method names, exceptions, blocks, ARC, and messaging boundaries |
 | Swift | Matched compiler integration or Swift-specific pass | Later: begin with synchronous native functions; async requires a separate adapter |
