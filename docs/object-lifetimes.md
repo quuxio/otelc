@@ -2,7 +2,7 @@
 
 ## Current opt-in prototype
 
-The product requirement is automatic lifetime instrumentation without application source edits. That capability is not implemented. The guard below is an interim opt-in prototype used to exercise runtime lifetime accounting; adding it to a class does not satisfy the source-free acceptance contract.
+The product requirement is automatic lifetime instrumentation without application source edits. That capability is not implemented. The [all-language implementation plan](context-and-lifetime-plan.md) explicitly includes **automatic object / resource lifetime spans**, collection boundaries, creation-context links and lifetime metrics. The guard below is an interim opt-in prototype used to exercise runtime lifetime accounting; adding it to a class does not satisfy the source-free acceptance contract.
 
 The installed C++ header [`include/otelc/lifetime.hpp`](../include/otelc/lifetime.hpp) provides an explicit `otelc::ObjectLifetime` guard. The guard measures the interval between `start()` and `finish()` or destruction; it uses a bounded process-wide registry instead of a thread-local function stack. Construction and destruction may occur on different threads.
 

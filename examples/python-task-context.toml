@@ -1,0 +1,24 @@
+schema_version = 2
+languages = ["python"]
+
+[sources]
+include = ["examples/apps/python_tasks_app.py"]
+
+[functions]
+include = ["examples.apps.python_tasks_app.group", "examples.apps.python_tasks_app.detached", "examples.apps.python_tasks_app.leaf"]
+
+[traces]
+enabled = true
+root_sample_ratio = 1.0
+max_active_traces = 32
+max_spans_per_trace = 64
+
+[propagation]
+tasks = true
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 1000
+
+[resource]
+service_name = "otelc-python-task-context"

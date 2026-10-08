@@ -100,6 +100,8 @@ class TraceStore:
         self.capacity = queued
         self.roots = {}
         self.ready = collections.deque()
+        self.leases = {}
+        self.next_lease = 0
         self.retained = self.completed = self.sampled_out = 0
         self.losses = collections.Counter()
         self.deadline = float("inf")
@@ -133,7 +135,10 @@ class TraceStore:
             if not parent.sampled:
                 return SUPPRESSED
             tree = self.roots.get(parent.context.trace_id)
-            if tree is None or tree.invalid:
+            if tree is None:
+                self.losses["context_expired"] += 1
+                return SUPPRESSED
+            if tree.invalid:
                 return SUPPRESSED
             if len(tree.nodes) >= self.policy["max_spans_per_trace"] or self.retained >= 1048576:
                 return self.reject(parent, "span_capacity")
@@ -166,6 +171,30 @@ class TraceStore:
         self.retained += 1
         return result
 
+    def acquire(self, parent):
+        """Reserve a continuation before its creator can finish; caller holds the runtime lock."""
+        if parent is None or not parent.sampled:
+            return None
+        tree = self.roots.get(parent.context.trace_id)
+        if tree is None or tree.invalid:
+            return None
+        if len(self.leases) >= self.runtime.plan["runtime"]["max_active_calls"]:
+            self.reject(parent, "context_capacity")
+            return None
+        self.next_lease += 1
+        self.leases[self.next_lease] = parent
+        tree.active += 1
+        return self.next_lease
+
+    def release(self, lease):
+        parent = self.leases.pop(lease, None)
+        if parent is None:
+            return
+        tree = self.roots.get(parent.context.trace_id)
+        if tree is not None:
+            tree.active -= 1
+            self.complete(parent.context.trace_id, tree)
+
     def finish(self, identity, ended, unwound=False, cancelled=False):
         if identity is None or not identity.sampled:
             return
@@ -184,9 +213,12 @@ class TraceStore:
         tree.active -= 1
         if identity.context.span_id == tree.root:
             tree.closed = True
+        self.complete(identity.context.trace_id, tree)
+
+    def complete(self, trace_id, tree):
         if tree.active or not tree.closed:
             return
-        self.roots.pop(identity.context.trace_id)
+        self.roots.pop(trace_id)
         if tree.invalid:
             return
         if len(self.ready) >= self.capacity:
@@ -224,6 +256,7 @@ class TraceStore:
             if not tree.invalid:
                 self.losses["incomplete"] += 1
         self.roots.clear()
+        self.leases.clear()
 
     def close(self):
         self.delegate.shutdown()
@@ -231,4 +264,5 @@ class TraceStore:
 
     def report(self):
         return {"completed_trees": self.completed, "sampled_out_roots": self.sampled_out,
-                "active_trees": len(self.roots), "queued_trees": len(self.ready), "losses": dict(self.losses)}
+                "active_trees": len(self.roots), "queued_trees": len(self.ready),
+                "pending_contexts": len(self.leases), "losses": dict(self.losses)}

@@ -121,4 +121,5 @@ Open the [Grafana dashboard](http://localhost:3000/d/otelc-local) after starting
 
 - [Common configuration](docs/common-configuration.md): one schema-2 policy for C, C++, Rust, Python, Java, JavaScript, TypeScript and Go.
 - [Language guides](docs/languages.md): adapter setup and current support. See the [roadmap](docs/roadmap.md#todo-language-adapters) for remaining work.
+- [Context and lifetime spans](docs/context-and-lifetime-plan.md): the all-language delivery plan, starting with [Python standard asyncio task context](docs/python-task-context.md).
 - [Object lifetimes](docs/object-lifetimes.md): the C++ guard is an opt-in prototype requiring source edits. Automatic lifetime instrumentation without source edits remains planned.

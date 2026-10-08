@@ -90,7 +90,7 @@ def receiver(responses=None, gate=None):
         worker.join()
 
 
-class PythonSpanTests(unittest.TestCase):
+class PythonSpanHarness:
     def runtime(self, policy=None):
         metrics, traces = Capture(), TraceCapture()
         runtime = Runtime(policy or trace_plan(), metrics, traces)
@@ -110,6 +110,8 @@ class PythonSpanTests(unittest.TestCase):
         monitor.close()
         return runtime.close()
 
+
+class PythonSpanTests(PythonSpanHarness, unittest.TestCase):
     def test_recursive_trees_have_sdk_ids_parents_times_resource_scope_and_original_results(self):
         runtime, _, capture, app, monitor = self.monitored(
             "def recurse(depth):\n    return 0 if depth == 0 else 1 + recurse(depth - 1)\n")
