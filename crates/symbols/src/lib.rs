@@ -11,6 +11,8 @@ pub struct Function {
     pub address: u64,
     pub linkage_name: String,
     pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_name: Option<String>,
     pub selected: bool,
     #[serde(default)]
     pub annotated: bool,
@@ -46,6 +48,47 @@ pub fn manifest_path(binary: &Path) -> PathBuf {
     path.push(".otelc.json");
     path.into()
 }
+// Distinct C++ ABI bodies may demangle identically. Configuration keeps the
+// original name; telemetry labels retain distinct compiled linkage identities.
+fn distinguish_cpp_linkages(functions: &mut [Function]) -> Result<()> {
+    let mut groups = std::collections::HashMap::<String, Vec<usize>>::new();
+    for (index, function) in functions.iter().enumerate().filter(|(_, f)| f.selected) {
+        groups
+            .entry(function.display_name.clone())
+            .or_default()
+            .push(index);
+    }
+    for (name, indices) in groups.into_iter().filter(|(_, group)| group.len() > 1) {
+        let mut linkages = std::collections::HashSet::new();
+        for &index in &indices {
+            let function = &functions[index];
+            if !linkages.insert(&function.linkage_name)
+                || cpp_demangle::Symbol::new(&function.linkage_name)
+                    .ok()
+                    .and_then(|symbol| symbol.demangle().ok())
+                    .as_ref()
+                    != Some(&name)
+            {
+                bail!("selected function names are ambiguous across compilation units");
+            }
+        }
+        for index in indices {
+            let function = &mut functions[index];
+            function.display_name = format!("{name} [linkage={}]", function.linkage_name);
+            function.selection_name = Some(name.clone());
+        }
+    }
+    let mut labels = std::collections::HashSet::new();
+    if functions
+        .iter()
+        .filter(|f| f.selected)
+        .any(|f| !labels.insert(&f.display_name))
+    {
+        bail!("selected function labels remain ambiguous");
+    }
+    Ok(())
+}
+
 pub fn create(
     binary: &Path,
     config: &Config,
@@ -77,6 +120,7 @@ pub fn create(
             address: symbol.address(),
             linkage_name: linkage.into(),
             display_name: display.clone(),
+            selection_name: None,
             selected,
             annotated,
             reason: if !probed.functions.contains(linkage) {
@@ -98,14 +142,7 @@ pub fn create(
         bail!("selected symbols share an address; folded/aliased functions are unsupported");
     }
     functions.dedup_by(|a, b| a.address == b.address);
-    let mut selected_names = std::collections::HashSet::new();
-    if functions
-        .iter()
-        .filter(|f| f.selected)
-        .any(|f| !selected_names.insert(&f.display_name))
-    {
-        bail!("selected function names are ambiguous across compilation units");
-    }
+    distinguish_cpp_linkages(&mut functions)?;
     if functions.iter().filter(|f| f.selected).count() > config.runtime.max_functions {
         bail!("selected function count exceeds max_functions");
     }
@@ -139,7 +176,19 @@ impl Manifest {
             .windows(2)
             .any(|f| f[0].address >= f[1].address)
             || value.functions.iter().any(|f| {
-                f.address == 0 || f.display_name.len() > 4096 || f.linkage_name.len() > 4096
+                f.address == 0
+                    || f.display_name.len() > 4096
+                    || f.linkage_name.len() > 4096
+                    || f.selection_name.as_ref().is_some_and(|name| {
+                        name.is_empty()
+                            || name.len() > 4096
+                            || cpp_demangle::Symbol::new(&f.linkage_name)
+                                .ok()
+                                .and_then(|symbol| symbol.demangle().ok())
+                                .as_ref()
+                                != Some(name)
+                            || f.display_name != format!("{name} [linkage={}]", f.linkage_name)
+                    })
             })
         {
             bail!("invalid or ambiguous function inventory");

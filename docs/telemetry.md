@@ -51,3 +51,5 @@ Retry transient errors within the bounded budget, then account for discarded bat
 Automatic cross-thread, task, or cross-process parenting requires explicit context handoff or a validated language/framework adapter. Until then, threads have independent roots. Manually instrumented OpenTelemetry spans and otelc spans are not automatically joined merely because they share a process.
 
 An adapter can later capture/attach a context at known boundaries without changing the minimal probe ABI. Error metrics, exemplars, exclusive timing, and profiles are deferred until each has a supported semantic contract. The initial product should report a few honest metrics rather than infer signals it cannot observe.
+
+C++ LLVM spans use the native private SDK path with escaping Itanium unwind status. Distinct selected ABI bodies sharing a demangled name receive separate linkage labels; configuration uses their original demangled name. These are function-body spans, not object lifetimes. See [C++ spans](cpp-spans.md).

@@ -110,3 +110,5 @@ The [TypeScript trace example](typescript-spans.md) uses the same Collector/Temp
 The [Go trace example](go-spans.md) produces same-goroutine function trees through the same Collector/Tempo pipeline. Set the trace dashboard service to `otelc-go-traces`.
 
 For C function spans, use `examples/c-traces.toml` and service `otelc-c-traces`; see [C spans](c-spans.md). The example exports seven spans in three trees without source edits.
+
+For C++ function-body spans, use `examples/cpp-traces.toml` and service `otelc-cpp-traces`; see [C++ spans](cpp-spans.md) for unchanged-source construction and exception examples.
