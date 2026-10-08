@@ -55,7 +55,9 @@ fn write_plan(root: &Path) -> PathBuf {
     value["functions"]["exclude"] = serde_json::json!(["*.main", "*.excluded"]);
     value["export"]["interval_ms"] = serde_json::json!(60000);
     value["export"]["timeout_ms"] = serde_json::json!(40);
-    value["runtime"]["shutdown_timeout_ms"] = serde_json::json!(100);
+    // This fixture checks source/behaviour preservation, not scheduling latency.
+    // Keep the normal shutdown budget under coverage on shared CI runners.
+    value["runtime"]["shutdown_timeout_ms"] = serde_json::json!(2000);
     value["metrics_endpoint"] = serde_json::json!("http://127.0.0.1:9/v1/metrics");
     let path = root.join("plan.json");
     fs::write(&path, value.to_string()).unwrap();
