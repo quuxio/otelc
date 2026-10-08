@@ -165,11 +165,11 @@ export class Runtime {
         if (this.traces) { await this.provider.forceFlush(); await this.traces.flush(); }
         await this.provider.shutdown();
         await this.traces?.flush();
-      })()]).then(() => {
-        if (process.hrtime.bigint() > this.shutdownDeadline) throw new Error('shutdown deadline');
-        this.exportFinished = true;
-      });
+      })()]);
       await Promise.race([stopped, deadline]);
+      if (process.hrtime.bigint() > this.shutdownDeadline) throw new Error('shutdown deadline');
+      // Only the successful caller continuation can mark shutdown complete.
+      this.exportFinished = true;
     } catch { this.exportLoss++; await this.exporter.shutdown(); }
     finally {
       clearTimeout(timer);
