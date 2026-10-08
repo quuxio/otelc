@@ -107,10 +107,17 @@ Released under [AGPL-3.0](LICENSE). No separate runtime linking exception is gra
 
 ## Local metrics, lifetimes and benchmarks
 
-- [Docker Collector, Prometheus and Grafana](docs/observability-stack.md): `make stack-up`, then open <http://localhost:3000/d/otelc-local>.
-- [Exception-aware C++ and internal examples](docs/local-implementation.md): `make examples`; select `examples/exceptions.toml` for the matched LLVM backend.
-- [Object lifetime prototype and automatic lifetime requirement](docs/object-lifetimes.md): the current guard is opt-in; source-free class instrumentation remains TODO.
-- [Paired benchmarks](docs/benchmarks.md): `make benchmark`, retaining plain, disabled-probe and active timing samples with loss evidence.
-- [Developer 101](docs/developer-101.md): complete source, configuration, build/run commands, existing annotations, live metrics control and added-latency measurements.
-- [Common configuration](docs/common-configuration.md): one schema-2 policy, validated and resolved for every target language; native C/C++, Python, JavaScript and TypeScript consume it now.
-- [Language adapter TODOs](docs/roadmap.md#todo-language-adapters): Rust, TypeScript/JavaScript, Java/AspectJ, Python and Go integration.
+Start with the [developer 101](docs/developer-101.md) for source examples, configuration, annotations and live metrics controls.
+
+| Task | Command |
+| --- | --- |
+| [Start the Collector, Prometheus and Grafana](docs/observability-stack.md) | `make stack-up` |
+| [Build the internal C/C++ examples](docs/local-implementation.md) | `make examples` |
+| [Compare plain, probes-disabled and metrics-enabled builds](docs/benchmarks.md) | `make benchmark` |
+| [Measure metrics off/on in the same process](docs/benchmarks.md#live-metrics-latency-in-one-process) | `make benchmark-live` |
+
+Open the [Grafana dashboard](http://localhost:3000/d/otelc-local) after starting the stack. For exception-enabled C++, select `examples/exceptions.toml` with the matched LLVM backend. Benchmark reports retain raw samples and telemetry-loss evidence.
+
+- [Common configuration](docs/common-configuration.md): one schema-2 policy for C, C++, Rust, Python, Java, JavaScript, TypeScript and Go.
+- [Language guides](docs/languages.md): adapter setup and current support. See the [roadmap](docs/roadmap.md#todo-language-adapters) for remaining work.
+- [Object lifetimes](docs/object-lifetimes.md): the C++ guard is an opt-in prototype requiring source edits. Automatic lifetime instrumentation without source edits remains planned.
