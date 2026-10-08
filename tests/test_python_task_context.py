@@ -151,6 +151,34 @@ async def root():
         self.assertEqual(report["traces"]["active_trees"], 0)
         self.assertTrue(any(span.name.endswith(".root") for span in capture.spans()))
 
+    def test_caught_cancellation_restores_worker_context_before_new_submission(self):
+        runtime, _, capture, app, monitor = self.monitored("""
+async def grandchild():
+    return 5
+async def child():
+    try:
+        await asyncio.sleep(10)
+    except asyncio.CancelledError:
+        return asyncio.create_task(grandchild())
+async def root():
+    return asyncio.create_task(child())
+""", task_policy())
+        async def exercise():
+            child = await app["root"]()
+            await asyncio.sleep(0)
+            child.cancel()
+            self.assertEqual(await (await child), 5)
+        asyncio.run(exercise())
+        report = self.finish(runtime, monitor)
+        spans = capture.spans()
+        root = next(span for span in spans if span.name.endswith(".root"))
+        child = next(span for span in spans if span.name.endswith(".child"))
+        grandchild = next(span for span in spans if span.name.endswith(".grandchild"))
+        self.assertEqual(child.parent_span_id, root.span_id)
+        self.assertEqual(grandchild.parent_span_id, child.span_id)
+        self.assertEqual(child.status.code, 0)
+        self.assertEqual(report["traces"]["losses"], {})
+
     def test_unsampled_parent_suppresses_tasks_without_resampling(self):
         policy = task_policy()
         policy["traces"]["root_sample_ratio"] = 0

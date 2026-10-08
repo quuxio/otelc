@@ -47,7 +47,7 @@ Support is per qualified integration and toolchain, not every scheduler, framewo
 
 ## Delivery sequence: individual PRs
 
-1. **Python asyncio context plus common policy** (implemented; [qualification and example](python-task-context.md)): unchanged internal fixtures, bounded reservations, concurrent/late children, cancellation/factories/context isolation. Preserve the previous default of independent scheduled roots when propagation is off.
+1. **Python asyncio context plus common policy** (implemented in [PR #32](https://github.com/quuxio/otelc/pull/32); [qualification and example](python-task-context.md)): unchanged internal fixtures, bounded reservations, concurrent/late children, cancellation/factories/context isolation. Preserve the previous default of independent scheduled roots when propagation is off.
 2. **Shared distributed carrier fixtures and Python HTTP**: golden W3C vectors, local subtree IDs independent of global trace ID, inbound/outbound spans, independent service identity and no telemetry recursion. Two instrumented processes must produce one stored trace; also test a client with existing valid/invalid application headers.
 3. **Python automatic resource/collection lifetime spans**: constructor and declared resource boundary observers, weak identity registry, standalone linked lifetime spans and metrics. Validate retention, constructor/close failures, duplicate completion and shutdown. Keep unsupported class shapes explicit.
 4. **JavaScript context, HTTP and lifetime spans**, each as its own PR. Qualify callbacks, concurrent requests, worker transfers and weak collection independently.

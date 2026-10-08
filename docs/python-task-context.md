@@ -45,7 +45,7 @@ Open [Grafana traces](http://localhost:3000/d/otelc-traces), select service `ote
 
 ## Qualified boundaries and losses
 
-This supports CPython 3.12+ standard `asyncio.BaseEventLoop.create_task`, reached by `asyncio.create_task`, loop submission, `gather` and TaskGroup. Tests cover explicit empty/copied contexts, eager factories, compatible custom factories, cancellation before execution, escaping cancellation, failed submission, parallel roots and detached children. The application's original coroutine, factory, result and exception behaviour are preserved. One otelc task-context hook may be active per process; a second installation fails before replacing it.
+This supports CPython 3.12+ standard `asyncio.BaseEventLoop.create_task`, reached by `asyncio.create_task`, loop submission, `gather` and TaskGroup. Tests cover explicit empty/copied contexts, eager factories, compatible custom factories, cancellation before execution, escaping/caught cancellation, new submission after cancellation, failed submission, parallel roots and detached children. The application's original coroutine, factory, result and exception behaviour are preserved. One otelc task-context hook may be active per process; a second installation fails before replacing it.
 
 The adapter uses a private ContextVar and bounded trace identities. It retains no application frames, tasks, futures or payloads. Pending submission reservations keep the local tree available until scheduled work completes; they do not keep the parent span open or wait for children in application code. Each reservation is released after completion or failed submission, including cancellation before start. `runtime.max_active_calls` bounds reservations separately from active function observations.
 

@@ -146,7 +146,8 @@ class Monitor:
             self.context.resume(id(sys._getframe(1)))
 
     def thrown(self, code, _, exception):
-        self.resumed(code, _)
+        if self.context is not None:
+            self.context.resume(id(sys._getframe(1)))
 
     def install(self):
         monitoring = sys.monitoring
