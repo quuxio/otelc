@@ -1,6 +1,6 @@
 # Telemetry semantics
 
-The local implementation exports callback timing metrics. Traces and context integration below remain future contracts; see [current implementation](local-implementation.md).
+Function metrics and sampled function spans are implemented for C/C++, Rust, Python, Java, JavaScript, TypeScript and Go within their qualified boundaries. Callback-only native instrumentation supports metrics; native spans require the matched LLVM backend. Automatic task and distributed context propagation remain open. See the [trace guide](traces.md) and [current implementation](local-implementation.md).
 
 ## Metrics
 
