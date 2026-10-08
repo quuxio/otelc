@@ -61,6 +61,16 @@ Support is per qualified integration and toolchain, not every scheduler, framewo
 
 Before each PR, state the exact boundary, assumptions and acceptance tests. Run focused checks while implementing, then `make check`, independent minimum 80% component coverage and Sonar. Merge only a green reviewed final head to `main` as `quuxio`; update this plan and support docs with evidence. Compiler prerequisites may be delivered first, but never mark a language's lifetime spans complete merely because infrastructure exists.
 
+## Equivalence qualification with oteleq
+
+Use [oteleq](https://github.com/quuxio/oteleq) alongside the semantic and telemetry tests for each language milestone. Its [initial Rust workload comparator](https://github.com/quuxio/oteleq/blob/main/docs/workload-comparison.md) compares repeated captured byte channels and requires an expected decoded telemetry witness on each instrumented attempt. It accepts all eight language IDs, but only the diagnostic Python task capture is integrated now; semantic discovery, automatic generation and typed state observers remain outstanding.
+
+The Python task milestone has been exercised twice without instrumentation and twice with the real launcher in fresh private workspaces. Exact stdout/stderr/exit matched, each instrumented run decoded the expected eight spans, and no losses or pending contexts were reported. Retained corpus, source/policy and artefact hashes, raw process output, runtime reports and OTLP bytes supply the evidence. A deliberately altered instrumented output was detected as `different_observed`. These are scoped diagnostic workload observations, not a production or hidden-state qualification.
+
+For subsequent context and automatic object / resource lifetime spans, supply qualified observers for results, existing close/drop events, retention, receiver/global/argument mutations and relevant layout/introspection. Do not infer unchanged object state from stdout or compare exact GC times, random IDs or cross-host timestamps. Preserve all source/dependency files and place captures/generated helpers outside the target repository. Keep independent baseline, instrumented-on and supported off/fault controls; the initial comparator implements baseline/on only, so extend it with explicit capability checks before claiming more lanes.
+
+Reports must say **equivalence over these tests and observations**, list the concrete corpus, artefact class, compared dimensions and gaps, and fail on unstable controls, incomplete requested capture, source changes or missing instrumentation evidence. Full typed graphs, alias/cycle handling and function inventory need their own oteleq PRs before they can qualify those dimensions. A scoped comparator success supplements the focused tests, minimum 80% component coverage and stored-span checks; it does not replace them.
+
 ## Focused acceptance tests
 
 - Same source/dependency hashes, stdout, return/exception identity, object sizes and relevant introspection between ordinary and instrumented executions; existing annotation and externally selected variants.
