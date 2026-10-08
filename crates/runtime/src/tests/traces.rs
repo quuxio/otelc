@@ -91,6 +91,45 @@ fn complete_postorder_records_produce_sdk_parents_and_producer_times() {
     assert_eq!(bridge.retained, 0);
 }
 #[test]
+fn root_wall_epoch_is_refreshed_after_idle_or_clock_adjustment() {
+    let store = Mutex::new(Store::default());
+    let policy = policy();
+    let mut bridge = bridge(&store, &policy);
+    let mut root = entry(0, 1);
+    root.duration_tick = 2_000_000_000_000;
+    bridge.record(root);
+    bridge.record(exit(0, 1, 1, 0, 1));
+    let spans = store.lock().unwrap().pop().unwrap();
+    assert_eq!(
+        spans[0].start_time,
+        SystemTime::UNIX_EPOCH + Duration::from_secs(2000)
+    );
+    assert_eq!(
+        spans[0]
+            .end_time
+            .duration_since(spans[0].start_time)
+            .unwrap(),
+        Duration::from_nanos(10)
+    );
+}
+#[test]
+fn producer_rejected_root_suppresses_children_and_reuses_worker_slot() {
+    let store = Mutex::new(Store::default());
+    let policy = policy();
+    let mut bridge = bridge(&store, &policy);
+    let mut root = entry(0, 1);
+    root.flags |= ROOT_DENIED;
+    bridge.record(root);
+    bridge.record(exit(0, 2, 1, 1, 0));
+    bridge.record(exit(0, 1, 1, 0, 2));
+    assert!(store.lock().unwrap().pop().is_none());
+    assert_eq!(loss(&store, "trace_capacity"), 1);
+    bridge.record(entry(0, 3));
+    bridge.record(exit(0, 3, 3, 0, 1));
+    assert_eq!(store.lock().unwrap().pop().unwrap().len(), 1);
+    assert_eq!(bridge.retained, 0);
+}
+#[test]
 fn lost_child_or_root_records_never_export_partial_trees() {
     for missing in ["entry", "child", "exit"] {
         let store = Mutex::new(Store::default());

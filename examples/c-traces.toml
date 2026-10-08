@@ -1,0 +1,27 @@
+schema_version = 2
+languages = ["c"]
+
+[sources]
+include = ["examples/apps/c-traces.c", "examples/apps/annotated.c"]
+
+[functions]
+include = ["parent_order", "child_order", "recursive_order", "configured_order"]
+exclude = ["blocked_order", "main"]
+
+[annotations]
+read_existing = true
+
+[traces]
+enabled = true
+root_sample_ratio = 1.0
+max_active_traces = 32
+max_spans_per_trace = 64
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 1000
+timeout_ms = 1000
+max_queued_batches = 64
+
+[resource]
+service_name = "otelc-c-traces"

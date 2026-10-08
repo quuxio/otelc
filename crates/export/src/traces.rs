@@ -281,6 +281,13 @@ impl Store {
             }
         }
     }
+    /// Drop queued whole trees without allocating SDK or protobuf payloads.
+    pub fn discard_ready(&mut self, reason: &'static str) {
+        while let Some(tree) = self.ready.pop_front() {
+            self.retained -= tree.nodes.len();
+            self.lose(reason);
+        }
+    }
     pub fn pop(&mut self) -> Option<Vec<SpanData>> {
         let tree = self.ready.pop_front()?;
         self.retained -= tree.nodes.len();

@@ -11,6 +11,10 @@ crate-type = ["staticlib", "rlib"]
 anyhow.workspace = true
 libc.workspace = true
 serde_json.workspace = true
+prost.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-proto.workspace = true
 quux-otelc-config = { path = "../config" }
 quux-otelc-symbols = { path = "../symbols" }
 quux-otelc-export = { path = "../export" }

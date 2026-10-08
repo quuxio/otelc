@@ -1334,6 +1334,88 @@ fn retain_native(root: &Path, name: &str) {
         .unwrap();
     }
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn c_shutdown_report_cannot_wait_for_blocked_sdk_store() {
+    use std::{io::BufRead, process::Stdio, time::Instant};
+    let root = tempfile::tempdir().unwrap();
+    let name = format!("selected_{}", "a".repeat(118));
+    assert_eq!(name.len(), 127);
+    let source = include_str!("../../../tests/fixtures/blocked-span-allocator.c")
+        .replace("SELECTED_NAME", &name);
+    std::fs::write(root.path().join("main.c"), &source).unwrap();
+    std::fs::write(root.path().join("otelc.toml"), "schema_version=2\nlanguages=['c']\n[sources]\ninclude=['*.c']\n[functions]\ninclude=['selected_*']\n[runtime]\nshutdown_timeout_ms=50\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[export]\nendpoint='http://127.0.0.1:1'\ninterval_ms=60000\ntimeout_ms=10\n").unwrap();
+    success(cli(
+        &[
+            "--language",
+            "c",
+            "clang",
+            "-O1",
+            "-g",
+            "-fno-builtin-malloc",
+            "main.c",
+            "-o",
+            "app",
+        ],
+        root.path(),
+    ));
+    retain_native(root.path(), "blocked-span-store");
+    let report = root.path().join("report.json");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+        .args(["--language", "c", "run", "./app"])
+        .env_remove("OTELC_LANGUAGE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .env_remove("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+        .env("OTELC_REPORT_PATH", &report)
+        .current_dir(root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "sdk allocation blocked");
+    // A progress guard, not a claim about exact wall-clock scheduling of 50 ms.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
+    if status.is_none() {
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"release\n")
+            .unwrap();
+    }
+    let result = child.wait_with_output().unwrap();
+    assert!(
+        status.is_some(),
+        "shutdown waited for an SDK store lock past its deadline"
+    );
+    assert!(result.status.success(), "{:?}", result.stderr);
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["export_finished"], false);
+    assert_eq!(report["drained"], false);
+    assert!(
+        report["traces"].is_null(),
+        "a contended optional snapshot must be omitted"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+        source
+    );
+}
 #[test]
 fn live_metrics_toggle_preserves_inflight_calls_and_exception_tokens() {
     use std::io::BufRead;
@@ -1633,6 +1715,704 @@ fn start_trace_receiver(
         }
         requests
     })
+}
+
+#[test]
+fn c_spans_preserve_unedited_threaded_and_annotated_apps_with_metrics_off() {
+    for (annotated, metrics_enabled) in [(false, true), (false, false), (true, true)] {
+        let root = tempfile::tempdir().unwrap();
+        let source = if annotated {
+            include_str!("../../../examples/apps/annotated.c")
+        } else {
+            include_str!("../../../tests/fixtures/timing.c")
+        };
+        std::fs::write(root.path().join("main.c"), source).unwrap();
+        let (metric_port, metric_listener) = receiver();
+        let (trace_port, trace_listener) = receiver();
+        let includes = if annotated {
+            "['configured_order']"
+        } else {
+            "['selected_*']"
+        };
+        std::fs::write(root.path().join("otelc.toml"), format!(
+            "schema_version=2\nlanguages=['c']\n[sources]\ninclude=['*.c']\n[functions]\ninclude={includes}\nexclude=['blocked_order','main']\n[annotations]\nread_existing={annotated}\n[runtime]\nshutdown_timeout_ms=5000\n[metrics]\nenabled={metrics_enabled}\n[traces]\nenabled=true\nroot_sample_ratio=1.0\nmax_active_traces=32\nmax_spans_per_trace=64\n[export]\nendpoint='http://127.0.0.1:{metric_port}'\ninterval_ms=60000\ntimeout_ms=1000\nmax_queued_batches=64\n[resource]\nservice_name='c-span-fixture'\n"
+        )).unwrap();
+        success(
+            Command::new(crate_toolchain().join("clang"))
+                .args(["-O1", "-g", "main.c", "-o", "plain"])
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        success(cli(
+            &[
+                "--language",
+                "c",
+                "clang",
+                "-O1",
+                "-g",
+                "main.c",
+                "-o",
+                "app",
+            ],
+            root.path(),
+        ));
+        retain_native(root.path(), "c-spans");
+        let args: &[&str] = if annotated { &[] } else { &["threads"] };
+        let baseline = success(
+            Command::new(root.path().join("plain"))
+                .args(args)
+                .output()
+                .unwrap(),
+        );
+        let roots = if annotated { 8 } else { 41 };
+        let expected_calls = if annotated { 8 } else { 44 };
+        let metrics = start_receiver(metric_listener);
+        let traces = start_trace_receiver(trace_listener, roots, Duration::from_secs(60));
+        let report = root.path().join("report.json");
+        let measured = success(
+            Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+                .args(["--language", "c", "run", "./app"])
+                .args(args)
+                .env_remove("OTELC_LANGUAGE")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                .env(
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    format!("http://127.0.0.1:{trace_port}/custom-traces"),
+                )
+                .env("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", "1000")
+                .env("OTELC_REPORT_PATH", &report)
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(measured.stdout, baseline.stdout);
+        assert_eq!(measured.stderr, baseline.stderr);
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+            source
+        );
+        let metric_request = metrics.join().unwrap();
+        assert_eq!(
+            counter(&metric_request, "otelc.function.calls", None),
+            if metrics_enabled {
+                expected_calls as u64
+            } else {
+                0
+            }
+        );
+        assert_eq!(
+            counter(&metric_request, "otelc.trace.dropped_trees", None),
+            0
+        );
+        let requests = traces.join().unwrap();
+        let mut graph_sizes = Vec::new();
+        for request in requests {
+            let spans: Vec<_> = request
+                .resource_spans
+                .iter()
+                .flat_map(|resource| &resource.scope_spans)
+                .flat_map(|scope| &scope.spans)
+                .collect();
+            graph_sizes.push(spans.len());
+            let root = spans
+                .iter()
+                .find(|span| span.parent_span_id.is_empty())
+                .unwrap();
+            assert!(root.trace_id.iter().any(|byte| *byte != 0));
+            for span in &spans {
+                assert_eq!(span.trace_id.len(), 16);
+                assert_eq!(span.span_id.len(), 8);
+                assert_eq!(span.trace_id, root.trace_id);
+                assert!(span.span_id.iter().any(|byte| *byte != 0));
+                assert!(span.end_time_unix_nano >= span.start_time_unix_nano);
+                assert_eq!(
+                    span.status
+                        .as_ref()
+                        .map(|status| status.code)
+                        .unwrap_or_default(),
+                    0
+                );
+                assert_eq!(span.attributes.len(), 1);
+                assert_eq!(span.attributes[0].key, "code.function.name");
+                if annotated {
+                    assert!(matches!(
+                        span.name.as_str(),
+                        "process_order" | "configured_order"
+                    ));
+                } else {
+                    assert!(matches!(
+                        span.name.as_str(),
+                        "selected_recursive" | "selected_work"
+                    ));
+                }
+                assert_eq!(
+                    span.attributes[0].value.as_ref().unwrap().value,
+                    Some(
+                        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(
+                            span.name.clone()
+                        )
+                    )
+                );
+                if !span.parent_span_id.is_empty() {
+                    let parent = spans
+                        .iter()
+                        .find(|parent| parent.span_id == span.parent_span_id)
+                        .unwrap();
+                    assert!(span.start_time_unix_nano >= parent.start_time_unix_nano);
+                    assert!(span.end_time_unix_nano <= parent.end_time_unix_nano);
+                }
+            }
+        }
+        graph_sizes.sort();
+        let mut expected = vec![1; roots];
+        if !annotated {
+            expected[roots - 1] = 4;
+        }
+        assert_eq!(graph_sizes, expected);
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["export_finished"], true);
+        assert_eq!(report["export_dropped_batches"], 0);
+        assert_eq!(
+            report["function_calls"],
+            if metrics_enabled { expected_calls } else { 0 }
+        );
+        assert_eq!(report["traces"]["completed_trees"], roots);
+        assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+        assert!(report["losses"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|value| value == &serde_json::json!(0)));
+    }
+}
+
+#[test]
+fn c_rejected_outer_scope_does_not_promote_children_when_budget_recovers() {
+    for call_limit in [1, 4096] {
+        let root = tempfile::tempdir().unwrap();
+        let source = include_str!("../../../tests/fixtures/rejected-root.c");
+        std::fs::write(root.path().join("main.c"), source).unwrap();
+        let (metric_port, metric_listener) = receiver();
+        let (trace_port, trace_listener) = receiver();
+        std::fs::write(root.path().join("otelc.toml"), format!(
+            "schema_version=2\nlanguages=['c']\n[sources]\ninclude=['*.c']\n[functions]\ninclude=['selected_*']\n[runtime]\nmax_active_calls={call_limit}\nshutdown_timeout_ms=5000\n[traces]\nenabled=true\nroot_sample_ratio=1.0\nmax_active_traces=1\n[export]\nendpoint='http://127.0.0.1:{metric_port}'\ninterval_ms=60000\nmax_queued_batches=64\n"
+        )).unwrap();
+        success(cli(
+            &[
+                "--language",
+                "c",
+                "clang",
+                "-O1",
+                "-g",
+                "main.c",
+                "-o",
+                "app",
+            ],
+            root.path(),
+        ));
+        retain_native(root.path(), "c-rejected-root");
+        let metrics = start_receiver(metric_listener);
+        let traces = start_trace_receiver(trace_listener, 2, Duration::from_secs(60));
+        let report = root.path().join("report.json");
+        let output = success(
+            Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+                .args(["--language", "c", "run", "./app"])
+                .env_remove("OTELC_LANGUAGE")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                .env(
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    format!("http://127.0.0.1:{trace_port}/custom-traces"),
+                )
+                .env("OTELC_REPORT_PATH", &report)
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(output.stdout, b"result=9\n");
+        assert!(output.stderr.is_empty());
+        let metrics = metrics.join().unwrap();
+        assert_eq!(
+            counter(&metrics, "otelc.function.calls", None),
+            if call_limit == 1 { 2 } else { 5 }
+        );
+        let mut names = Vec::new();
+        for tree in traces.join().unwrap() {
+            let spans: Vec<_> = tree
+                .resource_spans
+                .iter()
+                .flat_map(|resource| &resource.scope_spans)
+                .flat_map(|scope| &scope.spans)
+                .collect();
+            assert_eq!(spans.len(), 1);
+            assert!(spans[0].parent_span_id.is_empty());
+            names.push(spans[0].name.clone());
+        }
+        names.sort();
+        assert_eq!(names, ["selected_child", "selected_holder"]);
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["export_finished"], true);
+        assert_eq!(report["traces"]["completed_trees"], 2);
+        if call_limit == 1 {
+            assert_eq!(report["losses"]["active_call_capacity"], 1);
+            assert_eq!(report["losses"]["stack"], 2);
+        } else {
+            assert_eq!(report["traces"]["losses"]["trace_capacity"], 1);
+            assert_eq!(counter(&metrics, "otelc.trace.dropped_trees", None), 1);
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+            source
+        );
+    }
+}
+
+#[test]
+fn c_sampling_capacity_and_nonlocal_exits_never_export_partial_trees() {
+    for case in ["unsampled", "spans", "stack", "nonlocal"] {
+        let root = tempfile::tempdir().unwrap();
+        let source = if case == "nonlocal" {
+            include_str!("../../../tests/fixtures/nonlocal-exit.c")
+        } else {
+            include_str!("../../../tests/fixtures/timing.c")
+        };
+        std::fs::write(root.path().join("main.c"), source).unwrap();
+        let (port, listener) = receiver();
+        let (trace_port, trace_listener) = receiver();
+        let ratio = if case == "unsampled" { 0.0 } else { 1.0 };
+        let spans = if case == "spans" { 1 } else { 64 };
+        let stack = if case == "stack" { 2 } else { 256 };
+        std::fs::write(root.path().join("otelc.toml"), format!(
+            "schema_version=2\nlanguages=['c']\n[sources]\ninclude=['*.c']\n[functions]\ninclude=['selected_*']\n[runtime]\nshutdown_timeout_ms=3000\n[adapters.c.native]\nstack_depth={stack}\n[traces]\nenabled=true\nroot_sample_ratio={ratio}\nmax_active_traces=1\nmax_spans_per_trace={spans}\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\n"
+        )).unwrap();
+        success(cli(
+            &[
+                "--language",
+                "c",
+                "clang",
+                "-O1",
+                "-g",
+                "main.c",
+                "-o",
+                "app",
+            ],
+            root.path(),
+        ));
+        retain_native(root.path(), "c-span-capacity");
+        let metrics = start_receiver(listener);
+        let traces = start_trace_receiver(
+            trace_listener,
+            usize::from(case == "nonlocal"),
+            Duration::from_secs(60),
+        );
+        let report = root.path().join("report.json");
+        let output = success(
+            Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+                .args(["--language", "c", "run", "./app"])
+                .env_remove("OTELC_LANGUAGE")
+                .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                .env(
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                    format!("http://127.0.0.1:{trace_port}/custom-traces"),
+                )
+                .env("OTELC_REPORT_PATH", &report)
+                .current_dir(root.path())
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(
+            output.stdout,
+            if case == "nonlocal" {
+                b"result=7\n".as_slice()
+            } else {
+                b"result=3\n".as_slice()
+            }
+        );
+        assert!(output.stderr.is_empty());
+        let metrics = metrics.join().unwrap();
+        let requests = traces.join().unwrap();
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["export_finished"], true);
+        assert_eq!(report["export_dropped_batches"], 0);
+        assert_eq!(report["traces"]["active_trees"], 0);
+        match case {
+            "unsampled" => {
+                assert_eq!(report["traces"]["sampled_out_roots"], 1);
+                assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+                assert_eq!(counter(&metrics, "otelc.function.calls", None), 4);
+            }
+            "spans" => {
+                assert_eq!(report["traces"]["losses"]["span_capacity"], 1);
+                assert_eq!(counter(&metrics, "otelc.function.calls", None), 4);
+            }
+            "stack" => {
+                assert_eq!(report["losses"]["stack"], 2);
+                assert_eq!(report["traces"]["losses"]["producer_loss"], 1);
+                assert_eq!(counter(&metrics, "otelc.function.calls", None), 2);
+            }
+            _ => {
+                let names: Vec<_> = requests
+                    .iter()
+                    .flat_map(|request| &request.resource_spans)
+                    .flat_map(|resource| &resource.scope_spans)
+                    .flat_map(|scope| &scope.spans)
+                    .map(|span| span.name.as_str())
+                    .collect();
+                assert_eq!(names, ["selected_healthy"]);
+                assert_eq!(report["losses"]["invalid_exit"], 1);
+                assert_eq!(report["traces"]["losses"]["incomplete"], 1);
+                assert_eq!(counter(&metrics, "otelc.function.calls", None), 1);
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+            source
+        );
+    }
+}
+
+#[test]
+fn c_live_metrics_control_preserves_inflight_admission_and_trace_parenting() {
+    use std::{io::BufRead, os::unix::fs::PermissionsExt, process::Stdio};
+    let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let source = include_str!("../../../tests/fixtures/live-c-traces.c");
+    std::fs::write(root.path().join("main.c"), source).unwrap();
+    let (port, listener) = receiver();
+    let (trace_port, trace_listener) = receiver();
+    let socket = root.path().join("control.sock");
+    std::fs::write(root.path().join("otelc.toml"), format!(
+        "schema_version=2\nlanguages=['c']\n[sources]\ninclude=['*.c']\n[functions]\ninclude=['selected_*']\n[runtime]\ncontrol_socket='{}'\nshutdown_timeout_ms=3000\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=60000\n", socket.display()
+    )).unwrap();
+    success(cli(
+        &[
+            "--language",
+            "c",
+            "clang",
+            "-O1",
+            "-g",
+            "main.c",
+            "-o",
+            "app",
+        ],
+        root.path(),
+    ));
+    retain_native(root.path(), "c-live-traces");
+    let metrics = start_receiver(listener);
+    let traces = start_trace_receiver(trace_listener, 2, Duration::from_secs(60));
+    let report = root.path().join("report.json");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+        .args(["--language", "c", "run", "./app"])
+        .env_remove("OTELC_LANGUAGE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+        .env(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            format!("http://127.0.0.1:{trace_port}/custom-traces"),
+        )
+        .env("OTELC_REPORT_PATH", &report)
+        .current_dir(root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "holding\n");
+    let disabled: serde_json::Value = serde_json::from_slice(
+        &success(cli(
+            &["disable", "--socket", socket.to_str().unwrap()],
+            root.path(),
+        ))
+        .stdout,
+    )
+    .unwrap();
+    assert_eq!(disabled["metrics_enabled"], false);
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"continue\n")
+        .unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "result=5\n");
+    assert!(child.wait().unwrap().success());
+    let metrics = metrics.join().unwrap();
+    assert_eq!(
+        counter(&metrics, "otelc.function.calls", Some("selected_parent")),
+        1
+    );
+    assert_eq!(
+        counter(&metrics, "otelc.function.calls", Some("selected_child")),
+        0
+    );
+    let mut sizes: Vec<_> = traces
+        .join()
+        .unwrap()
+        .iter()
+        .map(|request| {
+            request
+                .resource_spans
+                .iter()
+                .flat_map(|resource| &resource.scope_spans)
+                .map(|scope| scope.spans.len())
+                .sum::<usize>()
+        })
+        .collect();
+    sizes.sort();
+    assert_eq!(sizes, [1, 2]);
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["export_finished"], true);
+    assert_eq!(report["function_calls"], 1);
+    assert_eq!(report["traces"]["completed_trees"], 2);
+    assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+        source
+    );
+}
+
+#[test]
+fn c_stalled_trace_request_cannot_hold_metrics_or_application_shutdown() {
+    use std::{io::BufRead, process::Stdio, sync::mpsc, time::Instant};
+    let root = tempfile::tempdir().unwrap();
+    let source = "#include <stdio.h>\n__attribute__((noinline)) int selected_once(void){return 3;}\nint main(void){int result=selected_once();char command[32];puts(\"ready\");fflush(stdout);if(!fgets(command,sizeof(command),stdin))return 2;return result==3?0:1;}\n";
+    std::fs::write(root.path().join("main.c"), source).unwrap();
+    let (port, listener) = receiver();
+    let (trace_port, trace_listener) = receiver();
+    std::fs::write(root.path().join("otelc.toml"), format!(
+        "schema_version=2\nlanguages=['c']\n[sources]\ninclude=['*.c']\n[functions]\ninclude=['selected_*']\n[runtime]\nshutdown_timeout_ms=50\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=1000\ntimeout_ms=500\n"
+    )).unwrap();
+    success(cli(
+        &[
+            "--language",
+            "c",
+            "clang",
+            "-O1",
+            "-g",
+            "main.c",
+            "-o",
+            "app",
+        ],
+        root.path(),
+    ));
+    retain_native(root.path(), "c-stalled-traces");
+    let metrics = start_receiver(listener);
+    let (entered, receiving) = mpsc::channel();
+    let (release, barrier) = mpsc::channel();
+    let trace_server = thread::spawn(move || {
+        let (mut stream, _) = trace_listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut header = Vec::new();
+        let mut byte = [0];
+        while !header.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            header.push(byte[0]);
+            assert!(header.len() < 65536);
+        }
+        let header = String::from_utf8(header).unwrap();
+        let length = header
+            .lines()
+            .find_map(|line| {
+                line.to_lowercase()
+                    .strip_prefix("content-length:")
+                    .map(|value| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).unwrap();
+        let request =
+            opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest::decode(
+                body.as_slice(),
+            )
+            .unwrap();
+        assert_eq!(
+            request.resource_spans[0].scope_spans[0].spans[0].name,
+            "selected_once"
+        );
+        entered.send(()).unwrap();
+        barrier.recv_timeout(Duration::from_secs(10)).unwrap();
+        // Process exit can close the request while this acknowledgement is held.
+        let _ =
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    });
+    let report = root.path().join("report.json");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+        .args(["--language", "c", "run", "./app"])
+        .env_remove("OTELC_LANGUAGE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+        .env(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            format!("http://127.0.0.1:{trace_port}/custom-traces"),
+        )
+        .env("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT", "60000")
+        .env("OTELC_REPORT_PATH", &report)
+        .current_dir(root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "ready\n");
+    receiving.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Metric acknowledgement succeeds while the trace acknowledgement is held.
+    assert_eq!(
+        counter(&metrics.join().unwrap(), "otelc.function.calls", None),
+        1
+    );
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"finish\n")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        thread::sleep(Duration::from_millis(1));
+    };
+    release.send(()).unwrap();
+    trace_server.join().unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(
+        status.is_some(),
+        "trace request held shutdown beyond the shared budget"
+    );
+    assert!(result.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["export_finished"], false);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+        source
+    );
+}
+
+#[test]
+fn c_trace_export_failure_updates_health_without_enabled_function_metrics() {
+    use std::{io::BufRead, process::Stdio};
+    let root = tempfile::tempdir().unwrap();
+    let source = "#include <stdio.h>\n__attribute__((noinline)) int selected_once(void){return 3;}\nint main(void){int result=selected_once();char command[32];puts(\"ready\");fflush(stdout);if(!fgets(command,sizeof(command),stdin))return 2;return result==3?0:1;}\n";
+    std::fs::write(root.path().join("main.c"), source).unwrap();
+    let (port, listener) = receiver();
+    let (trace_port, trace_listener) = receiver();
+    std::fs::write(root.path().join("otelc.toml"), format!(
+        "schema_version=2\nlanguages=['c']\n[sources]\ninclude=['*.c']\n[functions]\ninclude=['selected_*']\n[runtime]\nshutdown_timeout_ms=3000\n[metrics]\nenabled=false\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[export]\nendpoint='http://127.0.0.1:{port}'\ninterval_ms=1000\n"
+    )).unwrap();
+    success(cli(
+        &[
+            "--language",
+            "c",
+            "clang",
+            "-O1",
+            "-g",
+            "main.c",
+            "-o",
+            "app",
+        ],
+        root.path(),
+    ));
+    retain_native(root.path(), "c-trace-health");
+    let metrics = start_receiver(listener);
+    let trace_server = thread::spawn(move || {
+        let (mut stream, _) = trace_listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut header = Vec::new();
+        let mut byte = [0];
+        while !header.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            header.push(byte[0]);
+            assert!(header.len() < 65536);
+        }
+        let header = String::from_utf8(header).unwrap();
+        let length = header
+            .lines()
+            .find_map(|line| {
+                line.to_lowercase()
+                    .strip_prefix("content-length:")
+                    .map(|value| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).unwrap();
+        let request =
+            opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest::decode(
+                body.as_slice(),
+            )
+            .unwrap();
+        assert_eq!(
+            request.resource_spans[0].scope_spans[0].spans[0].name,
+            "selected_once"
+        );
+        stream
+            .write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+    });
+    let report = root.path().join("report.json");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+        .args(["--language", "c", "run", "./app"])
+        .env_remove("OTELC_LANGUAGE")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+        .env(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            format!("http://127.0.0.1:{trace_port}/custom-traces"),
+        )
+        .env("OTELC_REPORT_PATH", &report)
+        .current_dir(root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    assert_eq!(line, "ready\n");
+    trace_server.join().unwrap();
+    let metrics = metrics.join().unwrap();
+    // No application call or metric toggle occurs between rejection and health.
+    assert_eq!(counter(&metrics, "otelc.function.calls", None), 0);
+    assert_eq!(counter(&metrics, "otelc.export.dropped_batches", None), 1);
+    assert_eq!(counter(&metrics, "otelc.trace.dropped_trees", None), 1);
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"finish\n")
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    assert_eq!(report["function_calls"], 0);
+    assert_eq!(report["traces"]["losses"]["export"], 1);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("main.c")).unwrap(),
+        source
+    );
 }
 
 #[test]

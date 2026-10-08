@@ -140,7 +140,8 @@ def enforce_node_observer_coverage(report):
 def enforce_rust_trace_coverage(report):
     """Require independent floors for Rust contexts and the shared span store."""
     for path, label in (("/crates/rust-probes/src/traces.rs", "Rust trace context"),
-                        ("/crates/export/src/traces.rs", "Shared trace store")):
+                        ("/crates/export/src/traces.rs", "Shared trace store"),
+                        ("/crates/runtime/src/traces.rs", "Native trace bridge")):
         selected = []
         include = False
         for line in report.splitlines():

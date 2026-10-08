@@ -56,6 +56,7 @@ struct State {
     control_thread: std::sync::Mutex<Option<control::Thread>>,
     writers: AtomicUsize,
     active_calls: AtomicUsize,
+    active_traces: AtomicUsize,
     active_capacity: AtomicU64,
     admission: AtomicU64,
     stack: AtomicU64,
@@ -64,6 +65,9 @@ struct State {
     incomplete: AtomicU64,
     export_loss: AtomicU64,
     start: u64,
+    trace_store: Option<std::sync::Mutex<quux_otelc_export::traces::Store>>,
+    trace_clock: (u64, Instant, SystemTime),
+    trace_finished: AtomicBool,
     done: std::sync::Mutex<Option<mpsc::Receiver<()>>>,
     deadline: std::sync::Mutex<Option<Instant>>,
 }
@@ -150,6 +154,14 @@ fn initialize() -> Result<()> {
         .transpose()?;
     let (done_tx, done_rx) = mpsc::channel();
     let objects = objects::Registry::new(&config.objects);
+    if config.traces.enabled && functions.iter().any(|(_, name)| name.len() > 1024) {
+        anyhow::bail!("trace function names exceed 1024 bytes");
+    }
+    let trace_store = config
+        .traces
+        .enabled
+        .then(|| std::sync::Mutex::new(Default::default()));
+    let trace_clock = (monotonic(), Instant::now(), SystemTime::now());
     STATE
         .set(State {
             metrics_enabled: AtomicBool::new(config.metrics.enabled),
@@ -165,6 +177,7 @@ fn initialize() -> Result<()> {
             running: AtomicBool::new(false),
             writers: AtomicUsize::new(0),
             active_calls: AtomicUsize::new(0),
+            active_traces: AtomicUsize::new(0),
             active_capacity: AtomicU64::new(0),
             admission: AtomicU64::new(0),
             stack: AtomicU64::new(0),
@@ -173,6 +186,9 @@ fn initialize() -> Result<()> {
             incomplete: AtomicU64::new(0),
             export_loss: AtomicU64::new(0),
             start: realtime(),
+            trace_store,
+            trace_clock,
+            trace_finished: AtomicBool::new(false),
             done: std::sync::Mutex::new(Some(done_rx)),
             deadline: std::sync::Mutex::new(None),
         })
@@ -203,9 +219,10 @@ fn initialize() -> Result<()> {
         }
         let _ = done_tx.send(());
     })?;
+    let trace_exporter = traces::spawn_exporter(state)?;
     state.running.store(true, Ordering::Release);
     if let Err(error) = thread::spawn(c"otelc-worker", move || {
-        worker(state, tx);
+        worker(state, tx, trace_exporter);
         drop(exporter);
     }) {
         state.running.store(false, Ordering::Release);
@@ -233,7 +250,11 @@ fn initialize() -> Result<()> {
     }
     Ok(())
 }
-fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
+fn worker(
+    state: &'static State,
+    tx: mpsc::SyncSender<Vec<u8>>,
+    mut trace_exporter: Option<traces::Exporter>,
+) {
     let mut aggregates: Vec<_> = state
         .functions
         .iter()
@@ -258,13 +279,37 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
     let instance = format!("{}-{}", std::process::id(), state.start);
     let mut last = Instant::now();
     let mut dirty = false;
+    let mut health = 0;
+    let mut bridge = state.trace_store.as_ref().map(|store| {
+        traces::Bridge::new(
+            store,
+            &state.config.traces,
+            state
+                .functions
+                .iter()
+                .map(|(_, name)| std::sync::Arc::from(name.as_str())),
+            (state.slots.len(), state.config.export.max_queued_batches),
+            state.trace_clock,
+        )
+    });
     loop {
-        for slot in &state.slots {
+        for (index, slot) in state.slots.iter().enumerate() {
             // Bound each turn so one busy producer cannot starve other slots.
             for _ in 0..state.config.runtime.queue_capacity {
                 let Some(record) = slot.queue.pop() else {
                     break;
                 };
+                if let Some(bridge) = &mut bridge {
+                    bridge.record(record);
+                    if record.flags & traces::TRACE_EXIT != 0 && record.parent_invocation == 0 {
+                        if let Some(exporter) = &trace_exporter {
+                            let _ = exporter.wake.try_send(());
+                        }
+                    }
+                }
+                if record.flags & (traces::ROOT_ENTER | traces::METRIC_DISABLED) != 0 {
+                    continue;
+                }
                 dirty = true;
                 if record.flags & 2 == 0 {
                     increment(&state.completed);
@@ -285,6 +330,9 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
                 }
             }
             if slot.state.load(Ordering::Acquire) == 2 && slot.queue.empty() {
+                if let Some(bridge) = &mut bridge {
+                    bridge.retire(index);
+                }
                 let producer = unsafe { &mut *slot.producer.get() };
                 for _ in 0..producer.depth {
                     increment(&state.incomplete);
@@ -292,6 +340,11 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
                 state
                     .active_calls
                     .fetch_sub(producer.depth, Ordering::AcqRel);
+                if producer.depth != 0
+                    && producer.frames[0].padding[2] & traces::ROOT_RESERVED as u64 != 0
+                {
+                    state.active_traces.fetch_sub(1, Ordering::AcqRel);
+                }
                 producer.depth = 0;
                 producer.suppressed = 0;
                 slot.state.store(0, Ordering::Release);
@@ -301,6 +354,29 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
             && state.writers.load(Ordering::Acquire) == 0
             && state.slots.iter().all(|s| s.queue.empty());
         if stopping {
+            if let Some(bridge) = &mut bridge {
+                bridge.shutdown();
+            }
+            if let Some(exporter) = trace_exporter.take() {
+                let deadline = state
+                    .deadline
+                    .lock()
+                    .ok()
+                    .and_then(|value| *value)
+                    .unwrap_or_else(Instant::now);
+                let finished = exporter.finish(deadline);
+                state.trace_finished.store(finished, Ordering::Release);
+                if !finished {
+                    increment(&state.export_loss);
+                    state
+                        .trace_store
+                        .as_ref()
+                        .expect("traces enabled")
+                        .lock()
+                        .expect("trace store poisoned")
+                        .reject(1, None, "shutdown");
+                }
+            }
             for slot in &state.slots {
                 if slot.state.load(Ordering::Acquire) == 1 {
                     let producer = unsafe { &*slot.producer.get() };
@@ -311,7 +387,36 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
             }
         }
         if last.elapsed() >= Duration::from_millis(state.config.export.interval_ms) || stopping {
-            if state.metrics_enabled.load(Ordering::Acquire) || dirty || stopping {
+            let trace_losses: Vec<_> = state
+                .trace_store
+                .as_ref()
+                .map(|store| {
+                    store
+                        .lock()
+                        .expect("trace store poisoned")
+                        .losses
+                        .iter()
+                        .map(|(reason, count)| (*reason, *count))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let current_health = [
+                state.export_loss.load(Ordering::Relaxed),
+                state.admission.load(Ordering::Relaxed),
+                state.active_capacity.load(Ordering::Relaxed),
+                state.stack.load(Ordering::Relaxed),
+                state.queue_loss.load(Ordering::Relaxed),
+                state.invalid.load(Ordering::Relaxed),
+                state.incomplete.load(Ordering::Relaxed),
+            ]
+            .into_iter()
+            .chain(trace_losses.iter().map(|(_, count)| *count))
+            .fold(0u64, u64::saturating_add);
+            if state.metrics_enabled.load(Ordering::Acquire)
+                || dirty
+                || stopping
+                || current_health != health
+            {
                 let losses = [
                     ("thread_admission", state.admission.load(Ordering::Relaxed)),
                     (
@@ -344,10 +449,21 @@ fn worker(state: &'static State, tx: mpsc::SyncSender<Vec<u8>>) {
                     realtime(),
                     &instance,
                 );
+                let batch = if state.config.traces.enabled {
+                    quux_otelc_export::append_trace_losses(
+                        batch,
+                        &trace_losses,
+                        state.start,
+                        realtime(),
+                    )
+                } else {
+                    batch
+                };
                 if tx.try_send(batch).is_err() {
                     increment(&state.export_loss);
                 }
             }
+            health = current_health;
             dirty = false;
             last = Instant::now();
         }
@@ -407,12 +523,14 @@ pub extern "C" fn otelc_shutdown() {
         if let Some(rx) = done.take() {
             export_finished = rx
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .is_ok();
+                .is_ok()
+                && Instant::now() <= deadline
+                && (!state.config.traces.enabled || state.trace_finished.load(Ordering::Acquire));
         }
     }
     if let Some(path) = &state.report_path {
         let summary = state.summary.get();
-        let report = serde_json::json!({"drained": summary.is_some(), "export_finished": export_finished, "function_calls": summary.map(|s|s.0), "object_lifetimes":summary.map(|s|s.1), "losses": { "thread_admission":state.admission.load(Ordering::Relaxed), "active_call_capacity":state.active_capacity.load(Ordering::Relaxed), "stack":state.stack.load(Ordering::Relaxed),"queue":state.queue_loss.load(Ordering::Relaxed),"invalid_exit":state.invalid.load(Ordering::Relaxed),"incomplete":state.incomplete.load(Ordering::Relaxed),"object_capacity":state.object_capacity.load(Ordering::Relaxed),"object_incomplete":state.objects.active()},"export_dropped_batches":state.export_loss.load(Ordering::Relaxed)});
+        let report = serde_json::json!({"drained": summary.is_some(), "export_finished": export_finished, "function_calls": summary.map(|s|s.0), "object_lifetimes":summary.map(|s|s.1), "losses": { "thread_admission":state.admission.load(Ordering::Relaxed), "active_call_capacity":state.active_capacity.load(Ordering::Relaxed), "stack":state.stack.load(Ordering::Relaxed),"queue":state.queue_loss.load(Ordering::Relaxed),"invalid_exit":state.invalid.load(Ordering::Relaxed),"incomplete":state.incomplete.load(Ordering::Relaxed),"object_capacity":state.object_capacity.load(Ordering::Relaxed),"object_incomplete":state.objects.active()},"export_dropped_batches":state.export_loss.load(Ordering::Relaxed),"traces": state.trace_store.as_ref().and_then(|store| store.try_lock().ok().map(|store| store.report()))});
         if serde_json::to_vec(&report)
             .ok()
             .and_then(|bytes| std::fs::write(path, bytes).ok())
@@ -589,10 +707,9 @@ pub extern "C" fn otelc_record_denied(address: usize) {
 // exception can cross threads or the FFI boundary; zero is always a no-op.
 #[no_mangle]
 pub extern "C" fn otelc_record_token_enter(index: isize, address: usize) -> u64 {
-    if !STATE
-        .get()
-        .is_some_and(|s| s.metrics_enabled.load(Ordering::Acquire) || s.config.traces.enabled)
-    {
+    let Some(initial) = STATE.get() else { return 0 };
+    let metrics = initial.metrics_enabled.load(Ordering::Acquire);
+    if !metrics && !initial.config.traces.enabled {
         return 0;
     }
     let Some(writer) = writer() else { return 0 };
@@ -626,21 +743,30 @@ pub extern "C" fn otelc_record_token_enter(index: isize, address: usize) -> u64 
     }
     let token = producer.next_token;
     producer.next_token += 1;
-    let parent = if producer.depth == 0 {
+    let parent = if !tracing || producer.depth == 0 {
         0
     } else {
         producer.frames[producer.depth - 1].token
     };
-    let root = if producer.depth == 0 {
+    let root = if !tracing {
+        0
+    } else if producer.depth == 0 {
         token
     } else {
         producer.frames[0].token
     };
-    let flags = if state.metrics_enabled.load(Ordering::Acquire) {
+    let mut flags = if metrics {
         0
     } else {
         traces::METRIC_DISABLED as u64
     };
+    if tracing && producer.depth == 0 && state.config.traces.root_sample_ratio != 0.0 {
+        flags |= if reserve_call(&state.active_traces, state.config.traces.max_active_traces) {
+            traces::ROOT_RESERVED as u64
+        } else {
+            traces::ROOT_DENIED as u64
+        };
+    }
     let start = monotonic();
     producer.frames[producer.depth] = Frame {
         address: address as u64,
@@ -658,8 +784,11 @@ pub extern "C" fn otelc_record_token_enter(index: isize, address: usize) -> u64 
                 invocation: token,
                 trace_root: token,
                 start_tick: start,
+                // Root entries carry producer wall time in the otherwise unused
+                // duration field; completed records retain monotonic duration.
+                duration_tick: realtime(),
                 thread_slot: index as u32,
-                flags: traces::ROOT_ENTER,
+                flags: traces::ROOT_ENTER | flags as u32,
                 ..Default::default()
             })
         {
@@ -693,11 +822,18 @@ pub extern "C" fn otelc_record_token_exit(index: isize, token: u64, kind: u32) {
     }
     let frame = producer.frames[producer.depth - 1];
     producer.depth -= 1;
+    if frame.padding[2] & traces::ROOT_RESERVED as u64 != 0 {
+        state.active_traces.fetch_sub(1, Ordering::AcqRel);
+    }
     state.active_calls.fetch_sub(1, Ordering::AcqRel);
     if frame.token != token || kind > 1 {
         state
             .active_calls
             .fetch_sub(producer.depth, Ordering::AcqRel);
+        if producer.depth != 0 && producer.frames[0].padding[2] & traces::ROOT_RESERVED as u64 != 0
+        {
+            state.active_traces.fetch_sub(1, Ordering::AcqRel);
+        }
         producer.depth = 0;
         increment(&state.invalid);
         return;

@@ -12,7 +12,136 @@ pub(super) const ROOT_ENTER: u32 = 4;
 pub(super) const TRACE_EXIT: u32 = 8;
 pub(super) const METRIC_DISABLED: u32 = 16;
 pub(super) const INVALID_ROOT: u32 = 32;
+pub(super) const ROOT_DENIED: u32 = 64;
+pub(super) const ROOT_RESERVED: u32 = 128;
 const RECORD_CAPACITY: usize = 1_048_576;
+
+pub(super) struct Exporter {
+    pub wake: std::sync::mpsc::SyncSender<()>,
+    done: std::sync::mpsc::Receiver<()>,
+    handle: crate::thread::Handle,
+}
+impl Exporter {
+    pub fn finish(self, deadline: Instant) -> bool {
+        let Self { wake, done, handle } = self;
+        drop(wake);
+        let finished = done
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .is_ok()
+            && Instant::now() <= deadline;
+        // The acknowledgement completes export. Thread-local destructors must not
+        // extend the caller's budget, so the native handle is always detached.
+        drop(handle);
+        finished
+    }
+}
+pub(super) fn spawn_exporter(state: &'static crate::State) -> anyhow::Result<Option<Exporter>> {
+    use opentelemetry::KeyValue;
+    use opentelemetry_proto::{
+        tonic::collector::trace::v1::ExportTraceServiceRequest,
+        transform::{
+            common::tonic::ResourceAttributesWithSchema,
+            trace::tonic::group_spans_by_resource_and_scope,
+        },
+    };
+    use prost::Message;
+    let Some(store) = &state.trace_store else {
+        return Ok(None);
+    };
+    let export = state
+        .config
+        .trace_export
+        .as_ref()
+        .expect("validated trace export");
+    let headers = quux_otelc_config::export_signal_headers("OTEL_EXPORTER_OTLP_TRACES_HEADERS")?;
+    let (wake, pending) = std::sync::mpsc::sync_channel(1);
+    let (complete, done) = std::sync::mpsc::channel();
+    let handle = crate::thread::spawn(c"otelc-traces", move || {
+        let mut attributes = vec![
+            KeyValue::new("service.name", state.config.resource.service_name.clone()),
+            KeyValue::new(
+                "service.version",
+                state.config.resource.service_version.clone(),
+            ),
+            KeyValue::new(
+                "service.instance.id",
+                format!("{}-{}", std::process::id(), state.start),
+            ),
+        ];
+        attributes.extend(
+            state
+                .config
+                .resource
+                .attributes
+                .iter()
+                .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
+        );
+        let resource = opentelemetry_sdk::Resource::builder_empty()
+            .with_attributes(attributes)
+            .build();
+        let resource = ResourceAttributesWithSchema::from(&resource);
+        loop {
+            let stopping = pending.recv().is_err();
+            for _ in 0..state.config.export.max_queued_batches {
+                let remaining = state
+                    .deadline
+                    .lock()
+                    .ok()
+                    .and_then(|value| *value)
+                    .map(|end| end.saturating_duration_since(Instant::now()))
+                    .unwrap_or(Duration::from_millis(export.timeout_ms))
+                    .min(Duration::from_millis(export.timeout_ms));
+                if remaining.is_zero() {
+                    store
+                        .lock()
+                        .expect("trace store poisoned")
+                        .discard_ready("shutdown");
+                    break;
+                }
+                let phase = Instant::now() + remaining;
+                let spans = store.lock().expect("trace store poisoned").pop();
+                let Some(spans) = spans else { break };
+                if spans.is_empty() {
+                    continue;
+                }
+                let payload = ExportTraceServiceRequest {
+                    resource_spans: group_spans_by_resource_and_scope(spans, &resource),
+                }
+                .encode_to_vec();
+                let remaining = phase.saturating_duration_since(Instant::now()).min(
+                    state
+                        .deadline
+                        .lock()
+                        .ok()
+                        .and_then(|value| *value)
+                        .map(|end| end.saturating_duration_since(Instant::now()))
+                        .unwrap_or(Duration::from_millis(export.timeout_ms)),
+                );
+                if payload.len() > 16 * 1024 * 1024
+                    || remaining.is_zero()
+                    || quux_otelc_export::send_traces(
+                        &export.endpoint,
+                        &headers,
+                        &payload,
+                        remaining,
+                    )
+                    .is_err()
+                {
+                    crate::increment(&state.export_loss);
+                    store
+                        .lock()
+                        .expect("trace store poisoned")
+                        .reject(1, None, "export");
+                }
+            }
+            if stopping {
+                break;
+            }
+        }
+        let _ = complete.send(());
+    })?;
+    Ok(Some(Exporter { wake, done, handle }))
+}
 
 struct Root {
     header: Record,
@@ -98,21 +227,33 @@ impl<'a> Bridge<'a> {
         }
         if record.flags & ROOT_ENTER != 0 {
             self.retire(slot);
-            let context = match (
-                self.timestamp(record.start_tick),
-                self.epoch(record.start_tick),
-                self.names.get(record.function_key as usize),
-            ) {
-                (Some(start), Some(epoch), Some(name)) => self
-                    .store
+            let context = if record.flags & ROOT_DENIED != 0 {
+                self.store
                     .lock()
                     .expect("trace store poisoned")
-                    .enter_at_epoch(1, None, name.clone(), start, epoch, self.policy),
-                _ => self
-                    .store
-                    .lock()
-                    .expect("trace store poisoned")
-                    .reject(1, None, "invalid"),
+                    .reject(1, None, "trace_capacity")
+            } else {
+                match (
+                    self.timestamp(record.start_tick),
+                    if record.duration_tick != 0 {
+                        SystemTime::UNIX_EPOCH
+                            .checked_add(Duration::from_nanos(record.duration_tick))
+                    } else {
+                        self.epoch(record.start_tick)
+                    },
+                    self.names.get(record.function_key as usize),
+                ) {
+                    (Some(start), Some(epoch), Some(name)) => self
+                        .store
+                        .lock()
+                        .expect("trace store poisoned")
+                        .enter_at_epoch(1, None, name.clone(), start, epoch, self.policy),
+                    _ => self
+                        .store
+                        .lock()
+                        .expect("trace store poisoned")
+                        .reject(1, None, "invalid"),
+                }
             };
             let mut root = Root {
                 header: record,

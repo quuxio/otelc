@@ -224,6 +224,27 @@ pub fn encode(
     }
     .encode_to_vec()
 }
+/// Append bounded native whole-tree loss accounting on the telemetry worker.
+pub fn append_trace_losses(
+    payload: Vec<u8>,
+    losses: &[(&str, u64)],
+    start: u64,
+    now: u64,
+) -> Vec<u8> {
+    let mut request = ExportMetricsServiceRequest::decode(payload.as_slice())
+        .expect("internally encoded native metrics");
+    let points = losses
+        .iter()
+        .map(|(reason, count)| number(*count, vec![attr("reason", reason)], start, now))
+        .collect();
+    let mut metric = counter("otelc.trace.dropped_trees", points);
+    metric.unit = "{tree}".into();
+    request.resource_metrics[0].scope_metrics[0]
+        .metrics
+        .push(metric);
+    request.encode_to_vec()
+}
+
 /// Up to three transient retries within one total deadline. Partial success,
 /// permanent rejection and invalid response bodies are never retried.
 pub fn send(
