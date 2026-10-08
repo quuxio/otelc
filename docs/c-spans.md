@@ -1,6 +1,6 @@
 # C function spans
 
-The LLVM adapter exports sampled function spans from unchanged C applications. The current qualification target is macOS ARM64, Clang/LLVM 22 and the repository's locked Rust toolchain. Callback instrumentation, C++, shared libraries, LTO and sanitizers are not qualified by this implementation. Unsupported combinations fail visibly.
+The LLVM adapter exports sampled function spans from unchanged C applications. The current qualification target is macOS ARM64, Clang/LLVM 22 and the repository's locked Rust toolchain. Callback instrumentation, shared libraries, LTO and sanitizers are not qualified by this implementation. C++ has [separate function-body and exception qualification](cpp-spans.md). Unsupported combinations fail visibly.
 
 ## Run an unchanged application
 

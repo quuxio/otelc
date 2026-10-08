@@ -2,7 +2,7 @@
 
 ## What you can run today
 
-This guide uses the locally tested macOS ARM64 C/C++ LLVM backend. It instruments application functions without editing original files, reads optional existing Clang function annotations, preserves C++ exceptions and can turn metrics admission on/off in a running process. Rust, TypeScript/JavaScript, Java, Python and Go have implemented function-metrics adapters using the same configuration contract. Their language-specific build, source and annotation examples are in the [language guides](languages.md). Automatic object lifetimes and trace export remain TODO.
+This guide uses the locally tested macOS ARM64 C/C++ LLVM backend. It instruments application functions without editing original files, reads optional existing Clang function annotations, preserves C++ exceptions and can turn metrics admission on/off in a running process. Rust, TypeScript/JavaScript, Java, Python and Go have implemented function-metrics adapters using the same configuration contract. Their language-specific build, source and annotation examples are in the [language guides](languages.md). Sampled function spans are documented in the language span guides; automatic object lifetimes remain TODO.
 
 The compiler wrapper adds probes in LLVM IR and links the native runtime. The runtime aggregates completed function counts and inclusive duration histograms, then sends OTLP/HTTP protobuf to the Collector. Prometheus stores the scraped data; Grafana displays it. Application arguments and return values are not exported.
 
@@ -280,3 +280,5 @@ make check
 For source-free Go spans, the [Go span guide](go-spans.md) shows unchanged and annotated sources, generated compiler input, commands and Collector/Tempo viewing. Live metric controls leave the launch-time trace policy enabled.
 
 For unchanged and already annotated C applications with sampled function spans, see [C spans](c-spans.md) and `examples/c-traces.toml`. Function metrics controls operate independently of tracing.
+
+For unchanged and already annotated C++ function-body spans, including construction failure and destructor cleanup, see [C++ spans](cpp-spans.md).

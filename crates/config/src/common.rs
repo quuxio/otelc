@@ -380,8 +380,8 @@ impl CommonConfig {
             if self.lifetimes.enabled {
                 unavailable.push("automatic lifetime instrumentation is not implemented".into());
             }
-            if self.traces.enabled && (language != Language::C || backend != "llvm") {
-                unavailable.push("native spans require the qualified C LLVM adapter".into());
+            if self.traces.enabled && backend != "llvm" {
+                unavailable.push("native spans require the qualified C/C++ LLVM adapter".into());
             }
         }
         Ok(ResolvedConfig {

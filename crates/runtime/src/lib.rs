@@ -119,7 +119,7 @@ fn initialize() -> Result<()> {
         .filter(|f| {
             f.selected
                 && selection.accepts_with_annotation(
-                    &f.display_name,
+                    f.selection_name.as_deref().unwrap_or(&f.display_name),
                     config.read_annotations && f.annotated,
                 )
         })

@@ -47,7 +47,7 @@ The same function can recur with indistinguishable legacy callback addresses, so
 
 ## LLVM backend
 
-The local LLVM 22 pass uses LLVM's new pass manager and a matched upstream toolchain-specific plugin build. It implements exception-aware function timing; sampled traces and descriptor-driven registration remain proposals. It selects eligible functions after a documented optimization boundary, retains a function-address inventory, and injects `otelc_function_enter_v1`/`otelc_function_leave_v1` calls. The returned token is local to one invocation and survives recursive calls.
+The local LLVM 22 pass uses LLVM's new pass manager and a matched upstream toolchain-specific plugin build. It implements exception-aware function timing and qualified sampled [C](c-spans.md) / [C++](cpp-spans.md) function spans; descriptor-driven registration remains a proposal. It selects eligible functions after a documented optimization boundary, retains a function-address inventory, and injects `otelc_function_enter_v1`/`otelc_function_leave_v1` calls. The returned token is local to one invocation and survives recursive calls.
 
 The local pass instruments normal returns and escaping exception cleanup exits, including `invoke`, `landingpad`, and `resume` paths. Only escaping exceptions mark an invocation as an exceptional exit; an exception caught inside the same function does not. If the pass cannot prove balanced cleanup for a function, it must exclude that function with a reason in the manifest. Unsupported exception personalities and Windows funclets are explicit capability failures.
 

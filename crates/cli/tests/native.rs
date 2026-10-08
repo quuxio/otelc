@@ -2725,3 +2725,6 @@ fn start_repeated_metric_receiver(
     });
     (stopped, worker)
 }
+
+#[path = "native/cpp_spans.rs"]
+mod cpp_spans;

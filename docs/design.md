@@ -4,7 +4,7 @@
 
 otelc will provide observability without application source edits across C, C++, Rust, TypeScript/JavaScript, Java, Python and Go, starting with compiler-assisted C and C++. Developers will select application functions, activate a language-specific build or launch adapter, and send timing metrics and supported traces to an OTLP-compatible Collector. The project belongs to quux and is independent of the OpenTelemetry project.
 
-This document specifies the architecture. The [local implementation](local-implementation.md) delivers callback and LLVM function timing, including exception-aware C++, plus an opt-in lifetime guard. All target languages now have function timing adapters, and C, Rust, Python, Java, JavaScript, TypeScript and Go have sampled function spans within their documented boundaries. See [C spans](c-spans.md) and [Rust spans](rust-spans.md). Automatic class lifetimes, C++ tracing and live filter updates remain planned. Existing Clang function annotations and an opt-in owner-only LLVM metrics control socket are implemented locally.
+This document specifies the architecture. The [local implementation](local-implementation.md) delivers callback and LLVM function timing, including exception-aware C++, plus an opt-in lifetime guard. All target languages now have function timing adapters, and C/C++, Rust, Python, Java, JavaScript, TypeScript and Go have sampled function spans within their documented boundaries. See [C spans](c-spans.md), [C++ spans](cpp-spans.md) and [Rust spans](rust-spans.md). Automatic class lifetimes and live filter updates remain planned. Existing Clang function annotations and an opt-in owner-only LLVM metrics control socket are implemented locally.
 
 ## Goals
 

@@ -153,7 +153,7 @@ fn run() -> Result<i32> {
             );
             println!("{}", String::from_utf8_lossy(&output.stdout));
             println!("Runtime: {}", compiler::runtime_path()?.display());
-            println!("macOS ARM64: local qualification target; other hosts require native qualification\nLLVM 22: C++ normal returns and Itanium exception unwinding\nCallbacks: C normal returns; C++ requires existing -fno-exceptions\nExisting function annotations: LLVM with annotations.read_existing\nLive metrics control: LLVM with runtime.control_socket\nObject lifetime metrics: explicit C++ guard\nC function spans: LLVM, schema 2, private same-thread whole trees; metrics controls are independent\nC++ spans, LTO, sanitizers, shared libraries and async: unsupported");
+            println!("macOS ARM64: local qualification target; other hosts require native qualification\nLLVM 22: C++ normal returns and Itanium exception unwinding\nCallbacks: C normal returns; C++ requires existing -fno-exceptions\nExisting function annotations: LLVM with annotations.read_existing\nLive metrics control: LLVM with runtime.control_socket\nObject lifetime metrics: explicit C++ guard\nC/C++ function spans: LLVM, schema 2, private same-thread whole trees and escaping unwind status; metrics controls are independent\nLTO, sanitizers, shared libraries and async: unsupported");
             if let Some(config) = config {
                 println!("Backend: {}", config.build.backend);
                 println!(
@@ -201,6 +201,9 @@ fn run() -> Result<i32> {
                         function.display_name,
                         function.reason
                     );
+                    if let Some(name) = &function.selection_name {
+                        println!("  configuration name: {name}");
+                    }
                 }
             }
             Ok(0)
