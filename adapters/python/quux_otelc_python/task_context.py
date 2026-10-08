@@ -2,6 +2,9 @@
 import asyncio
 import contextvars
 import functools
+import sys
+
+from .traces import SUPPRESSED
 
 
 class TaskContext:
@@ -30,6 +33,15 @@ class TaskContext:
         with self.runtime.lock:
             self.runtime.traces.release(lease)
 
+    def capture(self, frame):
+        monitor = self.runtime.monitor
+        key = monitor.parent_key(frame) if monitor is not None else None
+        with self.runtime.lock:
+            if key is None:
+                return self.current.get()
+            parent = self.runtime.pending.get(key)
+            return parent.trace if parent is not None else SUPPRESSED
+
     def install(self):
         self.original = asyncio.BaseEventLoop.create_task
         original = self.original
@@ -39,15 +51,19 @@ class TaskContext:
         @functools.wraps(original)
         def create_task(loop, coroutine, *args, **kwargs):
             context = kwargs.get("context")
-            parent = self.current.get() if context is None else (
+            parent = self.capture(sys._getframe()) if context is None else (
                 context.get(self.current) if isinstance(context, contextvars.Context) else None)
             with self.runtime.lock:
                 lease = self.runtime.traces.acquire(parent) if not self.runtime.closed else None
+            token = self.current.set(parent) if context is None else None
             try:
                 task = original(loop, coroutine, *args, **kwargs)
             except BaseException:
                 self.release(lease)
                 raise
+            finally:
+                if token is not None:
+                    self.current.reset(token)
             if lease is not None:
                 try:
                     task.add_done_callback(lambda _: self.release(lease), context=contextvars.Context())

@@ -104,10 +104,13 @@ class Monitor:
         parent = None
         if self.runtime.traces is not None:
             ancestor = frame.f_back
-            # Inspect active caller links, never retain application frames or
-            # use explicit task context only when propagation is enabled.
+            # Inspect active caller links without retaining application frames.
+            # Task submission separates logical contexts, including eager calls.
             for _ in range(4096):
                 if ancestor is None:
+                    break
+                if (self.context is not None and self.context.wrapper is not None
+                        and ancestor.f_code is self.context.wrapper.__code__):
                     break
                 if id(ancestor.f_code) in self.names or self.display_name(ancestor.f_code) is not None:
                     parent = id(ancestor)

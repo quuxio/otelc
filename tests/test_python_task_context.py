@@ -90,6 +90,43 @@ async def root():
         self.assertEqual(sum(not span.parent_span_id for span in children), 1)
         self.assertEqual(report["traces"]["completed_trees"], 2)
 
+    def test_eager_factory_respects_explicit_empty_context(self):
+        runtime, _, capture, app, monitor = self.monitored("""
+import contextvars
+async def child():
+    return 7
+async def root():
+    loop = asyncio.get_running_loop()
+    loop.set_task_factory(asyncio.eager_task_factory)
+    try:
+        return await asyncio.create_task(child(), context=contextvars.Context())
+    finally:
+        loop.set_task_factory(None)
+""", task_policy())
+        self.assertEqual(asyncio.run(app["root"]()), 7)
+        report = self.finish(runtime, monitor)
+        self.assertEqual(sum(not span.parent_span_id for span in capture.spans()), 2)
+        self.assertEqual(report["traces"]["completed_trees"], 2)
+
+    def test_rejected_creator_does_not_promote_task_after_capacity_recovers(self):
+        policy = task_policy()
+        policy["runtime"]["max_active_calls"] = 1
+        runtime, _, capture, app, monitor = self.monitored("""
+async def child():
+    return 8
+async def root():
+    return asyncio.create_task(child())
+""", policy)
+        runtime.enter(1, "occupied")
+        async def exercise():
+            task = await app["root"]()
+            runtime.exit(1, False)
+            self.assertEqual(await task, 8)
+        asyncio.run(exercise())
+        report = self.finish(runtime, monitor)
+        self.assertEqual([span.name for span in capture.spans()], ["occupied"])
+        self.assertEqual(report["traces"]["losses"]["active_call_capacity"], 1)
+
     def test_eager_tasks_and_cancelled_tasks_keep_results_errors_and_release_context(self):
         runtime, _, capture, app, monitor = self.monitored("""
 async def eager():
