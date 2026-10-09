@@ -1,5 +1,7 @@
 # Rust instrumentation 101
 
+Compiler temporary workspaces must be outside the application source tree. If `TMPDIR` points inside the project, the adapter rejects the workspace before copying source; use an external temporary directory. Canonical path checks also reject aliases through symlinks, preventing recursive copying into generated input. Rust files reached through file or directory symlinks are copied into private regular inputs; generated probes cannot write back through those links. Cyclic source-directory links and dangling Rust file links are rejected.
+
 The Rust adapter parses original Rust syntax and inserts body guards into a private source tree. Standalone files use rustc; Cargo projects use a compiler wrapper. Application source, Cargo manifests and lockfiles stay unchanged. The linked Rust OpenTelemetry SDK supplies cumulative function counters and duration histograms. No application SDK import or required annotation is needed.
 
 Function spans are available through the same selection policy; see [Rust spans](rust-spans.md) for unchanged examples, sampling, parents, loss handling and the Tempo viewer.
