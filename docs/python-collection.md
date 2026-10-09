@@ -52,4 +52,4 @@ Weak-reference introspection is unqualified: adding a weak observer is visible t
 
 Weak-reference behaviour follows the [Python weak-reference contract](https://docs.python.org/3/library/weakref.html); the qualified successful-initialisation boundary follows the [Python data model](https://docs.python.org/3/reference/datamodel.html#object.__init__).
 
-Local qualification used CPython 3.12.14 with the locked SDK dependencies. Other interpreter builds, free-threaded interpreters, full debugger/profiler combinations and broader GC behaviour require their own qualification. The fixed collection corpus is a scoped byte-channel/layout/retention observation with a separate span witness; it does not prove hidden object state or production overhead.
+Local qualification used CPython 3.12.15 with the locked SDK dependencies. Other interpreter builds, free-threaded interpreters, full debugger/profiler combinations and broader GC behaviour require their own qualification. The fixed collection corpus is a scoped byte-channel/layout/retention observation with a separate span witness; it does not prove hidden object state or production overhead.
