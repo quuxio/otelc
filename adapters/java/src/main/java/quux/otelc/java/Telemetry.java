@@ -29,17 +29,18 @@ public final class Telemetry implements AutoCloseable {
   final Plan plan;
   final long timeoutMs;
   final TraceStore traces;
+  final TaskContext tasks;
   volatile long shutdownDeadline = Long.MAX_VALUE;
   final AtomicLong exportLoss = new AtomicLong();
   final Map<String, AtomicLong> losses = new LinkedHashMap<>();
   final ConcurrentHashMap<String, Function> functions = new ConcurrentHashMap<>();
   final ConcurrentHashMap<Long, Frame> pending = new ConcurrentHashMap<>();
   private final AtomicLong next = new AtomicLong();
-  private final AtomicBoolean closed = new AtomicBoolean();
+  final AtomicBoolean closed = new AtomicBoolean();
   private final AtomicBoolean sdkStopping = new AtomicBoolean();
   private final CompletableFuture<Boolean> sdkStopped = new CompletableFuture<>();
-  private final ReentrantLock observations = new ReentrantLock();
-  private final ThreadLocal<Long> current = ThreadLocal.withInitial(() -> 0L);
+  final ReentrantLock observations = new ReentrantLock();
+  final ThreadLocal<Long> current = ThreadLocal.withInitial(() -> 0L);
   private volatile boolean discardCompletions;
   volatile boolean enabled;
   private volatile boolean exportFinished;
@@ -65,6 +66,8 @@ public final class Telemetry implements AutoCloseable {
     plan.section("resource").getAsJsonObject("attributes").entrySet().forEach(entry -> attributes.put(entry.getKey(), entry.getValue().getAsString()));
     var resource = Resource.create(attributes.build());
     traces = TraceStore.enabled(plan) ? new TraceStore(this, resource) : null;
+    var propagation=plan.section("propagation");
+    tasks=propagation!=null && propagation.get("tasks").getAsBoolean() ? new TaskContext(this) : null;
     exporter = new Exporter(this);
     var reader = PeriodicMetricReader.builder(exporter).setInterval(Duration.ofMillis(plan.integer("export", "interval_ms"))).build();
     var boundaries = plan.section("metrics").getAsJsonArray("histogram_boundaries_seconds").asList().stream().map(value -> value.getAsDouble()).toList();
@@ -96,9 +99,9 @@ public final class Telemetry implements AutoCloseable {
     observations.lock();
     try {
       if ((!enabled && traces == null) || closed.get()) return 0;
+      if(tasks!=null) tasks.observed();
       long previous = traces == null ? 0 : current.get();
-      var caller = pending.get(previous);
-      var parent = previous == 0 ? null : caller == null ? TraceStore.SUPPRESSED : caller.trace();
+      var parent = parent();
       if (!register(name)) { if (traces != null) traces.reject(parent, "function_capacity"); return suppress(previous); }
       if (pending.size() >= plan.integer("runtime", "max_active_calls")) { lose("active_call_capacity"); if (traces != null) traces.reject(parent, "active_call_capacity"); return suppress(previous); }
       long token = next.incrementAndGet();
@@ -109,6 +112,10 @@ public final class Telemetry implements AutoCloseable {
       if (traces != null) current.set(token);
       return token;
     } finally { observations.unlock(); }
+  }
+  TraceStore.Identity parent() {
+    long token=current.get(); var caller=pending.get(token);
+    return token==0 ? tasks==null ? null : tasks.parent() : caller==null ? TraceStore.SUPPRESSED : caller.trace();
   }
   private long suppress(long previous) {
     if (traces == null) return 0;
@@ -184,7 +191,7 @@ public final class Telemetry implements AutoCloseable {
         discardCompletions = true; exportLoss.incrementAndGet(); shutdownSdk(deadline, false);
         return;
       }
-      try { losses.get("incomplete").addAndGet(incomplete()); pending.clear(); current.remove(); if (traces != null) traces.shutdownPending(); }
+      try { losses.get("incomplete").addAndGet(incomplete()); pending.clear(); current.remove(); if(tasks!=null) tasks.close(); if (traces != null) traces.shutdownPending(); }
       finally { observations.unlock(); }
       exportFinished = shutdownSdk(deadline, true).get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
       if (!exportFinished) exportLoss.incrementAndGet();

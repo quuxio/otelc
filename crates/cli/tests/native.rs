@@ -2728,3 +2728,102 @@ fn start_repeated_metric_receiver(
 
 #[path = "native/cpp_spans.rs"]
 mod cpp_spans;
+
+#[test]
+fn java_worker_context_uses_common_policy_preserves_classes_and_decodes_causal_spans() {
+    let root = tempfile::tempdir().unwrap();
+    let source = include_str!("../../../examples/apps/JavaWorkerApp.java");
+    std::fs::write(root.path().join("JavaWorkerApp.java"), source).unwrap();
+    success(
+        Command::new("javac")
+            .args(["-g", "JavaWorkerApp.java"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let original = std::fs::read(root.path().join("JavaWorkerApp.class")).unwrap();
+    let plain = success(
+        Command::new("java")
+            .args(["-Xshare:off", "JavaWorkerApp"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let (metrics_port, metrics_listener) = receiver();
+    let (trace_port, trace_listener) = receiver();
+    let policy = include_str!("../../../examples/java-worker-context.toml")
+        .replace("examples/apps/JavaWorkerApp.java", "JavaWorkerApp.java")
+        .replace(
+            "http://127.0.0.1:4318",
+            &format!("http://127.0.0.1:{metrics_port}"),
+        );
+    std::fs::write(root.path().join("otelc.toml"), policy).unwrap();
+    let trace_server = start_trace_receiver(trace_listener, 5, Duration::from_secs(60));
+    let (stopped, metrics_server) = start_repeated_metric_receiver(metrics_listener);
+    let report_path = root.path().join("report.json");
+    let instrumented = success(
+        Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+            .args(["java", "JavaWorkerApp"])
+            .current_dir(root.path())
+            .env_remove("OTELC_CONFIG")
+            .env_remove("OTELC_LANGUAGE")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+            .env(
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                format!("http://127.0.0.1:{trace_port}/custom-traces"),
+            )
+            .env("OTELC_REPORT_PATH", &report_path)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(instrumented.stdout, plain.stdout);
+    assert_eq!(instrumented.stderr, plain.stderr);
+    assert_eq!(
+        std::fs::read(root.path().join("JavaWorkerApp.java")).unwrap(),
+        source.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(root.path().join("JavaWorkerApp.class")).unwrap(),
+        original
+    );
+    stopped.store(true, std::sync::atomic::Ordering::Release);
+    metrics_server.join().unwrap();
+    let requests = trace_server.join().unwrap();
+    let nodes: Vec<_> = requests
+        .iter()
+        .flat_map(|r| &r.resource_spans)
+        .flat_map(|r| &r.scope_spans)
+        .flat_map(|s| &s.spans)
+        .collect();
+    assert_eq!(nodes.len(), 8);
+    let roots: Vec<_> = nodes
+        .iter()
+        .filter(|s| s.parent_span_id.is_empty())
+        .collect();
+    assert_eq!(roots.len(), 5);
+    for child in nodes.iter().filter(|s| !s.parent_span_id.is_empty()) {
+        let parent = roots
+            .iter()
+            .find(|r| r.span_id == child.parent_span_id)
+            .unwrap();
+        assert_eq!(child.trace_id, parent.trace_id);
+    }
+    assert_eq!(
+        nodes
+            .iter()
+            .filter(|s| s.status.as_ref().is_some_and(|status| status.code == 2))
+            .count(),
+        2
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report_path).unwrap()).unwrap();
+    assert_eq!(report["function_calls"], 8);
+    assert_eq!(report["export_loss"], 0);
+    assert_eq!(report["traces"]["pending_contexts"], 0);
+    assert_eq!(report["traces"]["losses"], serde_json::json!({}));
+    let doctor = success(cli(&["--language", "java", "doctor"], root.path()));
+    assert!(
+        String::from_utf8_lossy(&doctor.stdout).contains("ThreadPoolExecutor/FutureTask context")
+    );
+}
