@@ -27,6 +27,24 @@ pub fn doctor(rustc: &str) -> Result<()> {
     Ok(())
 }
 pub fn mirror(root: &Path, destination: &Path) -> Result<()> {
+    let canonical_root = root.canonicalize()?;
+    let canonical_destination = if destination.exists() {
+        destination.canonicalize()?
+    } else {
+        destination
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."))
+            .canonicalize()?
+            .join(
+                destination
+                    .file_name()
+                    .context("generated directory name")?,
+            )
+    };
+    if canonical_destination.starts_with(canonical_root) {
+        bail!("Rust generated workspace must be outside the source tree; set TMPDIR outside the project");
+    }
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(root)? {
         let entry = entry?;
