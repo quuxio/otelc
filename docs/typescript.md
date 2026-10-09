@@ -94,3 +94,5 @@ make benchmark-language LANGUAGE=typescript LANGUAGE_BENCHMARK_ARGS="--node-asyn
 ```
 
 This uses the unchanged `typescript_async_latency.mts` workload and the same compiler-only baseline. Stack observation overhead is workload dependent; complete reports require exact counts and zero losses.
+
+Node module classification is applied before emission for both compilers: `.cts` emits CommonJS, `.mts` emits ESM, and ordinary `.ts` follows Node package classification. CommonJS imports are lowered before probe parsing, including `module=CommonJS` and `module=NodeNext` projects. Plain and instrumented launchers share this rule; the regression compares both with an independent ordinary compiler/control execution. Source and project configuration remain unchanged.
