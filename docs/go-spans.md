@@ -43,7 +43,7 @@ The binding is unique and private. The original function is not wrapped. Existin
 
 Selected activations in the same goroutine use a private context stack; recursion and deferred selected cleanup are children of the admitted caller. Each goroutine starts its own root. No application context argument, global SDK provider, task propagation or distributed/manual SDK parent is added.
 
-Goroutine identity comes from a bounded 64-byte `runtime.Stack` header read, qualified on Go 1.27.1. The header format is diagnostic, not a stable Go API. Unknown, truncated, zero or overflowing identities discard all active trees conservatively and expose `context_identity` loss. The application continues. This avoids exporting a partial tree when the parent cannot be identified. Header inspection adds per-call work; production overhead has no acceptance threshold yet.
+Goroutine identity comes from a bounded 64-byte `runtime.Stack` header read, qualified on Go 1.27.2. The header format is diagnostic, not a stable Go API. Unknown, truncated, zero or overflowing identities discard all active trees conservatively and expose `context_identity` loss. The application continues. This avoids exporting a partial tree when the parent cannot be identified. Header inspection adds per-call work; production overhead has no acceptance threshold yet.
 
 SDK-generated IDs and parent-based root sampling apply to the entire tree. Only complete trees enter the queue. Active roots, spans per tree, pending calls, registered function names and queued batches are bounded. Total configured retained span capacity is at most 1,048,576, with one bounded tree in export. A rejected descendant discards its whole tree and releases retained SDK payload. No rejected child becomes a new root.
 
