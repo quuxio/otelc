@@ -2,7 +2,7 @@
 
 The Java adapter adds timing probes to selected class bytecode when the JDK loads it. Original source files, compiled classes and application JARs stay unchanged. It needs a full JDK 21+ and Maven to build the external agent; application code needs no OpenTelemetry dependency, import or annotation.
 
-The common trace policy also enables sampled [method-body spans](java-spans.md), including same-thread parenting and the read-only Tempo/Grafana viewer. Method spans and asynchronous task completion have distinct boundaries; see that guide before enabling traces.
+The common trace policy also enables sampled [method-body spans](java-spans.md), including same-thread parenting and the read-only Tempo/Grafana viewer. Method spans and asynchronous task completion have distinct boundaries; see that guide before enabling traces. Opt-in [standard executor context](java-task-context.md) retains causal parents for qualified pool submissions.
 
 ## Build and run
 
