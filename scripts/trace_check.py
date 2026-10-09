@@ -24,6 +24,10 @@ EXAMPLES = {
     "typescript": ("typescript_trace_app.mts", 11, 5, 1),
     "go": ("go_app.go", 10, 7, 1),
 }
+WORKER_EXAMPLES = {
+    "python": ("python_workers_app.py", "python-worker-context.toml", 10, 5, 1),
+    "java": ("JavaWorkerApp.java", "java-worker-context.toml", 8, 5, 2),
+}
 TEMPO = "http://127.0.0.1:3200"
 
 
@@ -81,19 +85,20 @@ def verify_ancestor_chain(key, nodes):
         parent = nodes[parent]["parent"]
 
 
-def verify_parent(key, node, nodes):
+def verify_parent(key, node, nodes, allow_late_children=False):
     parent = node["parent"]
     if parent is None:
         return
     if parent not in nodes or parent == key:
         raise ValueError("stored span has a missing/self parent")
     ancestor = nodes[parent]
-    if not ancestor["start"] <= node["start"] <= node["end"] <= ancestor["end"]:
+    if (node["start"] < ancestor["start"]
+            or not allow_late_children and node["end"] > ancestor["end"]):
         raise ValueError("child span lies outside its parent")
     verify_ancestor_chain(key, nodes)
 
 
-def stored_tree(document, trace_id, service):
+def stored_tree(document, trace_id, service, allow_late_children=False):
     nodes = {}
     for span in instrumented_spans(document, service):
         key = identity(span["spanId"], 8)
@@ -103,16 +108,16 @@ def stored_tree(document, trace_id, service):
     if not nodes or sum(n["parent"] is None for n in nodes.values()) != 1:
         raise ValueError("stored tree must have exactly one root")
     for key, node in nodes.items():
-        verify_parent(key, node, nodes)
+        verify_parent(key, node, nodes, allow_late_children)
     return {"trace_id": trace_id, "spans": list(nodes.values())}
 
 
-def service_trees(service, query):
+def service_trees(service, query, allow_late_children=False):
     search = get_json("/api/search?" + query)
     ids = [search_identity(entry["traceID"]) for entry in search.get("traces", [])]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate Tempo search trace IDs")
-    return [stored_tree(get_json("/api/traces/" + key), key, service) for key in ids]
+    return [stored_tree(get_json("/api/traces/" + key), key, service, allow_late_children) for key in ids]
 
 
 def complete_counts(trees, expected_spans, expected_trees, expected_errors):
@@ -126,12 +131,12 @@ def complete_counts(trees, expected_spans, expected_trees, expected_errors):
     return True
 
 
-def wait_for_storage(service, expected_spans, expected_trees, expected_errors, timeout):
+def wait_for_storage(service, expected_spans, expected_trees, expected_errors, timeout, allow_late_children=False):
     deadline = time.monotonic() + timeout
     query = urllib.parse.urlencode({"q": '{ resource.service.name = ' + json.dumps(service) + ' }', "limit": 100})
     while True:
         try:
-            trees = service_trees(service, query)
+            trees = service_trees(service, query, allow_late_children)
             if complete_counts(trees, expected_spans, expected_trees, expected_errors):
                 return trees
         except urllib.error.HTTPError as error:
@@ -142,7 +147,7 @@ def wait_for_storage(service, expected_spans, expected_trees, expected_errors, t
         time.sleep(min(1, max(0, deadline - time.monotonic())))
 
 
-def report_complete(report, spans, trees):
+def report_complete(report, spans, trees, require_contexts=False):
     tracing = report.get("traces")
     if (not isinstance(tracing, dict) or not isinstance(report.get("losses"), dict)
             or not isinstance(tracing.get("losses"), dict)
@@ -151,18 +156,19 @@ def report_complete(report, spans, trees):
             or report.get("drained", True) is not True
             or report.get("export_loss", 0) or report.get("export_dropped_batches", 0)
             or any(report.get("losses", {}).values()) or any(tracing.get("losses", {}).values())
+            or tracing.get("pending_contexts", None if require_contexts else 0) != 0
             or tracing.get("active_trees") != 0 or tracing.get("queued_trees") != 0
             or tracing.get("completed_trees") != trees or report.get("function_calls") != spans):
         raise ValueError("application report contains incomplete telemetry or unexpected counts")
 
 
-def execute(command, root, environment):
+def execute(command, root, environment, channels=False):
     result = subprocess.run([str(item) for item in command], cwd=root, env=environment,
-                            text=True, capture_output=True, timeout=180, check=True)
-    return result.stdout
+                            text=not channels, capture_output=True, timeout=180, check=True)
+    return (result.stdout, result.stderr) if channels else result.stdout
 
 
-def commands(root, folder, language, source, config, environment):
+def commands(root, folder, language, source, config, environment, tasks=False):
     cli = root / "target/debug/quux-otelc"
     prefix = [cli, "--config", config, "--language", language]
     if language in ("c", "cpp", "rust"):
@@ -181,6 +187,8 @@ def commands(root, folder, language, source, config, environment):
                    "go": environment.get("OTELC_GO", "go"), "javascript": environment.get("OTELC_NODE", "node"),
                    "typescript": environment.get("OTELC_NODE", "node")}[language]
     plain = [interpreter, source]
+    if language == "java" and tasks:
+        plain = [interpreter, "-Xshare:off", source]
     if language == "go":
         plain = [interpreter, "run", source]
     elif language == "typescript":
@@ -189,17 +197,22 @@ def commands(root, folder, language, source, config, environment):
     return plain, prefix + [adapter, source]
 
 
-def run_example(root, output, language, timeout, run_id):
-    filename, spans, trees, errors = EXAMPLES[language]
+def run_example(root, output, language, timeout, run_id, workload="functions"):
+    tasks = workload == "tasks"
+    if tasks:
+        filename, policy_name, spans, trees, errors = WORKER_EXAMPLES[language]
+    else:
+        filename, spans, trees, errors = EXAMPLES[language]
+        policy_name = language + "-traces.toml"
     source = root / "examples/apps" / filename
     original = source.read_bytes()
-    policy_path = root / "examples" / (language + "-traces.toml")
+    policy_path = root / "examples" / policy_name
     policy = policy_path.read_bytes()
     folder = output / language
     folder.mkdir(parents=True, exist_ok=True)
     config = folder / "policy.toml"
     config.write_bytes(policy)
-    service = "otelc-" + language + "-trace-check-" + run_id
+    service = "otelc-" + language + ("-task-check-" if tasks else "-trace-check-") + run_id
     environment = {key: value for key, value in os.environ.items() if not key.startswith(("OTEL_", "OTELC_"))}
     # Preserve only explicit toolchain choices, never ambient signal configuration.
     environment.update({key: value for key, value in os.environ.items() if key in ("OTELC_NODE", "OTELC_JAVA", "OTELC_GO", "OTELC_RUSTC")})
@@ -207,17 +220,17 @@ def run_example(root, output, language, timeout, run_id):
     report_path = folder / "runtime.json"
     report_path.unlink(missing_ok=True)
     try:
-        plain, instrumented = commands(root, folder, language, source, config, environment)
-        baseline = execute(plain, root, environment)
+        plain, instrumented = commands(root, folder, language, source, config, environment, tasks=tasks)
+        baseline = execute(plain, root, environment, channels=True)
         environment["OTELC_REPORT_PATH"] = str(report_path)
-        actual = execute(instrumented, root, environment)
+        actual = execute(instrumented, root, environment, channels=True)
         if actual != baseline:
-            raise ValueError("plain and instrumented application outputs differ")
+            raise ValueError("plain and instrumented stdout/stderr differ")
         report = json.loads(report_path.read_text())
-        report_complete(report, spans, trees)
-        stored = wait_for_storage(service, spans, trees, errors, timeout)
-        return {"language": language, "service": service, "source_sha256": hashlib.sha256(original).hexdigest(),
-                "output": actual, "runtime": report, "stored_trees": stored,
+        report_complete(report, spans, trees, require_contexts=tasks)
+        stored = wait_for_storage(service, spans, trees, errors, timeout, allow_late_children=tasks)
+        return {"language": language, "workload": workload, "service": service, "source_sha256": hashlib.sha256(original).hexdigest(),
+                "output": actual[0].decode("utf-8"), "stderr": actual[1].decode("utf-8"), "runtime": report, "stored_trees": stored,
                 "dashboard": "http://localhost:3000/d/otelc-traces?" + urllib.parse.urlencode({
                     "var-service": service, "var-traceId": stored[0]["trace_id"]})}
     finally:
@@ -228,11 +241,17 @@ def run_example(root, output, language, timeout, run_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--language", action="append", choices=list(EXAMPLES))
+    parser.add_argument("--workload", choices=("functions", "tasks"), default="functions",
+                        help="function examples for all languages, or qualified Python/Java workers")
     parser.add_argument("--output", type=Path, default=Path("build/trace-check"))
     parser.add_argument("--timeout", type=int, default=60, help="Tempo ingestion budget per language, in seconds")
     args = parser.parse_args()
     if not 1 <= args.timeout <= 300:
         parser.error("timeout must be 1..300 seconds")
+    examples = WORKER_EXAMPLES if args.workload == "tasks" else EXAMPLES
+    languages = args.language or examples
+    if any(language not in examples for language in languages):
+        parser.error("task storage checks currently qualify Python and Java only")
     root = Path(__file__).resolve().parents[1]
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -240,8 +259,8 @@ def main():
     destination = output / "results.json"
     destination.unlink(missing_ok=True)
     run_id = uuid.uuid4().hex[:12]
-    for language in args.language or EXAMPLES:
-        result = run_example(root, output, language, args.timeout, run_id)
+    for language in languages:
+        result = run_example(root, output, language, args.timeout, run_id, workload=args.workload)
         results.append(result)
         print(language + ": stored " + str(sum(len(tree["spans"]) for tree in result["stored_trees"])) + " spans; " + result["dashboard"], flush=True)
     destination.write_text(json.dumps({"complete": True, "results": results}, indent=2) + "\n")
