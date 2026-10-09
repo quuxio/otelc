@@ -14,8 +14,14 @@ final class TaskContext implements AutoCloseable {
     @Override public int hashCode() { return hash; }
     @Override public boolean equals(Object other) { var task=get(); return this==other || task!=null && other instanceof Key key && task==key.get(); }
   }
-  private record Entry(TraceStore.Identity parent, long lease) {}
-  private record Scope(long previousCall, TraceStore.Identity previousParent, boolean previousUnknown) {}
+  private static final class Entry {
+    final TraceStore.Identity parent;
+    final long lease;
+    int active;
+    boolean completed;
+    Entry(TraceStore.Identity parent,long lease) {this.parent=parent;this.lease=lease;}
+  }
+  private record Scope(long previousCall, TraceStore.Identity previousParent, boolean previousUnknown, Key key) {}
   private final Telemetry runtime;
   private final ReferenceQueue<Object> collected=new ReferenceQueue<>();
   private final Map<Key,Entry> pending=new HashMap<>();
@@ -29,7 +35,7 @@ final class TaskContext implements AutoCloseable {
     Key key;
     while((key=(Key)collected.poll())!=null) {
       var entry=pending.remove(key);
-      if(entry!=null) { runtime.traces.reject(entry.parent(),"context_incomplete"); runtime.traces.release(entry.lease()); }
+      if(entry!=null) { runtime.traces.reject(entry.parent,"context_incomplete"); runtime.traces.release(entry.lease); }
     }
   }
   public void capture(Object task) {
@@ -41,7 +47,7 @@ final class TaskContext implements AutoCloseable {
       if(parent==null) return;
       var existing=pending.get(new Key(task,null));
       if(existing!=null) {
-        if(!java.util.Objects.equals(existing.parent(),parent)) {lostContext=true;runtime.traces.reject(existing.parent(),"context_duplicate");runtime.traces.reject(parent,"context_duplicate");}
+        if(!java.util.Objects.equals(existing.parent,parent)) {lostContext=true;runtime.traces.reject(existing.parent,"context_duplicate");runtime.traces.reject(parent,"context_duplicate");}
         return;
       }
       if(task.getClass()!=FutureTask.class) { runtime.traces.reject(parent,"context_unsupported"); return; }
@@ -54,26 +60,38 @@ final class TaskContext implements AutoCloseable {
     runtime.observations.lock();
     try {
       if(closed || runtime.closed.get()) return null;
-      reap(); var entry=pending.get(new Key(task,null));
+      reap(); var key=new Key(task,null);var entry=pending.get(key);
       if(entry==null && !lostContext) return null;
-      var scope=new Scope(runtime.current.get(),current.get(),Boolean.TRUE.equals(unknown.get()));
-      runtime.current.remove(); current.set(entry==null?TraceStore.SUPPRESSED:entry.parent());
+      var scope=new Scope(runtime.current.get(),current.get(),Boolean.TRUE.equals(unknown.get()),entry==null?null:key);
+      if(entry!=null) entry.active++;
+      runtime.current.remove(); current.set(entry==null?TraceStore.SUPPRESSED:entry.parent);
       if(entry==null) unknown.set(true); else unknown.remove();
       return scope;
     } finally {runtime.observations.unlock();}
   }
   public void after(Object value) {
     if(runtime.closed.get()) {runtime.current.remove();current.remove();unknown.remove();return;}
-    var scope=(Scope)value;
-    if(scope.previousCall()==0) runtime.current.remove(); else runtime.current.set(scope.previousCall());
-    if(scope.previousUnknown()) unknown.set(true); else unknown.remove();
-    if(scope.previousParent()==null) current.remove(); else current.set(scope.previousParent());
+    runtime.observations.lock();
+    try {
+      if(closed || runtime.closed.get()) {runtime.current.remove();current.remove();unknown.remove();return;}
+      var scope=(Scope)value;
+      if(scope.previousCall()==0) runtime.current.remove(); else runtime.current.set(scope.previousCall());
+      if(scope.previousUnknown()) unknown.set(true); else unknown.remove();
+      if(scope.previousParent()==null) current.remove(); else current.set(scope.previousParent());
+      var entry=pending.get(scope.key());
+      if(entry!=null && --entry.active==0 && entry.completed) {pending.remove(scope.key());runtime.traces.release(entry.lease);}
+    } finally {runtime.observations.unlock();}
   }
   public void complete(Object task) {
     if(runtime.closed.get()) return;
     runtime.observations.lock();
-    try {reap(); var entry=pending.remove(new Key(task,null)); if(entry!=null) runtime.traces.release(entry.lease());}
-    finally {runtime.observations.unlock();}
+    try {
+      reap();var key=new Key(task,null);var entry=pending.get(key);
+      if(entry!=null) {
+        if(entry.active>0) entry.completed=true;
+        else {pending.remove(key);runtime.traces.release(entry.lease);}
+      }
+    } finally {runtime.observations.unlock();}
   }
   public void finished(Object task) {
     if(runtime.closed.get()) return;

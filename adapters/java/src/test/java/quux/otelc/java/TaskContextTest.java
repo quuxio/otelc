@@ -62,6 +62,26 @@ class TaskContextTest {
       runtime.tasks.finished(task);assertEquals(42,task.get());assertEquals(0,runtime.tasks.pending());
     }
   }
+  @Test void cancellingRunningCallableRetainsParentUntilItsActualScopeExits() throws Exception {
+    for(boolean interrupt:new boolean[]{false,true}) try(var fixture=new Fixture(8,1)) {
+      var runtime=fixture.runtime;var entered=new java.util.concurrent.CountDownLatch(1);var gate=new java.util.concurrent.CountDownLatch(1);
+      var task=new FutureTask<>(()->{entered.countDown();boolean waiting=true;while(waiting) try {gate.await();waiting=false;} catch(InterruptedException ignored) { /* The original callable deliberately ignores cancellation. */ }
+        long child=runtime.enter("child");runtime.exit(child,false);return 42;});
+      long parent=runtime.enter("parent");runtime.tasks.capture(task);runtime.exit(parent,false);
+      var worker=new Thread(()->{var scope=runtime.tasks.before(task);try {task.run();} finally {runtime.tasks.after(scope);runtime.tasks.finished(task);}});
+      worker.start();assertTrue(entered.await(5,java.util.concurrent.TimeUnit.SECONDS));
+      try {
+        assertTrue(task.cancel(interrupt));runtime.tasks.complete(task);runtime.tasks.complete(task);
+        assertEquals(1,runtime.tasks.pending(),"cancel released the still-running callable's causal reservation");
+        assertEquals(0L,runtime.traces.report().get("completed_trees"));
+      } finally {gate.countDown();worker.join(5000);}
+      assertFalse(worker.isAlive());assertTrue(task.isCancelled());assertEquals(0,runtime.tasks.pending());
+      runtime.close();var spans=fixture.spans.spans();assertEquals(2,spans.size());
+      var root=spans.stream().filter(span->span.getParentSpanId().isEmpty()).findFirst().orElseThrow();
+      assertEquals("parent",root.getName());assertEquals(1,spans.stream().filter(span->span.getParentSpanId().equals(root.getSpanId())).count());
+      assertTrue(runtime.traces.losses().isEmpty());assertEquals(0,runtime.traces.report().get("pending_contexts"));
+    }
+  }
   @Test void workerContextRestoresExistingSelectedCallerAndErrorIdentity() throws Exception {
     try(var fixture=new Fixture(8,1)) {
       var runtime=fixture.runtime; var error=new IllegalArgumentException("private payload");
