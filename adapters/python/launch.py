@@ -23,7 +23,7 @@ def main(args: list[str]) -> int:
             from quux_otelc_python import traces  # Check requested SDK support before launch.
             signals += " and function spans"
             if plan.get("propagation", {}).get("tasks", False):
-                signals += " with standard asyncio task context"
+                signals += " with standard asyncio task context and ThreadPoolExecutor context"
         print(f"Python {sys.version.split()[0]}: CPython monitoring and OTLP/HTTP {signals} available")
         return 0
     if args[1] == "--inspect":

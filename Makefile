@@ -93,6 +93,7 @@ python-check:
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/traces.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/task_context.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/worker_context.py' --fail-under=80
 	$(PYTHON) -m coverage xml --data-file=build/python.coverage -o build/python-coverage.xml
 
 benchmark-language: build
