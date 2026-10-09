@@ -77,7 +77,7 @@ The service is `otelc-typescript-example`. The common counters and seconds-based
 
 ## Compiler and module boundaries
 
-The adapter reads root `tsconfig.json`, including extended compiler settings. It preserves target and decorator settings, with an ES2022 default and a minimum ES2018 target to keep async/generator timing intact. Node module format follows `.mts`/`.cts`, package format and module syntax; the adapter emits for Node rather than using an AMD/System/UMD bundle setting. Project-local typed imports are compiled even when source filters exclude their probes. Third-party `node_modules` files remain outside instrumentation.
+The adapter reads root `tsconfig.json`, including extended compiler settings. It preserves target and decorator settings, with an ES2022 default and a minimum ES2018 target to keep async/generator timing intact. Node module format follows `.mts`/`.cts`, package format and module syntax; the adapter emits for Node rather than using an AMD/System/UMD bundle setting. Relative import extensions are preserved in both emitters, overriding `rewriteRelativeImportExtensions`, because the loader executes modules at original source URLs. Project-local typed imports are compiled even when source filters exclude their probes. Third-party `node_modules` files remain outside instrumentation.
 
 JSX, declaration-only inputs, path aliases/baseUrl, decorator metadata emission, bundled outFile and non-Node module formats are rejected clearly. TypeScript compilation here is single-module emission, not project type checking: run your normal type checker/build as well. The native compiler is separately pinned and qualified; syntax must also be understood by the 6.0.3 identity parser. Neither backend promises project-wide type checking.
 

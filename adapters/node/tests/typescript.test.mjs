@@ -36,6 +36,8 @@ test('typed loader preserves source, overloads, decorators, parameter properties
     export function overloaded(value:string):string;
     export function overloaded(value:number|string):number|string{return value;}
     export async function rejected():Promise<never>{await Promise.resolve();throw new Error('same');}`;
+  const config=JSON.stringify({compilerOptions:{rewriteRelativeImportExtensions:true}});
+  fs.writeFileSync(path.join(directory,'tsconfig.json'),config);
   fs.writeFileSync(path.join(directory, 'app.mts'), source);
   fs.writeFileSync(path.join(directory, 'helper.mts'), 'export enum Values { Factor=2 }\n// otelc.unknown\nexport function helper(n:number):number{return n*Values.Factor;}');
   const p = { ...plan(r.endpoint), language: 'typescript' }; p.source_matchers.include = ['(?-u)app\\.mts'];
@@ -47,6 +49,7 @@ test('typed loader preserves source, overloads, decorators, parameter properties
     await assert.rejects(module.rejected(), /same/);
     const report = application.runtime.report(); assert.equal(report.function_calls, 6); assert.equal(report.functions['app.rejected'].unwinds, 1); assert.equal(report.functions['helper.helper'], undefined);
     assert.equal(fs.readFileSync(path.join(directory, 'app.mts'), 'utf8'), source);
+    assert.equal(fs.readFileSync(path.join(directory,'tsconfig.json'),'utf8'),config);
     assert.equal(inspect(path.join(directory, 'app.mts'), p, directory).functions.filter(value => value.name === 'app.overloaded').length, 1);
   } finally { await application.close(); await r.close(); fs.rmSync(directory, { recursive: true }); }
 });

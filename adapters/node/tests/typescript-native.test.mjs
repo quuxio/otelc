@@ -71,6 +71,8 @@ test('native loader qualifies imported types, class fields, decorators and async
   p.function_matchers.include = ['(?-u)app\\.parent', '(?-u)helper\\.child'];
   const helper = 'export enum Values { Factor = 2 }\nexport function child(value:number):number {return value*Values.Factor;}';
   const source = "import {child} from './helper.mts';\nfunction decorate(value:any){return value;}\n@decorate class Box {constructor(public value:number){}}\nexport async function parent(value:number){await Promise.resolve();return child(new Box(value).value)+1;}";
+  const config = JSON.stringify({compilerOptions:{rewriteRelativeImportExtensions:true,outDir:'application-output',incremental:true,tsBuildInfoFile:'application-cache.tsbuildinfo'}});
+  fs.writeFileSync(path.join(folder,'tsconfig.json'),config);
   fs.writeFileSync(path.join(folder, 'helper.mts'), helper); fs.writeFileSync(path.join(folder, 'app.mts'), source);
   let application; const trees = [];
   try {
@@ -84,6 +86,8 @@ test('native loader qualifies imported types, class fields, decorators and async
     assert.equal(application.runtime.report().function_calls, 2); assert.equal(application.runtime.report().export_loss, 0);
     assert.deepEqual(application.runtime.report().traces.losses, {});
     assert.equal(fs.readFileSync(path.join(folder, 'app.mts'), 'utf8'), source); assert.equal(fs.readFileSync(path.join(folder, 'helper.mts'), 'utf8'), helper);
+    assert.equal(fs.readFileSync(path.join(folder,'tsconfig.json'),'utf8'),config);
+    assert.equal(fs.existsSync(path.join(folder,'application-output')),false);assert.equal(fs.existsSync(path.join(folder,'application-cache.tsbuildinfo')),false);
   } finally {await application?.close();await metrics.close();await traces.close();fs.rmSync(folder,{recursive:true});}
 });
 

@@ -33,7 +33,7 @@ The unchanged module prints `75` and records 18 instrumented calls; the annotate
 
 ## Private emission and source maps
 
-The 6.0.3 parser reads original function identities, source positions, optional annotations and root `tsconfig.json`. The native compiler emits one private module at a time with `noCheck` and `noResolve`; the Node loader separately loads project-local imports. Run your normal project type checker and build as well.
+The 6.0.3 parser reads original function identities, source positions, optional annotations and root `tsconfig.json`. The native compiler emits one private module at a time with `noCheck` and `noResolve`; the Node loader separately loads project-local imports. Both emitters preserve original relative import extensions even when the project sets `rewriteRelativeImportExtensions=true`, because rewritten output paths are not source module URLs. Run your normal project type checker and build as well.
 
 Temporary directories are private and outside the canonical source project. Native emission cannot write the project’s output directory or incremental build cache. The adapter removes temporary input and output after each emission, including compiler failures. A compiler invocation has a 30-second timeout and a bounded diagnostic buffer. The executable and platform package must both match the pinned release.
 
