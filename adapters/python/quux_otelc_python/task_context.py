@@ -1,10 +1,11 @@
-"""Private asyncio contexts, scoped to the external launch adapter."""
+"""Private asyncio and thread-pool contexts, scoped to the external launch adapter."""
 import asyncio
 import contextvars
 import functools
 import sys
 
 from .traces import SUPPRESSED
+from .worker_context import WorkerContext
 
 
 class TaskContext:
@@ -14,6 +15,11 @@ class TaskContext:
         self.previous = {}
         self.original = None
         self.wrapper = None
+        self.workers = WorkerContext(self)
+
+    def boundary(self, code):
+        return (self.wrapper is not None and code is self.wrapper.__code__
+                or code is self.workers.boundary)
 
     def enter(self, key, identity):
         self.previous[key] = self.current.get()
@@ -78,8 +84,14 @@ class TaskContext:
         create_task._otelc_task_context = True
         self.wrapper = create_task
         asyncio.BaseEventLoop.create_task = create_task
+        try:
+            self.workers.install()
+        except BaseException:
+            asyncio.BaseEventLoop.create_task = original
+            raise
 
     def close(self):
+        self.workers.close()
         if asyncio.BaseEventLoop.create_task is self.wrapper:
             asyncio.BaseEventLoop.create_task = self.original
         self.previous.clear()

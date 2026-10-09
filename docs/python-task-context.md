@@ -1,6 +1,6 @@
 # Python automatic task context
 
-Enable `propagation.tasks=true` alongside `traces.enabled=true` in the common schema-2 configuration. Application files stay unchanged: no imports, annotations, decorators or manual context handoffs are required. The private monitoring adapter captures the selected function context at standard asyncio submission and restores it while selected coroutine bodies execute.
+Enable `propagation.tasks=true` alongside `traces.enabled=true` in the common schema-2 configuration. Application files stay unchanged: no imports, annotations, decorators or manual context handoffs are required. The private monitoring adapter captures the selected function context at standard asyncio and ThreadPoolExecutor submission and restores it while selected coroutine bodies execute.
 
 ## Ordinary source and commands
 
@@ -51,10 +51,35 @@ The adapter uses a private ContextVar and bounded trace identities. It retains n
 
 The report's `traces.pending_contexts` shows outstanding reservations. `context_capacity` invalidates an affected tree when the reservation pool fills. `context_hook` reports an incompatible factory result that cannot accept completion observation while preserving its original result. Selection/active/span limits invalidate the inherited tree, including already completed siblings. Incomplete trees are discarded at shutdown; no fake completion is exported. Sampling decisions are inherited, including zero sampling. Metrics live controls retain their existing semantics and do not disable configured tracing.
 
-Direct detached `asyncio.Task(...)` construction, event loops overriding the standard method, executor/thread/process handoffs, arbitrary callback scheduling and HTTP propagation are not qualified. An inherited sampled identity whose tree has already expired is suppressed and reports `context_expired`; it is not silently resampled as a new root. This diagnostic cannot detect every unqualified scheduler. Keep propagation disabled for unsupported execution models until their integrations are tested. Existing application SDK contexts are not automatically joined.
+Direct detached `asyncio.Task(...)` construction, event loops overriding the standard method, direct thread creation, process/alternative executor handoffs, previously saved submission aliases, arbitrary callback scheduling and HTTP propagation are not qualified. An inherited sampled identity whose tree has already expired is suppressed and reports `context_expired`; it is not silently resampled as a new root. This diagnostic cannot detect every unqualified scheduler. Keep propagation disabled for unsupported execution models until their integrations are tested. Existing application SDK contexts are not automatically joined.
+
+## Thread-pool workers
+
+The same policy also qualifies standard `concurrent.futures.ThreadPoolExecutor.submit`, `asyncio.to_thread` and the standard loop's `run_in_executor` with a thread pool. Submission captures only the private otelc parent; application ContextVars retain their original semantics (`to_thread` copies them, ordinary pool submission does not). Worker results and exception instances are preserved. Completion, cancellation before start and failed submission release bounded reservations. Reused workers restore their previous private context. The runtime holds no strong references to Futures, callables or payloads.
+
+The [unchanged worker example](../examples/apps/python_workers_app.py) uses ordinary pool submission:
+
+```python
+def root(pool, value, gate=None):
+    return pool.submit(child, value, gate)
+
+async def async_root():
+    return await asyncio.to_thread(child, 40)
+```
+
+Run the plain application and the externally selected variant:
+
+```sh
+.venv/bin/python examples/apps/python_workers_app.py
+OTELC_PYTHON="$PWD/.venv/bin/python" OTELC_REPORT_PATH=/tmp/python-workers.json \
+  ./target/debug/quux-otelc --config examples/python-worker-context.toml \
+  python examples/apps/python_workers_app.py
+```
+
+Both print `results=11,21,31,41; original-error=True`. At full sampling, expect ten spans in five independent trees, each root with one worker child, and one escaping worker-error span. No additional await or join is injected. Direct `threading.Thread.start`, ProcessPoolExecutor, custom submit overrides and saved aliases bypassing the installed hook remain unqualified. Pending work at shutdown remains incomplete; no successful child completion is invented.
 
 ## Verification and next steps
 
-`make python-check` runs task regressions and a real CLI/OTLP decoder test that compares unchanged source bytes, stdout, stderr and status, checks eight spans/three trees and causal parents, and checks zero trace losses and pending reservations. It enforces an independent minimum 80% line-coverage gate for the task-context implementation, alongside existing Python/trace gates. The previous default of independent scheduled roots remains covered with propagation disabled.
+`make python-check` runs task regressions and a real CLI/OTLP decoder test that compares unchanged source bytes, stdout, stderr and status, checks eight spans/three trees and causal parents, and checks zero trace losses and pending reservations. It enforces an independent minimum 80% line-coverage gate for the task-context and worker-context implementations, alongside existing Python/trace gates. The previous default of independent scheduled roots remains covered with propagation disabled.
 
 This milestone delivers task context, not automatic object/resource lifetime spans or cross-service propagation. Those follow as separate PRs under the [all-language implementation plan](context-and-lifetime-plan.md).

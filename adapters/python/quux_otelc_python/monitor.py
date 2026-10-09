@@ -109,8 +109,7 @@ class Monitor:
             for _ in range(4096):
                 if ancestor is None:
                     break
-                if (self.context is not None and self.context.wrapper is not None
-                        and ancestor.f_code is self.context.wrapper.__code__):
+                if self.context is not None and self.context.boundary(ancestor.f_code):
                     break
                 if id(ancestor.f_code) in self.names or self.display_name(ancestor.f_code) is not None:
                     parent = id(ancestor)
