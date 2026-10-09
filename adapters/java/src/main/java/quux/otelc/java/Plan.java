@@ -18,6 +18,8 @@ public final class Plan {
   public Plan(JsonObject data) {
     this.data = data;
     if (!data.get("language").getAsString().equals("java") || !data.get("execution_available").getAsBoolean()) throw new IllegalArgumentException("agent requires an executable Java policy");
+    var propagation=section("propagation");
+    if(propagation!=null && propagation.get("tasks").getAsBoolean() && !TraceStore.enabled(this)) throw new IllegalArgumentException("Java task context requires traces");
     sources = new Selection(section("source_matchers"));
     functions = new Selection(section("function_matchers"));
   }

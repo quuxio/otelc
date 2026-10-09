@@ -394,8 +394,11 @@ fn task_propagation_has_shared_policy_and_explicit_capabilities() {
     for language in &config.languages {
         let resolved = config.resolve(*language).unwrap();
         assert!(resolved.propagation.tasks);
-        assert_eq!(resolved.execution_available, *language == Language::Python);
-        if *language != Language::Python {
+        assert_eq!(
+            resolved.execution_available,
+            matches!(*language, Language::Python | Language::Java)
+        );
+        if !matches!(*language, Language::Python | Language::Java) {
             assert!(resolved
                 .unavailable
                 .iter()

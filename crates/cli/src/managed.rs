@@ -71,6 +71,9 @@ pub fn run(
         if args[0] == "--doctor" || args[0] == "--inspect" {
             child.arg("-jar").arg(&agent).arg(plan.path());
         } else {
+            if resolved.propagation.tasks {
+                child.arg("-Xshare:off");
+            }
             child.arg(format!(
                 "-javaagent:{}={}",
                 agent.display(),

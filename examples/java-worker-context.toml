@@ -1,0 +1,17 @@
+schema_version = 2
+languages = ["java"]
+[sources]
+include = ["examples/apps/JavaWorkerApp.java"]
+[functions]
+include = ["JavaWorkerApp.root(*)", "JavaWorkerApp.child(*)"]
+[metrics]
+enabled = true
+[traces]
+enabled = true
+root_sample_ratio = 1.0
+[propagation]
+tasks = true
+[resource]
+service_name = "otelc-java-worker-context"
+[export]
+endpoint = "http://127.0.0.1:4318"

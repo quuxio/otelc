@@ -115,11 +115,11 @@ Start with the [developer 101](docs/developer-101.md) for source examples, confi
 | [Build the internal C/C++ examples](docs/local-implementation.md) | `make examples` |
 | [Compare plain, probes-disabled and metrics-enabled builds](docs/benchmarks.md) | `make benchmark` |
 | [Measure metrics off/on in the same process](docs/benchmarks.md#live-metrics-latency-in-one-process) | `make benchmark-live` |
-| [Verify stored traces for every language](docs/traces.md) | `make trace-check` |
+| [Verify stored function and worker traces](docs/traces.md) | `make trace-check`; add `TRACE_CHECK_ARGS='--workload tasks'` for Python/Java workers |
 
 Open the [Grafana dashboard](http://localhost:3000/d/otelc-local) after starting the stack. For exception-enabled C++, select `examples/exceptions.toml` with the matched LLVM backend. Benchmark reports retain raw samples and telemetry-loss evidence.
 
 - [Common configuration](docs/common-configuration.md): one schema-2 policy for C, C++, Rust, Python, Java, JavaScript, TypeScript and Go.
 - [Language guides](docs/languages.md): adapter setup and current support. See the [roadmap](docs/roadmap.md#todo-language-adapters) for remaining work.
-- [Context and lifetime spans](docs/context-and-lifetime-plan.md): the all-language delivery plan, starting with [Python standard asyncio task context](docs/python-task-context.md).
+- [Context and lifetime spans](docs/context-and-lifetime-plan.md): the all-language delivery plan, with [Python task and worker context](docs/python-task-context.md) and [Java executor qualification](docs/java-task-context.md).
 - [Object lifetimes](docs/object-lifetimes.md): the C++ guard is an opt-in prototype requiring source edits. Automatic lifetime instrumentation without source edits remains planned.

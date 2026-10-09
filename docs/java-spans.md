@@ -34,7 +34,7 @@ Open the [read-only trace dashboard](http://localhost:3000/d/otelc-traces), set 
 
 Spans cover the original method body from probe entry until normal return or an escaping `Throwable`. Arguments, returned objects and exception messages are not recorded or retained by the store. Exceptions keep their original identity; caught exceptions do not mark the enclosing method as failed. Constructor timing starts after its base/delegating constructor returns. Native, abstract, synthetic, bridge and class-initialiser methods retain the agent's existing exclusion rules.
 
-Parenting follows selected method calls on the same platform or virtual thread. Each entry restores its caller's private context on exit. Independent tasks and threads start new roots. Returning a `CompletionStage` ends the method span at the original method return; stage completion, automatic task/distributed propagation, manual SDK parenting and span links are unsupported.
+Parenting follows selected method calls on the same platform or virtual thread. Each entry restores its caller's private context on exit. Independent tasks and threads start new roots by default. Opt-in [standard executor task context](java-task-context.md) joins qualified pool submissions to their submitting method. Returning a `CompletionStage` ends the method span at the original method return; stage completion, unqualified scheduler/distributed propagation, manual SDK parenting and span links are unsupported.
 
 With traces enabled, the function cache admits selected methods when they are invoked, rather than when their classes load. Rejected calls suppress descendant spans until the rejected method exits, preventing descendants from appearing as separate roots.
 

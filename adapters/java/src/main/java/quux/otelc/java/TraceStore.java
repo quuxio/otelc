@@ -48,6 +48,8 @@ final class TraceStore implements AutoCloseable {
   private final ArrayDeque<Tree> ready = new ArrayDeque<>();
   private final Map<String, Long> losses = new LinkedHashMap<>();
   private int retained;
+  private final Map<Long, Identity> leases = new LinkedHashMap<>();
+  private long nextLease;
   private long completed;
   private long sampledOut;
   private CompletableFuture<Boolean> activeFlush;
@@ -119,6 +121,16 @@ final class TraceStore implements AutoCloseable {
     tree.nodes.put(identity.getSpanId(), span); tree.bytes += name.getBytes(StandardCharsets.UTF_8).length * 2L + 256; retained++;
     return new Identity(identity, true);
   }
+  synchronized long acquire(Identity parent) {
+    if(parent==null || !parent.sampled()) return 0;
+    var tree=roots.get(parent.context().getTraceId()); if(tree==null || tree.invalid) return 0;
+    if(leases.size()>=runtime.plan.integer("runtime","max_active_calls") || nextLease==Long.MAX_VALUE) { reject(parent,"context_capacity"); return 0; }
+    long lease=++nextLease; leases.put(lease,parent); tree.active++; return lease;
+  }
+  synchronized void release(long lease) {
+    var parent=leases.remove(lease); if(parent==null) return;
+    var tree=roots.get(parent.context().getTraceId()); if(tree!=null) {tree.active--; complete(parent.context().getTraceId(),tree);}
+  }
   synchronized void finish(Identity identity, long ended, boolean escaped) {
     if (identity == null || !identity.sampled()) return;
     var tree = roots.get(identity.context().getTraceId());
@@ -131,18 +143,21 @@ final class TraceStore implements AutoCloseable {
     }
     tree.active--;
     if (identity.context().getSpanId().equals(tree.root)) tree.closed = true;
+    complete(identity.context().getTraceId(), tree);
+  }
+  private void complete(String traceId, Tree tree) {
     if (tree.active != 0 || !tree.closed) return;
-    roots.remove(identity.context().getTraceId());
+    roots.remove(traceId);
     if (tree.invalid) return;
     if (ready.size() >= capacity) { retained -= tree.nodes.size(); lose("queue_capacity"); }
     else { completed++; ready.addLast(tree); }
   }
   private void lose(String reason) { losses.merge(reason, 1L, Long::sum); }
   synchronized Map<String, Long> losses() { return new LinkedHashMap<>(losses); }
-  synchronized Map<String, Object> report() { return Map.of("completed_trees", completed, "sampled_out_roots", sampledOut, "active_trees", roots.size(), "queued_trees", ready.size(), "losses", losses()); }
+  synchronized Map<String, Object> report() { return Map.of("completed_trees", completed, "sampled_out_roots", sampledOut, "active_trees", roots.size(), "queued_trees", ready.size(), "pending_contexts", leases.size(), "losses", losses()); }
   synchronized void shutdownPending() {
     for (var tree : roots.values()) { retained -= tree.nodes.size(); if (!tree.invalid) lose("incomplete"); }
-    roots.clear();
+    roots.clear(); leases.clear();
   }
   synchronized CompletableFuture<Boolean> flush() {
     if (activeFlush != null && !activeFlush.isDone()) return activeFlush;

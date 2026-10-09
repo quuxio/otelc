@@ -330,7 +330,7 @@ impl CommonConfig {
         let native = matches!(language, Language::C | Language::Cpp)
             .then(|| adapter.native.unwrap_or_default());
         let mut unavailable = Vec::new();
-        if self.propagation.tasks && language != Language::Python {
+        if self.propagation.tasks && !matches!(language, Language::Python | Language::Java) {
             unavailable.push(format!(
                 "{language} task context propagation is not implemented"
             ));
