@@ -52,7 +52,7 @@ Support is per qualified integration and toolchain, not every scheduler, framewo
 3. **Python automatic resource/collection lifetime spans**: constructor and declared resource boundary observers, weak identity registry, standalone linked lifetime spans and metrics. Validate retention, constructor/close failures, duplicate completion and shutdown. Keep unsupported class shapes explicit.
 4. **JavaScript context, HTTP and lifetime spans**, each as its own PR. Qualify callbacks, concurrent requests, worker transfers and weak collection independently.
 5. **TypeScript context/HTTP qualification and lifetime spans**, separate PRs over the shared Node runtime and TS compiler/emission fixtures.
-6. **Java context, HTTP and lifetime spans**, separate PRs; constructor-chain and virtual-thread fixtures must precede any claim of support.
+6. **Java context, HTTP and lifetime spans**, separate PRs; standard platform-pool FutureTask context is under qualification in [the executor guide](java-task-context.md); constructor-chain and virtual-thread fixtures must precede any claim of support.
 7. **Go context, HTTP and lifetime spans**, separate PRs; preserve original escape/lifetime semantics and test GC/cleanup limitations.
 8. **Rust typed backend, context, HTTP and lifetime spans**, separate PRs; pin and doctor the compiler backend, then prove moves/drop and executor boundaries.
 9. **Native common context plus C propagation/resources/typed lifetimes**, separate PRs and explicit library bindings.
