@@ -139,6 +139,17 @@ class TaskContextTest {
       assertTrue(fixture.spans.spans().isEmpty());assertEquals(2L,runtime.traces.losses().get("context_duplicate"));
     }
   }
+  @Test void closedDispatchNeverWaitsOnTheRuntimeObservationLock() throws Exception {
+    try(var fixture=new Fixture(8,1);var executor=java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      var runtime=fixture.runtime;runtime.observations.lock();runtime.closed.set(true);
+      try {
+        assertTrue(executor.submit(()->{
+          var task=new FutureTask<>(()->42);runtime.tasks.capture(task);assertNull(runtime.tasks.before(task));
+          runtime.tasks.complete(task);runtime.tasks.finished(task);runtime.tasks.failed();return true;
+        }).get(100,java.util.concurrent.TimeUnit.MILLISECONDS));
+      } finally {runtime.closed.set(false);runtime.observations.unlock();}
+    }
+  }
   @Test void policyRejectsTaskContextWithoutTraces() {
     var data=AgentTest.policy("http://127.0.0.1:1/v1/metrics");data.add("propagation",com.google.gson.JsonParser.parseString("{\"tasks\":true}"));
     assertThrows(IllegalArgumentException.class,()->new Plan(data));

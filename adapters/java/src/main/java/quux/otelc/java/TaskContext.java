@@ -33,6 +33,7 @@ final class TaskContext implements AutoCloseable {
     }
   }
   public void capture(Object task) {
+    if(runtime.closed.get()) return;
     runtime.observations.lock();
     try {
       if(closed || runtime.closed.get()) return;
@@ -49,6 +50,7 @@ final class TaskContext implements AutoCloseable {
     } finally {runtime.observations.unlock();}
   }
   public Object before(Object task) {
+    if(runtime.closed.get()) return null;
     runtime.observations.lock();
     try {
       if(closed || runtime.closed.get()) return null;
@@ -67,17 +69,19 @@ final class TaskContext implements AutoCloseable {
     if(scope.previousParent()==null) current.remove(); else current.set(scope.previousParent());
   }
   public void complete(Object task) {
+    if(runtime.closed.get()) return;
     runtime.observations.lock();
     try {reap(); var entry=pending.remove(new Key(task,null)); if(entry!=null) runtime.traces.release(entry.lease());}
     finally {runtime.observations.unlock();}
   }
   public void finished(Object task) {
+    if(runtime.closed.get()) return;
     runtime.observations.lock();
     try {if(pending.containsKey(new Key(task,null)) && ((FutureTask<?>)task).isDone()) complete(task);}
     finally {runtime.observations.unlock();}
   }
   void observed() {if(Boolean.TRUE.equals(unknown.get())) {unknown.remove();runtime.traces.reject(null,"context_untracked");}}
-  public void failed() { runtime.observations.lock(); try {runtime.traces.reject(runtime.parent(),"context_hook");} finally {runtime.observations.unlock();} }
+  public void failed() { if(runtime.closed.get()) return; runtime.observations.lock(); try {runtime.traces.reject(runtime.parent(),"context_hook");} finally {runtime.observations.unlock();} }
   int pending() { runtime.observations.lock(); try {reap();return pending.size();} finally {runtime.observations.unlock();} }
   @Override public void close() {
     runtime.observations.lock();
