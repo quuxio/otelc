@@ -56,15 +56,10 @@ final class Weaver implements ClassFileTransformer {
     // Trace mode must observe rejected calls so an enclosing tree cannot export incomplete data.
     var selected = inventory(node).stream().filter(Function::selected).filter(value -> runtime == null || runtime.traces != null || runtime.register(value.name())).toList();
     if (selected.isEmpty()) return null;
+    var hierarchy = new FrameTypes(reader, loader);
     var writer = new ClassWriter(reader, ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS) {
       @Override protected String getCommonSuperClass(String left, String right) {
-        try {
-          var first = Class.forName(left.replace('/', '.'), false, loader); var second = Class.forName(right.replace('/', '.'), false, loader);
-          if (first.isAssignableFrom(second)) return left; if (second.isAssignableFrom(first)) return right;
-          if (first.isInterface() || second.isInterface()) return "java/lang/Object";
-          do { first = first.getSuperclass(); } while (!first.isAssignableFrom(second));
-          return first.getName().replace('.', '/');
-        } catch (ClassNotFoundException failure) { throw new IllegalArgumentException("cannot resolve Java frame types", failure); }
+        return hierarchy.common(left, right);
       }
     };
     var visitor = new ClassVisitor(Opcodes.ASM9, writer) {
