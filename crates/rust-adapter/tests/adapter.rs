@@ -505,3 +505,46 @@ fn compact_async_tails_keep_nested_delimiters_coercions_and_empty_bodies_valid()
         serde_json::from_slice(&fs::read(root.path().join("report.json")).unwrap()).unwrap();
     assert_eq!(report["function_calls"], 7);
 }
+
+#[test]
+fn linked_rust_modules_are_instrumented_without_changing_sources_or_permissions() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let plan = write_plan(root.path());
+    let original = external.path().join("leaf.rs");
+    let module = "pub fn value() -> i32 { 42 }\n";
+    fs::write(&original, module).unwrap();
+    fs::set_permissions(&original, fs::Permissions::from_mode(0o400)).unwrap();
+    symlink(&original, root.path().join("linked.rs")).unwrap();
+    symlink(external.path(), root.path().join("src")).unwrap();
+    let main = "mod linked; #[path=\"src/leaf.rs\"] mod nested; fn main() { let result=linked::value()+nested::value(); assert_eq!(result,84); println!(\"result={result}\"); }";
+    fs::write(root.path().join("main.rs"), main).unwrap();
+    success(
+        Command::new("rustc")
+            .args(["--edition=2024", "main.rs", "-o", "plain"])
+            .current_dir(root.path())
+            .output()
+            .unwrap(),
+    );
+    let plain = success(Command::new(root.path().join("plain")).output().unwrap());
+    let instrumented = success(run(root.path(), &plan, &["main.rs"]));
+    assert_eq!(instrumented.stdout, plain.stdout);
+    assert_eq!(instrumented.stderr, plain.stderr);
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("report.json")).unwrap()).unwrap();
+    assert_eq!(report["function_calls"], 2);
+    assert_eq!(report["functions"]["linked.value"]["count"], 1);
+    assert_eq!(report["functions"]["src.leaf.value"]["count"], 1);
+    assert_eq!(fs::read_to_string(&original).unwrap(), module);
+    assert_eq!(
+        fs::read_to_string(root.path().join("main.rs")).unwrap(),
+        main
+    );
+    assert!(root.path().join("linked.rs").is_symlink());
+    assert!(root.path().join("src").is_symlink());
+    assert_eq!(
+        fs::metadata(&original).unwrap().permissions().mode() & 0o777,
+        0o400
+    );
+}
