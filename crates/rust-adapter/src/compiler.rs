@@ -2,9 +2,10 @@ use anyhow::{bail, Context, Result};
 use quux_otelc_config::Selection;
 use quux_otelc_rust::policy::Plan;
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     fs,
-    os::unix::fs::symlink,
+    os::unix::fs::{symlink, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -27,6 +28,9 @@ pub fn doctor(rustc: &str) -> Result<()> {
     Ok(())
 }
 pub fn mirror(root: &Path, destination: &Path) -> Result<()> {
+    mirror_inner(root, destination, &mut BTreeSet::new())
+}
+fn mirror_inner(root: &Path, destination: &Path, ancestors: &mut BTreeSet<PathBuf>) -> Result<()> {
     let canonical_root = root.canonicalize()?;
     let canonical_destination = if destination.exists() {
         destination.canonicalize()?
@@ -42,8 +46,11 @@ pub fn mirror(root: &Path, destination: &Path) -> Result<()> {
                     .context("generated directory name")?,
             )
     };
-    if canonical_destination.starts_with(canonical_root) {
+    if canonical_destination.starts_with(&canonical_root) {
         bail!("Rust generated workspace must be outside the source tree; set TMPDIR outside the project");
+    }
+    if !ancestors.insert(canonical_root.clone()) {
+        bail!("cyclic Rust source directory link requires separate qualification");
     }
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(root)? {
@@ -52,21 +59,34 @@ pub fn mirror(root: &Path, destination: &Path) -> Result<()> {
         let name = entry.file_name();
         let target = destination.join(&name);
         let kind = entry.file_type()?;
-        if kind.is_dir()
+        let directory = kind.is_dir() || kind.is_symlink() && source.is_dir();
+        if directory
             && matches!(
                 name.to_str(),
                 Some(".git" | "target" | "node_modules" | ".venv")
             )
         {
             symlink(source, target)?;
-        } else if kind.is_dir() {
-            mirror(&source, &target)?;
-        } else if kind.is_file() && source.extension().is_some_and(|value| value == "rs") {
-            fs::copy(source, target)?;
+        } else if directory {
+            mirror_inner(&source, &target, ancestors)?;
+        } else if source.extension().is_some_and(|value| value == "rs") {
+            if !source.is_file() {
+                bail!("Rust source input must resolve to a regular file");
+            }
+            if target.is_symlink() {
+                fs::remove_file(&target)?;
+            }
+            fs::copy(&source, &target)?;
+            // Generated probes need writable private input even when the
+            // original source is read-only. Never change original permissions.
+            let mut permissions = fs::metadata(&target)?.permissions();
+            permissions.set_mode(permissions.mode() | 0o200);
+            fs::set_permissions(&target, permissions)?;
         } else {
             symlink(source, target)?;
         }
     }
+    ancestors.remove(&canonical_root);
     Ok(())
 }
 fn prepare(
