@@ -4,7 +4,7 @@ The Go adapter parses original source with Go's AST and adds deferred probes thr
 
 ## Install and run
 
-Use Go 1.26+; the local and CI qualification uses Go 1.27.1. Install the pinned validation tools, build the launcher and start the [metrics stack](observability-stack.md):
+Use Go 1.26+; the local and CI qualification uses Go 1.27.2. Install the pinned validation tools, build the launcher and start the [metrics stack](observability-stack.md):
 
 ```sh
 make go-tools
@@ -94,4 +94,4 @@ The pinned SDK performs aggregation and protobuf encoding. The bounded HTTP tran
 
 Duplicate export suppression fingerprints the collected cumulative SDK snapshot, with observation timestamps removed and health counters retained. Export loss without a new application call still changes the next exported snapshot. A concurrent completion cannot label an older snapshot as current or suppress its successor. Admission rechecks live enable state after acquiring the runtime lock.
 
-Development analysers are pinned separately in `ci/go-tools/go.mod` and `go.sum`. `make go-tools` builds them with `-mod=readonly`; CI and `make go-check` use these locked binaries. The development tool build uses Go 1.27.1.
+Development analysers are pinned separately in `ci/go-tools/go.mod` and `go.sum`. `make go-tools` builds them with `-mod=readonly`; CI and `make go-check` use these locked binaries. The development tool build uses Go 1.27.2.
