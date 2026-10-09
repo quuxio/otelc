@@ -126,9 +126,20 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
     } }, Function: { exit(path) {
       if (!path.node.body) return;
       const identityComments = [...(path.node.leadingComments ?? []), ...((path.parentPath.isExportNamedDeclaration() || path.parentPath.isExportDefaultDeclaration()) ? path.parentPath.node.leadingComments ?? [] : [])];
-      const identity = identityComments.find(comment => comment.value.startsWith(IDENTITY));
+      let identity = identityComments.find(comment => comment.value.startsWith(IDENTITY))?.value;
+      if (prepared && t.isBlockStatement(path.node.body)) {
+        const body = path.node.body;
+        const directive = body.directives.find(value => value.value.value.startsWith(IDENTITY));
+        const statement = body.body.find(value => t.isExpressionStatement(value) && t.isStringLiteral(value.expression) && value.expression.value.startsWith(IDENTITY));
+        const marker = directive?.value.value ?? statement?.expression.value;
+        if (marker) {
+          identity = marker;
+          body.directives = body.directives.filter(value => value !== directive);
+          body.body = body.body.filter(value => value !== statement);
+        }
+      }
       if (prepared && !identity) return;
-      const metadata = identity ? JSON.parse(Buffer.from(identity.value.slice(IDENTITY.length), 'base64').toString()) : null;
+      const metadata = identity ? JSON.parse(Buffer.from(identity.slice(IDENTITY.length), 'base64').toString()) : null;
       const name = metadata?.name ?? displayName(path, sourceName);
       const tag = plan.annotations.read_existing ? metadata ? metadata.annotation : annotation(path) : null;
       const selected = tag !== 'otelc.exclude' && selection.accepts(name, tag === 'otelc.instrument');

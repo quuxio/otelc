@@ -289,7 +289,8 @@ impl CommonConfig {
             let allowed: &[&str] = match language {
                 Language::C | Language::Cpp => &["auto", "callbacks", "llvm", "source"],
                 Language::Rust => &["auto", "compiler", "source"],
-                Language::TypeScript | Language::JavaScript => &["auto", "source", "loader"],
+                Language::TypeScript => &["auto", "source", "loader", "native"],
+                Language::JavaScript => &["auto", "source", "loader"],
                 Language::Java => &["auto", "agent", "aspectj"],
                 Language::Python => &["auto", "import", "profile", "source"],
                 Language::Go => &["auto", "compile"],
@@ -355,7 +356,7 @@ impl CommonConfig {
             } else {
                 "loader"
             };
-            if backend != required {
+            if backend != required && !(language == Language::TypeScript && backend == "native") {
                 unavailable.push(format!("{language} requires the {required} backend"));
             }
             if self.lifetimes.enabled {

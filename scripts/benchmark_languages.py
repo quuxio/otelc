@@ -17,7 +17,7 @@ except ModuleNotFoundError:
     from benchmark_live import batch, compare, measure, read_line
 
 
-def run(root, output, iterations, runs, language="python", endpoint=None, rust_async=False, node_async=False, rust_closures=False):
+def run(root, output, iterations, runs, language="python", endpoint=None, rust_async=False, node_async=False, rust_closures=False, native_typescript=False):
     if not 1 <= iterations <= 1000000 or not 2 <= runs <= 100:
         raise ValueError("iterations must be 1..1000000 and runs 2..100")
     if language not in ("python", "javascript", "typescript", "java", "go", "rust"):
@@ -28,6 +28,8 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         raise ValueError("async Node benchmark requires language=javascript or typescript")
     if rust_closures and (language != "rust" or rust_async):
         raise ValueError("Rust closure benchmark requires language=rust without --rust-async")
+    if native_typescript and language != "typescript":
+        raise ValueError("native TypeScript benchmark requires language=typescript")
     root, output = Path(root).resolve(), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     private = Path(tempfile.mkdtemp(prefix="control-", dir=output))
@@ -54,6 +56,8 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         config.write_text(config.read_text().replace("examples.apps.rust_latency.process_order", "examples.apps.rust_async_latency.process_order"))
     elif node_async:
         config.write_text(config.read_text().replace(f"examples.apps.{language}_latency.process_order", f"examples.apps.{language}_async_latency.process_order"))
+    if native_typescript:
+        config.write_text(config.read_text().replace('backend = "source"', 'backend = "native"'))
     if endpoint:
         config.write_text(config.read_text().replace("http://127.0.0.1:4318", endpoint))
     cli = root / "target/debug/quux-otelc"
@@ -68,6 +72,8 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         environment["OTELC_JAVA"] = interpreter
     elif language != "python":
         environment["OTELC_NODE"] = interpreter
+    if native_typescript:
+        environment["OTELC_TYPESCRIPT_BACKEND"] = "native"
     processes = []
     try:
         plain_command = [interpreter, str(source)] if language != "typescript" else [interpreter, "--import", str(root / "adapters/node/plain.mjs"), str(source)]
@@ -98,7 +104,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         if not complete or source.read_bytes() != original:
             raise ValueError("Incomplete telemetry or modified source")
         toolchain = sys.version.split()[0] if language == "python" else subprocess.check_output([interpreter, "version" if language == "go" else "--version"], text=True).strip()
-        report = {"language": language, "rust_async": rust_async, "node_async": node_async, "rust_closures": rust_closures, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
+        report = {"language": language, "rust_async": rust_async, "node_async": node_async, "rust_closures": rust_closures, "native_typescript": native_typescript, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
     finally:
@@ -121,8 +127,9 @@ def main():
     parser.add_argument("--rust-async", action="store_true", help="Measure Rust async first-poll-to-completion probes")
     parser.add_argument("--node-async", action="store_true", help="Measure faithful Node async Promise completion observation")
     parser.add_argument("--rust-closures", action="store_true", help="Measure externally selected synchronous Rust closure bodies")
+    parser.add_argument("--native-typescript", action="store_true", help="Use the pinned native compiler for both TypeScript benchmark lanes")
     args = parser.parse_args()
-    result = run(Path(__file__).resolve().parents[1], args.output, args.iterations, args.runs, args.language, args.endpoint, args.rust_async, args.node_async, args.rust_closures)
+    result = run(Path(__file__).resolve().parents[1], args.output, args.iterations, args.runs, args.language, args.endpoint, args.rust_async, args.node_async, args.rust_closures, args.native_typescript)
     print(json.dumps(result["summary"], indent=2))
 
 

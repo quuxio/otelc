@@ -414,3 +414,20 @@ fn task_propagation_has_shared_policy_and_explicit_capabilities() {
     )
     .is_err());
 }
+
+#[test]
+fn native_typescript_emission_is_opt_in_and_language_specific() {
+    let config = CommonConfig::from_text(
+        "schema_version=2\nlanguages=['typescript']\n[adapters.typescript]\nbackend='native'",
+        false,
+    )
+    .unwrap();
+    let resolved = config.resolve(Language::TypeScript).unwrap();
+    assert_eq!(resolved.backend, "native");
+    assert!(resolved.execution_available);
+    assert!(CommonConfig::from_text(
+        "schema_version=2\nlanguages=['javascript']\n[adapters.javascript]\nbackend='native'",
+        false
+    )
+    .is_err());
+}

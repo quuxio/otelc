@@ -5,6 +5,8 @@ import { transform } from './transform.mjs';
 import { Selection, sourceName } from './policy.mjs';
 import { transpile, compilerOptions } from './typescript.mjs';
 import { nativeObserver } from './promise-observer.mjs';
+import ts from 'typescript';
+import { nativeVersion } from './typescript-native.mjs';
 
 export function inspect(filename, plan, root = process.cwd()) {
   const name = sourceName(path.resolve(filename), root);
@@ -20,7 +22,8 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     if (plan.language === 'typescript') compilerOptions();
     if (typeof registerHooks !== 'function') throw new Error('Node 24.11+ with synchronous module hooks is required');
     nativeObserver();
-    console.log(`Node ${process.version}: in-memory ${plan.language} transformation and OTLP/HTTP metrics${plan.traces?.enabled ? ' and function spans' : ''} available`);
+    const compiler = plan.language === 'typescript' ? plan.backend === 'native' ? `; native TypeScript ${nativeVersion()} emit, identity parser ${ts.version}` : `; TypeScript API ${ts.version} emit` : '';
+    console.log(`Node ${process.version}${compiler}: in-memory ${plan.language} transformation and OTLP/HTTP metrics${plan.traces?.enabled ? ' and function spans' : ''} available`);
   } else if (command === '--inspect' && args.length >= 1 && args.slice(1).every(arg => arg === '--json')) {
     console.log(JSON.stringify(inspect(args[0], plan), null, 2));
   } else throw new Error('Node inspect requires SCRIPT [--json]');

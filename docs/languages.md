@@ -7,7 +7,7 @@ Each additional language lands separately on `main` after its unchanged-source e
 | Existing | C / C++ | Clang wrapper and LLVM 22 pass; exception-enabled C++ |
 | 1 | Python | CPython 3.12+ monitoring and Python SDK; implemented |
 | 2 | JavaScript | Node in-memory transform and JavaScript SDK; implemented |
-| 3 | TypeScript | TypeScript compiler and in-memory Node probes; implemented |
+| 3 | TypeScript | TypeScript 6 API or opt-in [TypeScript 7 native emission](typescript-native.md) and Node probes; implemented |
 | 4 | Java | Java agent and method bytecode instrumentation; implemented |
 | 5 | Go | Go compiler overlays and Go SDK; implemented |
 | 6 | Rust | Rust 1.98.1 generated body guards, parsed synchronous closures, qualified async completion/cancellation timing, Cargo compiler wrapper and Rust SDK; implemented |
