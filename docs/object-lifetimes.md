@@ -2,7 +2,7 @@
 
 ## Current opt-in prototype
 
-The product requirement is automatic lifetime instrumentation without application source edits. That capability is not implemented. The [all-language implementation plan](context-and-lifetime-plan.md) explicitly includes **automatic object / resource lifetime spans**, collection boundaries, creation-context links and lifetime metrics. The guard below is an interim opt-in prototype used to exercise runtime lifetime accounting; adding it to a class does not satisfy the source-free acceptance contract.
+The product requirement is automatic lifetime instrumentation without application source edits. Selected ordinary [Python collection lifetimes](python-collection.md) now use monitoring and weak references without source edits. Automatic destruction/drop and existing resource close/dispose boundaries remain unimplemented. The [all-language implementation plan](context-and-lifetime-plan.md) explicitly includes **automatic object / resource lifetime spans**, collection boundaries, creation-context links and lifetime metrics. The guard below is an interim opt-in prototype used to exercise runtime lifetime accounting; adding it to a class does not satisfy the source-free acceptance contract.
 
 The installed C++ header [`include/otelc/lifetime.hpp`](../include/otelc/lifetime.hpp) provides an explicit `otelc::ObjectLifetime` guard. The guard measures the interval between `start()` and `finish()` or destruction; it uses a bounded process-wide registry instead of a thread-local function stack. Construction and destruction may occur on different threads.
 
@@ -37,7 +37,7 @@ The destructor is `noexcept`; ordinary C++ stack unwinding completes an active g
 
 The worker exports `otelc.object.lifetimes` and `otelc.object.lifetime.duration`, with `code.object.type` and service resource identity. Duration uses the same configured histogram boundaries as function timing. The [Grafana dashboard](observability-stack.md) includes lifetime count and p95 panels.
 
-This is lifetime timing with metrics. Individual object spans and automatic instrumentation of arbitrary selected classes are not implemented. The explicit guard avoids pretending that trivial/optimised-away constructors, placement-new, inheritance or garbage collection can all be inferred from ordinary function callbacks. Managed languages will need their own resource/lifetime contracts.
+The C++ guard provides lifetime timing with metrics. Its individual object spans and automatic instrumentation of arbitrary selected C++ classes are not implemented. The explicit guard avoids pretending that trivial/optimised-away constructors, placement-new, inheritance or garbage collection can all be inferred from ordinary function callbacks. Managed languages will need their own resource/lifetime contracts.
 
 ## Required automatic mechanism
 

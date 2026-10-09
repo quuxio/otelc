@@ -347,8 +347,10 @@ impl CommonConfig {
             if self.annotations.inject_generated {
                 unavailable.push("Python monitoring does not inject annotations".into());
             }
-            if self.lifetimes.enabled {
-                unavailable.push("automatic Python lifetimes are not implemented".into());
+            if self.lifetimes.enabled
+                && (self.lifetimes.boundary != "collection" || !self.traces.enabled)
+            {
+                unavailable.push("Python lifetimes require the collection boundary and tracing; object/resource lifetimes are not implemented".into());
             }
         } else if matches!(language, Language::JavaScript | Language::TypeScript) {
             let required = if language == Language::TypeScript {
