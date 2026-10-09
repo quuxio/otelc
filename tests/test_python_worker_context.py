@@ -289,6 +289,9 @@ def root(pool, gate):
             self.assertEqual(future.result(5), 42)
 
     def test_actual_cli_preserves_ordinary_worker_source_results_and_causal_otlp(self):
+        cli = ROOT / 'target/debug/quux-otelc'
+        if not cli.is_file():
+            self.skipTest('CLI is built by the native product gate')
         source = ROOT / 'examples/apps/python_workers_app.py'
         original = source.read_bytes()
         env = dict(os.environ, OTELC_PYTHON=sys.executable, OTELC_ADAPTER_ROOT=str(ROOT / 'adapters'))
@@ -298,7 +301,7 @@ def root(pool, gate):
         with tempfile.TemporaryDirectory() as temporary, receiver() as (endpoint, requests):
             report_path = Path(temporary) / 'runtime.json'
             env.update(OTEL_EXPORTER_OTLP_ENDPOINT=endpoint, OTELC_REPORT_PATH=str(report_path))
-            result = subprocess.run([str(ROOT / 'target/debug/quux-otelc'), '--config',
+            result = subprocess.run([str(cli), '--config',
                                      'examples/python-worker-context.toml', 'python', str(source)],
                                     cwd=ROOT, env=env, capture_output=True, timeout=30)
             self.assertEqual((result.returncode, result.stdout, result.stderr),
