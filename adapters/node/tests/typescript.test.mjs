@@ -36,7 +36,7 @@ test('typed loader preserves source, overloads, decorators, parameter properties
     export function overloaded(value:string):string;
     export function overloaded(value:number|string):number|string{return value;}
     export async function rejected():Promise<never>{await Promise.resolve();throw new Error('same');}`;
-  const config=JSON.stringify({compilerOptions:{rewriteRelativeImportExtensions:true}});
+  const config=JSON.stringify({compilerOptions:{rewriteRelativeImportExtensions:true,allowImportingTsExtensions:true,noEmit:true}});
   fs.writeFileSync(path.join(directory,'tsconfig.json'),config);
   fs.writeFileSync(path.join(directory, 'app.mts'), source);
   fs.writeFileSync(path.join(directory, 'helper.mts'), 'export enum Values { Factor=2 }\n// otelc.unknown\nexport function helper(n:number):number{return n*Values.Factor;}');

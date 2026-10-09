@@ -27,7 +27,7 @@ export function compilerOptions(root = process.cwd()) {
     sourceMap: true, inlineSourceMap: false, inlineSources: true, removeComments: false,
     declaration: false, declarationMap: false, emitDeclarationOnly: false, noEmit: false,
     // Modules execute at original URLs; rewritten output extensions have no file.
-    rewriteRelativeImportExtensions: false, verbatimModuleSyntax: true, isolatedModules: true };
+    allowImportingTsExtensions: false, rewriteRelativeImportExtensions: false, verbatimModuleSyntax: true, isolatedModules: true };
 }
 export function transpile(source, filename, sourceName, plan, root = process.cwd()) {
   if (/\.d\.(?:ts|mts|cts)$/.test(filename) || /\.tsx$/.test(filename)) throw new Error('TypeScript declarations and JSX are not executable adapter inputs');

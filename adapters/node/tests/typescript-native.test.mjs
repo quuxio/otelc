@@ -71,7 +71,7 @@ test('native loader qualifies imported types, class fields, decorators and async
   p.function_matchers.include = ['(?-u)app\\.parent', '(?-u)helper\\.child'];
   const helper = 'export enum Values { Factor = 2 }\nexport function child(value:number):number {return value*Values.Factor;}';
   const source = "import {child} from './helper.mts';\nfunction decorate(value:any){return value;}\n@decorate class Box {constructor(public value:number){}}\nexport async function parent(value:number){await Promise.resolve();return child(new Box(value).value)+1;}";
-  const config = JSON.stringify({compilerOptions:{rewriteRelativeImportExtensions:true,outDir:'application-output',incremental:true,tsBuildInfoFile:'application-cache.tsbuildinfo'}});
+  const config = JSON.stringify({compilerOptions:{rewriteRelativeImportExtensions:true,allowImportingTsExtensions:true,noEmit:true,outDir:'application-output',incremental:true,tsBuildInfoFile:'application-cache.tsbuildinfo'}});
   fs.writeFileSync(path.join(folder,'tsconfig.json'),config);
   fs.writeFileSync(path.join(folder, 'helper.mts'), helper); fs.writeFileSync(path.join(folder, 'app.mts'), source);
   let application; const trees = [];
