@@ -38,6 +38,21 @@ class LanguageBenchmarkTests(unittest.TestCase):
                 self.assertIn(f"{language}_async_latency.{extension}", launch.call_args_list[0].args[0][-1])
                 self.assertIn(f"examples.apps.{language}_async_latency.process_order", (output / "policy.toml").read_text())
 
+    def test_native_typescript_benchmark_uses_same_compiler_in_both_lanes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = self.fixture(directory)
+            (root / "examples/apps/typescript_latency.mts").write_text("unchanged typed app")
+            (root / "examples/typescript.toml").write_text('[functions]\ninclude=["examples.apps.typescript_app.*"]\n[resource]\nservice_name="test"\n[adapters.typescript]\nbackend = "source"\n')
+            samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 10}] * 2 for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
+            with patch.object(benchmark.platform, "platform", return_value="test"), patch.object(benchmark.platform, "machine", return_value="arm64"), patch.object(benchmark.subprocess, "Popen", side_effect=lambda *a, **k: Process()) as launch, patch.object(benchmark, "read_line", return_value="ready"), patch.object(benchmark, "batch"), patch.object(benchmark.subprocess, "check_output", side_effect=['{"pid":42}', 'v24.21.0']), patch.object(benchmark, "measure", return_value=samples):
+                report = benchmark.run(root, output, 10, 2, "typescript", native_typescript=True)
+            self.assertTrue(report["native_typescript"])
+            self.assertIn('backend = "native"', (output / "policy.toml").read_text())
+            self.assertEqual(len(launch.call_args_list), 2)
+            self.assertTrue(all(call.kwargs['env']['OTELC_TYPESCRIPT_BACKEND'] == 'native' for call in launch.call_args_list))
+        with self.assertRaisesRegex(ValueError, "requires language=typescript"):
+            benchmark.run("unused", "unused", 1, 2, "python", native_typescript=True)
+
     def test_rust_compiles_unchanged_baseline_and_runs_live_adapter(self):
         for rust_async, rust_closures in ((False, False), (True, False), (False, True)):
             with self.subTest(rust_async=rust_async, rust_closures=rust_closures):

@@ -12,6 +12,7 @@ export async function install(plan, root = process.cwd()) {
   if (globalThis[RUNTIME]) throw new Error('Node instrumentation is already installed');
   const typed = plan.language === 'typescript' ? await import('./typescript.mjs') : null;
   typed?.compilerOptions(root);
+  if (typed && plan.backend === 'native') (await import('./typescript-native.mjs')).nativeVersion();
   const runtime = new Runtime(plan);
   try { await runtime.bindControl(); }
   catch (error) { await runtime.close(); throw error; }

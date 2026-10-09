@@ -1,6 +1,6 @@
 # TypeScript instrumentation 101
 
-The TypeScript adapter compiles original application modules in memory with the pinned TypeScript 6.0.3 compiler API, then inserts function timing probes into the emitted JavaScript. The compiler preserves types, overloads, enums, namespaces, decorators and parameter-property semantics. Application and dependency files stay unchanged. Compiler-generated helper functions do not become application metrics.
+The TypeScript adapter emits JavaScript from original application modules, then inserts function timing probes. The default `source` backend uses the pinned TypeScript 6.0.3 compiler API in memory. The opt-in [`native` backend](typescript-native.md) uses Microsoft’s TypeScript 7.0.2 executable compiler on private copies, retaining the 6.0.3 parser for original identities and configuration. The compiler preserves types, overloads, enums, namespaces, decorators and parameter-property semantics. Application and dependency files stay unchanged. Compiler-generated helper functions do not become application metrics.
 
 ## Install and run
 
@@ -77,9 +77,9 @@ The service is `otelc-typescript-example`. The common counters and seconds-based
 
 ## Compiler and module boundaries
 
-The adapter reads root `tsconfig.json`, including extended compiler settings. It preserves target and decorator settings, with an ES2022 default and a minimum ES2018 target to keep async/generator timing intact. Node module format follows `.mts`/`.cts`, package format and module syntax; the adapter emits for Node rather than using an AMD/System/UMD bundle setting. Project-local typed imports are compiled even when source filters exclude their probes. Third-party `node_modules` files remain outside instrumentation.
+The adapter reads root `tsconfig.json`, including extended compiler settings. It preserves target and decorator settings, with an ES2022 default and a minimum ES2018 target to keep async/generator timing intact. Node module format follows `.mts`/`.cts`, package format and module syntax; the adapter emits for Node rather than using an AMD/System/UMD bundle setting. Relative import extensions are preserved in both emitters, overriding `rewriteRelativeImportExtensions`, because the loader executes modules at original source URLs. Project-local typed imports are compiled even when source filters exclude their probes. Third-party `node_modules` files remain outside instrumentation.
 
-JSX, declaration-only inputs, path aliases/baseUrl, decorator metadata emission, bundled outFile and non-Node module formats are rejected clearly. TypeScript compilation here is single-module emission, not project type checking: run your normal type checker/build as well. The pinned compiler supports its TypeScript release's syntax; newer compiler API support must be separately qualified.
+JSX, declaration-only inputs, path aliases/baseUrl, decorator metadata emission, bundled outFile and non-Node module formats are rejected clearly. TypeScript compilation here is single-module emission, not project type checking: run your normal type checker/build as well. The native compiler is separately pinned and qualified; syntax must also be understood by the 6.0.3 identity parser. Neither backend promises project-wide type checking.
 
 The JavaScript boundaries for direct eval, top-level CommonJS require shadowing, async/generator timing, forced termination, workers and custom loaders also apply. Timing begins in the body after argument/default initialisation. Sampled function spans are now available through the common policy; see [TypeScript spans](typescript-spans.md). Automatic lifetimes and browser bundles remain unavailable and are rejected rather than silently omitted.
 
