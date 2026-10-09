@@ -18,7 +18,7 @@ final class TaskInstaller {
       || !instrumentation.isModifiableClass(ThreadPoolExecutor.class)) throw new IllegalArgumentException("Java task context requires JDK FutureTask/ThreadPoolExecutor retransformation");
     var file=Files.createTempFile("otelc-java-task-bridge-",".jar"); file.toFile().deleteOnExit();
     try(var output=new JarOutputStream(Files.newOutputStream(file))) {
-      for(String name:new String[]{"TaskBridge","TaskBridge$Hook"}) {
+      for(String name:new String[]{"TaskBridge","TaskBridge$Hook","TaskBridge$Scope"}) {
         String entry="quux/otelc/bootstrap/"+name+".class";
         try(var input=TaskInstaller.class.getClassLoader().getResourceAsStream(entry)) {
           if(input==null) throw new IllegalArgumentException("Java task bootstrap bridge is missing");

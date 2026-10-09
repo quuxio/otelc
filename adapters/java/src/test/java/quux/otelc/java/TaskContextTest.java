@@ -150,6 +150,21 @@ class TaskContextTest {
       } finally {runtime.closed.set(false);runtime.observations.unlock();}
     }
   }
+  @Test void workerExitAfterShutdownClearsPrivateContextOnItsOwnThread() throws Exception {
+    try(var fixture=new Fixture(8,1);var executor=java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      var runtime=fixture.runtime;long parent=runtime.enter("parent");var task=new FutureTask<>(()->42);
+      runtime.tasks.capture(task);runtime.exit(parent,false);
+      var entered=new java.util.concurrent.CountDownLatch(1);var finish=new java.util.concurrent.CountDownLatch(1);
+      var worker=executor.submit(()->{
+        var outer=runtime.tasks.before(task);var nested=new FutureTask<>(()->43);runtime.tasks.capture(nested);
+        var inner=runtime.tasks.before(nested);entered.countDown();finish.await();runtime.tasks.after(inner);
+        boolean cleared=runtime.tasks.parent()==null && runtime.current.get()==0;runtime.tasks.after(outer);return cleared;
+      });
+      assertTrue(entered.await(5,java.util.concurrent.TimeUnit.SECONDS));
+      try {runtime.close();} finally {finish.countDown();}
+      assertTrue(worker.get(5,java.util.concurrent.TimeUnit.SECONDS));
+    }
+  }
   @Test void policyRejectsTaskContextWithoutTraces() {
     var data=AgentTest.policy("http://127.0.0.1:1/v1/metrics");data.add("propagation",com.google.gson.JsonParser.parseString("{\"tasks\":true}"));
     assertThrows(IllegalArgumentException.class,()->new Plan(data));

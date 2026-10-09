@@ -63,6 +63,7 @@ final class TaskContext implements AutoCloseable {
     } finally {runtime.observations.unlock();}
   }
   public void after(Object value) {
+    if(runtime.closed.get()) {runtime.current.remove();current.remove();unknown.remove();return;}
     var scope=(Scope)value;
     if(scope.previousCall()==0) runtime.current.remove(); else runtime.current.set(scope.previousCall());
     if(scope.previousUnknown()) unknown.set(true); else unknown.remove();
