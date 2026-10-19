@@ -82,5 +82,6 @@ Function spans can be enabled through the same external policy; see the [Python 
 
 Script launches preserve CPython's absolute `__file__` spelling, including a supplied `./` component, and the original `sys.argv[0]`. They supply the ordinary script loader metadata, so resource lookup relative to the script continues to work after `chdir`. Source and precompiled-bytecode script controls cover relative, absolute and space-containing paths without rewriting inputs. Module (`-m`) metadata and the existing directory/zip entry-point path are retained.
 
-
 Python monitoring stays active through ordinary non-daemon thread completion and application `atexit` callbacks. The adapter registers its final cleanup before running application code, so application callbacks run first. It then disables monitoring and drains telemetry within the configured shutdown budget. It does not join or terminate application threads itself; unfinished daemon work remains an incomplete observation. Fatal termination still cannot guarantee export.
+
+The application retains its own `__main__` module through exit callbacks. Script, bytecode, module, package, directory and zip launches use normal code loaders and metadata, with application globals/classes and module identity retained. Cleanup code can import `__main__` and pickle its classes; launcher globals are not injected into the application namespace. Loaders without executable code fail explicitly before target execution.
