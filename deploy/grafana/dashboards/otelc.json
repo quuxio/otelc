@@ -307,6 +307,154 @@
           "values": false
         }
       }
+    },
+    {
+      "id": 9,
+      "title": "Completed collection lifetimes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "otelc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (code_type_name) (otelc_lifetime_completed_total{otelc_lifetime_boundary=\"collection\"})",
+          "legendFormat": "{{code_type_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Live collection lifetimes",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "otelc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 23,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (code_type_name) (otelc_lifetime_live{otelc_lifetime_boundary=\"collection\"})",
+          "legendFormat": "{{code_type_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Collection lifetime p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "otelc-prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, code_type_name) (otelc_lifetime_duration_seconds_bucket{otelc_lifetime_boundary=\"collection\"}))",
+          "legendFormat": "{{code_type_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Collection observation losses",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "otelc-prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (otelc_lifetime_dropped_observations_total) or vector(0)",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
     }
   ]
 }

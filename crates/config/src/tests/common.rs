@@ -3,6 +3,41 @@ fn policy() -> CommonConfig {
     toml::from_str(include_str!("../../../../examples/common.toml")).unwrap()
 }
 #[test]
+fn python_collection_lifetimes_are_explicit_and_other_boundaries_stay_unavailable() {
+    let mut config = policy();
+    config.lifetimes.enabled = true;
+    config.lifetimes.boundary = "collection".into();
+    assert!(
+        !config
+            .resolve(Language::Python)
+            .unwrap()
+            .execution_available
+    );
+    config.traces.enabled = true;
+    config.lifetimes.include = vec!["app.Item".into()];
+    config.lifetimes.exclude = vec!["app.Hidden".into()];
+    let resolved = config.resolve(Language::Python).unwrap();
+    assert!(resolved.execution_available);
+    assert_eq!(resolved.lifetimes.boundary, "collection");
+    assert_eq!(resolved.runtime.max_live_lifetimes, 4096);
+    for language in config
+        .languages
+        .iter()
+        .filter(|language| **language != Language::Python)
+    {
+        assert!(!config.resolve(*language).unwrap().execution_available);
+    }
+    for boundary in ["object", "resource"] {
+        config.lifetimes.boundary = boundary.into();
+        let unsupported = config.resolve(Language::Python).unwrap();
+        assert!(!unsupported.execution_available);
+        assert!(unsupported
+            .unavailable
+            .iter()
+            .any(|reason| reason.contains("collection boundary")));
+    }
+}
+#[test]
 fn one_document_resolves_all_languages_with_shared_policy() {
     let config = policy();
     config.validate().unwrap();
