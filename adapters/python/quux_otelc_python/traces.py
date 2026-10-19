@@ -60,7 +60,9 @@ class TraceSession(Session):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("trace export deadline elapsed")
-        kwargs["timeout"] = min(kwargs.get("timeout", remaining), remaining)
+        # A real store owns a monotonic phase budget; SDK wall-time arithmetic
+        # must neither extend that budget nor cancel it before the request.
+        kwargs["timeout"] = min(self.store.timeout_ms / 1000, remaining)
         try:
             return super().request(*args, **kwargs)
         except (requests.RequestException, UnicodeError, ValueError):
