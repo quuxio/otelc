@@ -108,7 +108,7 @@ def write_reports(environment):
 
 def enforce_rust_adapter_coverage(report):
     """Prevent older native code from masking an untested Rust language adapter."""
-    for crate in ("rust-adapter", "rust-probes"):
+    for crate in ("rust-adapter", "rust-probes", "process"):
         selected = []
         include = False
         for line in report.splitlines():
