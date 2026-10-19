@@ -254,11 +254,9 @@ pub fn wrapper(args: Vec<OsString>) -> Result<i32> {
             sdk_arguments(&mut options, &sdk, &source, &original)?;
         }
     }
-    Ok(Command::new(compiler)
-        .args(options)
-        .status()?
-        .code()
-        .unwrap_or(1))
+    Ok(quux_otelc_process::child_code(
+        Command::new(compiler).args(options).status()?,
+    )?)
 }
 pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
     let plan = Plan::load(plan_path)?;
@@ -387,10 +385,10 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
             PathBuf::from(directory).join(format!("rust-sdk-{}", std::process::id())),
         )?;
     }
-    Ok(Command::new(binary)
-        .args(application_args)
-        .env("OTELC_RUST_PLAN", plan_path)
-        .status()?
-        .code()
-        .unwrap_or(1))
+    Ok(quux_otelc_process::child_code(
+        Command::new(binary)
+            .args(application_args)
+            .env("OTELC_RUST_PLAN", plan_path)
+            .status()?,
+    )?)
 }

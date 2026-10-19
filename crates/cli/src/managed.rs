@@ -41,7 +41,7 @@ pub fn run(
             .args(args)
             .status()
             .context("launch Rust instrumentation")?;
-        return Ok(status.code().unwrap_or(1));
+        return Ok(quux_otelc_process::child_code(status)?);
     }
     let root = std::env::var_os("OTELC_ADAPTER_ROOT")
         .map(std::path::PathBuf::from)
@@ -56,7 +56,7 @@ pub fn run(
             .args(args)
             .status()
             .context("launch Go instrumentation")?;
-        return Ok(status.code().unwrap_or(1));
+        return Ok(quux_otelc_process::child_code(status)?);
     }
     if target == Language::Java {
         let agent = root.join("java/target/java-agent-0.1.0-agent.jar");
@@ -84,7 +84,7 @@ pub fn run(
             .args(args)
             .status()
             .context("launch Java instrumentation")?;
-        return Ok(status.code().unwrap_or(1));
+        return Ok(quux_otelc_process::child_code(status)?);
     }
     if matches!(target, Language::JavaScript | Language::TypeScript) {
         let launcher = root.join("node/register.mjs");
@@ -112,7 +112,7 @@ pub fn run(
             .args(args)
             .status()
             .context("launch Node instrumentation")?;
-        return Ok(status.code().unwrap_or(1));
+        return Ok(quux_otelc_process::child_code(status)?);
     }
     let launcher = root.join("python/launch.py");
     if !launcher.is_file() {
@@ -135,5 +135,5 @@ pub fn run(
         .args(args)
         .status()
         .context("launch Python instrumentation")?;
-    Ok(status.code().unwrap_or(1))
+    Ok(quux_otelc_process::child_code(status)?)
 }
