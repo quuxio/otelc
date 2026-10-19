@@ -31,12 +31,17 @@ fn checked(command: &mut Command) {
 fn prepare(language: &str, directory: &Path) -> (Vec<String>, Vec<String>) {
     match language {
         "python" => {
+            let local = repo().join(".venv/bin/python");
+            let python = std::env::var("OTELC_PYTHON").unwrap_or_else(|_| {
+                if local.is_file() {
+                    local.display().to_string()
+                } else {
+                    "python3".into()
+                }
+            });
             fs::write(directory.join("termination.py"), "import os,sys,time\ncode=int(sys.argv[1])\nif code>=0: raise SystemExit(code)\nwith open('ready.pid','w') as file: file.write(str(os.getpid()))\nprint('ready',flush=True)\ntime.sleep(60)\n").unwrap();
             (
-                vec![
-                    repo().join(".venv/bin/python").display().to_string(),
-                    "termination.py".into(),
-                ],
+                vec![python, "termination.py".into()],
                 vec!["python".into(), "termination.py".into()],
             )
         }
