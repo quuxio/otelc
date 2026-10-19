@@ -1,6 +1,5 @@
 """External launch adapter: quux-otelc python SCRIPT or python -m MODULE."""
 import atexit
-
 import builtins
 import json
 import importlib.util
@@ -23,6 +22,7 @@ def close_application(monitor: Monitor | None, runtime: Runtime) -> None:
             monitor.close()
     finally:
         runtime.close()
+
 
 def execute_main(code: CodeType, filename: str | None, loader: object,
                  spec: ModuleSpec | None = None) -> None:
