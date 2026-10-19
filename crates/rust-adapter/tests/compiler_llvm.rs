@@ -1,4 +1,6 @@
 //! Qualified compiler profile: compare raw application channels and decoded SDK spans.
+#[path = "llvm/edge_cases.rs"]
+mod edge_cases;
 #[path = "llvm/receiver.rs"]
 mod receiver;
 use quux_otelc_config::common::{CommonConfig, Language};
@@ -18,9 +20,26 @@ fn policy(root: &Path, receiver: &Receiver) -> PathBuf {
     policy_matching(root, receiver, vec!["*".into()])
 }
 fn policy_matching(root: &Path, receiver: &Receiver, include: Vec<String>) -> PathBuf {
+    policy_configured(
+        root,
+        receiver,
+        include,
+        vec!["*.main".into(), "*.main.*".into()],
+        4096,
+    )
+}
+fn policy_configured(
+    root: &Path,
+    receiver: &Receiver,
+    include: Vec<String>,
+    exclude: Vec<String>,
+    capacity: usize,
+) -> PathBuf {
     let text = format!("schema_version=2\nlanguages=['rust']\n[adapters.rust]\nbackend='llvm'\n[sources]\ninclude=['**']\n[functions]\ninclude=['*']\nexclude=['*.main', '*.main.*']\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[annotations]\nread_existing=true\n[resource]\nservice_name='rust-compiler-test'\n[export]\nendpoint='{}'\ninterval_ms=60000\ntimeout_ms=1000\n", receiver.endpoint);
     let mut common = CommonConfig::from_text(&text, false).unwrap();
     common.functions.include = include;
+    common.functions.exclude = exclude;
+    common.runtime.max_active_calls = capacity;
     let config = common.resolve(Language::Rust).unwrap();
     assert!(config.execution_available);
     let file = root.join("policy.json");

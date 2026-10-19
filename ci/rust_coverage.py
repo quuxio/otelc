@@ -71,7 +71,7 @@ def line_coverage(lcov):
     return 100 * sum(count > 0 for count in counts) / len(counts)
 
 
-def write_reports(environment):
+def write_reports(environment, extra_reports=()):
     """Include retained native executable maps when merging process profiles."""
     target = Path(environment["CARGO_TARGET_DIR"])
     profiles = list(target.rglob("*.profraw"))
@@ -93,7 +93,7 @@ def write_reports(environment):
     # profile, then merge the observed hits by source/line.
     reports = [subprocess.check_output(command + ["--object", str(path)], text=True, env=environment)
                for path in [*objects, *native]]
-    report = merge_line_reports(reports)
+    report = merge_line_reports([*reports, *extra_reports])
     (build / "rust-coverage.lcov").write_text(report)
     percentage = line_coverage(report)
     print(f"Rust/native line coverage: {percentage:.2f}% (minimum 80%)", flush=True)
@@ -158,7 +158,9 @@ def enforce_rust_file_coverage(report):
 
 def main():
     """Build the instrumented archive before native tests, then enforce coverage."""
+    from ci.rust_llvm_coverage import run as compiler_coverage, source_hashes
     environment = coverage_environment()
+    before = source_hashes(Path.cwd())
     for profile in Path(environment["CARGO_TARGET_DIR"]).rglob("*.profraw"):
         profile.unlink()
     for binary in Path(environment["OTELC_COVERAGE_BIN_DIR"]).glob("*"):
@@ -175,7 +177,10 @@ def main():
         ["node", "--test", "adapters/node/tests/promise.test.mjs"],
     ):
         subprocess.run(command, env=environment, check=True)
-    write_reports(environment)
+    compiler_report = compiler_coverage()
+    if source_hashes(Path.cwd()) != before:
+        raise ValueError("Rust/native sources changed during coverage qualification")
+    write_reports(environment, [compiler_report])
 
 
 if __name__ == "__main__":

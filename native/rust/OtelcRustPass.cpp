@@ -145,6 +145,10 @@ const Definition *definitionFor(const Function &Function, ArrayRef<Definition> D
                                        : withoutGenerics(Definition.Leaf) != Leaf) continue;
     Candidates.push_back(&Definition);
   }
+  // Unselected declarations are still needed to disambiguate selected peers,
+  // but their compiler-specific closure environments need no probe identity.
+  if (!llvm::any_of(Candidates, [](const Definition *Item) { return Item->Selected || Item->Startup; }))
+    return nullptr;
   if (!Candidates.empty() && Candidates.front()->Leaf == "<closure>") {
     // Constant/zero-sized closure returns can share the same body-end debug
     // location. Their compiler-owned environment argument identifies the

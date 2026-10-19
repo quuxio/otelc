@@ -41,6 +41,41 @@ def fingerprint(path: Path) -> str:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def llvm_tools(config: str) -> Path:
+    """Locate the exact LLVM release used to build and read pass profiles."""
+    if output([config, "--version"]) != "23.1.3":
+        raise ValueError("Rust LLVM pass requires LLVM 23.1.3")
+    return Path(output([config, "--bindir"]))
+
+
+def compile_pass(root: Path, destination: Path, config: str,
+                 environment: dict[str, str], coverage: bool = False) -> Path:
+    """Compile the same pass for ordinary or isolated coverage execution."""
+    bindir = llvm_tools(config)
+    plugin = destination / "otelc_rust_pass.dylib"
+    command = [str(bindir / "clang++"), "-shared", "-fPIC", "-O2",
+               *shlex.split(output([config, "--cxxflags"])),
+               str(root / "native/rust/OtelcRustPass.cpp"),
+               *shlex.split(output([config, "--ldflags", "--libs", "core", "passes", "--system-libs"])),
+               "-o", str(plugin)]
+    if coverage:
+        command.extend(["-fprofile-instr-generate", "-fcoverage-mapping"])
+    subprocess.run(command, check=True, env=environment)
+    return plugin
+
+
+def write_profile(root: Path, destination: Path, rustc: Path,
+                  sdk: Path, plugin: Path) -> dict[str, object]:
+    """Publish a matching descriptor only after both built inputs exist."""
+    profile = {"schema_version": 1, "rustc": str(rustc), "sdk": str(sdk),
+               "sdk_sha256": fingerprint(sdk), "plugin": str(plugin),
+               "plugin_sha256": fingerprint(plugin), "llvm_version": "23.1.3",
+               "protected_source_roots": [str(root / "crates" / name)
+                                          for name in ("config", "export", "rust-probes")]}
+    (destination / "otelc-rust-llvm.json").write_text(json.dumps(profile, indent=2) + "\n")
+    return profile
+
+
 def build(root: Path, destination: Path, environment: dict[str, str]) -> dict[str, object]:
     """Produce the private SDK, LLVM pass and matching compiler descriptor."""
     for key in ("RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET"):
@@ -48,30 +83,16 @@ def build(root: Path, destination: Path, environment: dict[str, str]) -> dict[st
             raise ValueError(f"Rust LLVM build requires {key} to be unset")
     rustc = qualified_rustc(environment.get("OTELC_RUSTC", "rustc"))
     config = environment.get("OTELC_RUST_LLVM_CONFIG", "/opt/homebrew/opt/llvm@23/bin/llvm-config")
-    if output([config, "--version"]) != "23.1.3":
-        raise ValueError("Rust LLVM pass requires LLVM 23.1.3")
-    bindir = Path(output([config, "--bindir"]))
+    llvm_tools(config)
     destination.mkdir(parents=True, exist_ok=True)
     sdk_target = root / "target/rust-llvm-sdk"
     subprocess.run(["cargo", "build", "-p", "quux-otelc-rust", "--lib", "--locked",
                     "--target-dir", str(sdk_target)], cwd=root,
                    env={**environment, "RUSTC": str(rustc)}, check=True)
-    plugin = destination / "otelc_rust_pass.dylib"
-    command = [str(bindir / "clang++"), "-shared", "-fPIC", "-O2",
-               *shlex.split(output([config, "--cxxflags"])),
-               str(root / "native/rust/OtelcRustPass.cpp"),
-               *shlex.split(output([config, "--ldflags", "--libs", "core", "passes", "--system-libs"])),
-               "-o", str(plugin)]
-    subprocess.run(command, check=True, env=environment)
+    plugin = compile_pass(root, destination, config, environment)
     sdk = sdk_target / "debug/libquux_otelc_rust.rlib"
-    profile = {"schema_version": 1, "rustc": str(rustc), "sdk": str(sdk),
-               "sdk_sha256": fingerprint(sdk), "plugin": str(plugin),
-               "plugin_sha256": fingerprint(plugin), "llvm_version": "23.1.3",
-               "protected_source_roots": [str(root / "crates" / name)
-                                          for name in ("config", "export", "rust-probes")]}
     # Publish metadata last; a failed build cannot silently pair new and old inputs.
-    (destination / "otelc-rust-llvm.json").write_text(json.dumps(profile, indent=2) + "\n")
-    return profile
+    return write_profile(root, destination, rustc, sdk, plugin)
 
 
 def main() -> None:

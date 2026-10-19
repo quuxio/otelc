@@ -87,10 +87,13 @@ Start with the [documentation index](docs/README.md) or [system design](docs/des
 
 ## Working on this repository
 
-The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98+, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24.11+ and Make, then run:
+The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98.1, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24.11+ and Make. The full quality gate also requires the [pinned experimental Rust compiler profile](docs/rust-compiler.md#build-the-pinned-profile), including its separate nightly and LLVM 23 tools:
 
 ```sh
 make setup
+rustup toolchain install nightly-2026-09-28 --profile minimal
+brew install llvm@23
+OTELC_RUSTC="$(rustup which --toolchain nightly-2026-09-28 rustc)" make rust-llvm-build
 make check
 make help
 ```
