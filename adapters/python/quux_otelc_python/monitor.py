@@ -126,7 +126,11 @@ class Monitor:
         return parent
 
     def lifetime_code(self, code):
-        if self.runtime is None or self.runtime.lifetimes is None or text(code.co_name) != '__init__':
+        if self.runtime is None or self.runtime.lifetimes is None:
+            return False
+        releases = self.runtime.lifetimes.releases
+        method = text(code.co_name)
+        if method != '__init__' and (releases is None or method not in releases.methods):
             return False
         filename = text(code.co_filename)
         name = source_name(filename, self.root)

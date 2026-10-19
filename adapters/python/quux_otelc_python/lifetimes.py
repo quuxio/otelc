@@ -1,4 +1,4 @@
-"""Bounded collection observations for ordinary initialisers; no object retention."""
+"""Bounded collection/resource observations without retaining application objects."""
 import collections
 import itertools
 import inspect
@@ -11,6 +11,7 @@ from opentelemetry.metrics import Observation
 
 from .metadata import class_members, member, text
 from .policy import Selection, source_name
+from .resources import Releases, bindings
 
 
 _tokens = itertools.count(1)
@@ -30,6 +31,8 @@ class Lifetimes:
     def __init__(self, runtime, meter):
         self.runtime = runtime
         self.selection = Selection(runtime.plan['lifetime_matchers'])
+        self.boundary = runtime.plan['lifetimes']['boundary']
+        self.releases = Releases(self, bindings(runtime.plan['lifetimes'])) if self.boundary == 'resource' else None
         self.frames = {}
         self.initialising = set()
         self.instances = {}
@@ -45,6 +48,7 @@ class Lifetimes:
         meter.create_observable_gauge('otelc.lifetime.live', callbacks=[lambda _: self.points('live')], unit='{instance}')
         meter.create_observable_counter('otelc.lifetime.dropped_observations', callbacks=[self.loss_points], unit='{observation}')
         meter.create_observable_counter('otelc.lifetime.failed_initialisations', callbacks=[lambda _: [Observation(self.failed_initialisations)]], unit='{instance}')
+        meter.create_observable_counter('otelc.lifetime.failed_releases', callbacks=[lambda _: [Observation(self.releases.failed if self.releases else 0)]], unit='{observation}')
 
     def reject(self, reason):
         with self.runtime.lock:
@@ -52,7 +56,7 @@ class Lifetimes:
 
     def points(self, kind):
         with self.runtime.lock:
-            return [Observation(row[kind], {'code.type.name': name, 'otelc.lifetime.boundary': 'collection'})
+            return [Observation(row[kind], {'code.type.name': name, 'otelc.lifetime.boundary': self.boundary})
                     for name, row in self.types.items()]
 
     def loss_points(self, _):
@@ -64,7 +68,11 @@ class Lifetimes:
         return member(frame.f_locals, text(code.co_varnames[0])) if code.co_argcount else None
 
     def start(self, frame, code, root):
-        if self.closed or text(code.co_name) != '__init__':
+        if self.closed:
+            return
+        if text(code.co_name) != '__init__':
+            if self.releases is not None:
+                self.releases.start(frame, code)
             return
         source = source_name(code.co_filename, root)
         if source is None:
@@ -84,6 +92,8 @@ class Lifetimes:
             return
         name = source.removesuffix('.py').replace('/', '.') + '.' + text(type.__getattribute__(cls, '__qualname__'))
         if not self.selection.accepts(name):
+            return
+        if self.releases is not None and name not in self.releases.bindings:
             return
         hierarchy = type.__getattribute__(cls, '__mro__')
         mappings = [class_members(base) for base in hierarchy]
@@ -107,6 +117,9 @@ class Lifetimes:
         if not type.__getattribute__(cls, '__weakrefoffset__'):
             self.reject('unsupported_weak_reference')
             return
+        if self.releases is not None and not self.releases.qualified(name, mappings[0]):
+            self.reject('unsupported_release')
+            return
         identity = id(value)
         with self.runtime.lock:
             existing = self.instances.get(self.identities.get(identity))
@@ -122,6 +135,10 @@ class Lifetimes:
             self.frames[id(frame)] = (identity, name)
 
     def returned(self, frame, code, value, parent):
+        if text(code.co_name) != '__init__':
+            if self.releases is not None:
+                self.releases.returned(frame, code)
+            return
         with self.runtime.lock:
             entry = self.frames.pop(id(frame), None)
             if entry is None:
@@ -166,6 +183,8 @@ class Lifetimes:
                 row['live'] += 1
 
     def unwound(self, frame):
+        if self.releases is not None:
+            self.releases.unwound(frame)
         with self.runtime.lock:
             entry = self.frames.pop(id(frame), None)
             if entry is not None:
@@ -178,25 +197,37 @@ class Lifetimes:
             with self.runtime.lock:
                 if self.closed or self.runtime.closed:
                     return
-                item = self.instances.pop(token, None)
-                if item is None:
-                    self.reject('stale_completion')
+                if self.releases is not None:
+                    item = self.instances.pop(token, None)
+                    if item is not None:
+                        self.identities.pop(item.identity, None)
+                        self.censored += 1
+                        self.reject('unreleased_collection')
                     return
-                if self.identities.get(item.identity) == token:
-                    self.identities.pop(item.identity)
-                self.completed += 1
-                elapsed = max(0, time.perf_counter_ns() - item.started)
-                if item.metrics:
-                    row = self.types[item.name]
-                    row['completed'] += 1
-                    row['live'] -= 1
-                    try:
-                        self.duration.record(elapsed / 1e9, {'code.type.name': item.name, 'otelc.lifetime.boundary': 'collection'})
-                    except Exception:
-                        self.reject('invalid')
-                self.runtime.traces.finish_lifetime(item.span, elapsed)
+                self.complete(token)
         except Exception:
             self.reject('invalid')
+
+    def complete(self, token):
+        """Commit one observed collection or successful bound release."""
+        with self.runtime.lock:
+            item = self.instances.pop(token, None)
+            if item is None:
+                self.reject('stale_completion')
+                return
+            if self.identities.get(item.identity) == token:
+                self.identities.pop(item.identity)
+            self.completed += 1
+            elapsed = max(0, time.perf_counter_ns() - item.started)
+            if item.metrics:
+                row = self.types[item.name]
+                row['completed'] += 1
+                row['live'] -= 1
+                try:
+                    self.duration.record(elapsed / 1e9, {'code.type.name': item.name, 'otelc.lifetime.boundary': self.boundary})
+                except Exception:
+                    self.reject('invalid')
+            self.runtime.traces.finish_lifetime(item.span, elapsed)
 
     def shutdown(self):
         with self.runtime.lock:
@@ -210,10 +241,14 @@ class Lifetimes:
             self.identities.clear()
             self.frames.clear()
             self.initialising.clear()
+            if self.releases is not None:
+                self.releases.shutdown()
 
     def report(self):
         with self.runtime.lock:
             return {'admitted': self.admitted, 'completed': self.completed,
+                    'active_releases': len(self.releases.frames) if self.releases else 0,
+                    'failed_releases': self.releases.failed if self.releases else 0,
                     'current_live': self.censored + len(self.instances), 'censored': self.censored,
                     'tracked_instances': len(self.instances), 'active_constructors': len(self.frames),
                     'failed_initialisations': self.failed_initialisations,

@@ -38,6 +38,48 @@ fn python_collection_lifetimes_are_explicit_and_other_boundaries_stay_unavailabl
     }
 }
 #[test]
+fn resource_bindings_are_common_but_only_python_execution_is_qualified() {
+    let mut config = policy();
+    config.traces.enabled = true;
+    config.lifetimes.enabled = true;
+    config.lifetimes.boundary = "resource".into();
+    config.lifetimes.include = vec!["app.Item".into()];
+    config.lifetimes.resources = vec![common::ResourceBinding {
+        type_name: "app.Item".into(),
+        release: "close".into(),
+        completion: "normal_return".into(),
+    }];
+    config.validate().unwrap();
+    for language in &config.languages {
+        let resolved = config.resolve(*language).unwrap();
+        assert_eq!(resolved.lifetimes.resources[0].release, "close");
+        assert_eq!(resolved.execution_available, *language == Language::Python);
+    }
+    for field in 0..8 {
+        let mut invalid = config.clone();
+        match field {
+            0 => invalid.lifetimes.resources[0].type_name.clear(),
+            1 => invalid.lifetimes.resources[0].type_name = "app.*".into(),
+            2 => invalid.lifetimes.resources[0].release = "__init__".into(),
+            3 => invalid.lifetimes.resources[0].completion = "truthy".into(),
+            4 => invalid
+                .lifetimes
+                .resources
+                .push(invalid.lifetimes.resources[0].clone()),
+            5 => invalid.lifetimes.resources[0].release = "9close".into(),
+            6 => invalid.lifetimes.boundary = "collection".into(),
+            _ => invalid
+                .lifetimes
+                .resources
+                .resize(129, config.lifetimes.resources[0].clone()),
+        }
+        assert!(
+            invalid.validate().is_err(),
+            "accepted invalid resource binding {field}"
+        );
+    }
+}
+#[test]
 fn one_document_resolves_all_languages_with_shared_policy() {
     let config = policy();
     config.validate().unwrap();
