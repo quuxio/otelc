@@ -113,9 +113,15 @@ class Runtime:
         self.closed = False
         self.monitor = None
         self.traces = None
+        self.lifetimes = None
         self.shutdown_deadline = None
         self.report = None
         self.plan = plan
+        if plan.get('lifetimes', {}).get('enabled', False):
+            if (plan['lifetimes'].get('boundary') != 'collection' or not plan.get('traces', {}).get('enabled')
+                    or type(plan['runtime'].get('max_live_lifetimes')) is not int
+                    or not 1 <= plan['runtime']['max_live_lifetimes'] <= 65536):
+                raise ValueError('Python collection lifetimes require tracing and a valid live-instance limit')
         self.enabled = plan["metrics"]["enabled"]
         self.timeout_ms = min(plan["export"]["timeout_ms"], plan["runtime"]["shutdown_timeout_ms"])
         self.calls = {}
@@ -137,11 +143,14 @@ class Runtime:
             delegate = OTLPMetricExporter(endpoint=plan["metrics_endpoint"], headers=export_headers(), timeout=self.timeout_ms / 1000, session=Session())
         self.exporter = Exporter(self, delegate)
         self.reader = PeriodicExportingMetricReader(self.exporter, export_interval_millis=plan["export"]["interval_ms"], export_timeout_millis=self.timeout_ms + (self.traces.timeout_ms if self.traces else 0))
-        self.provider = MeterProvider(resource=resource, metric_readers=[self.reader], shutdown_on_exit=False, views=[View(instrument_name="otelc.function.duration", aggregation=ExplicitBucketHistogramAggregation(plan["metrics"]["histogram_boundaries_seconds"]))])
+        self.provider = MeterProvider(resource=resource, metric_readers=[self.reader], shutdown_on_exit=False, views=[View(instrument_name=name, aggregation=ExplicitBucketHistogramAggregation(plan["metrics"]["histogram_boundaries_seconds"])) for name in ('otelc.function.duration', 'otelc.lifetime.duration')])
         meter = self.provider.get_meter("quux.otelc", "0.1.0")
         self.counter = meter.create_counter("otelc.function.calls", unit="{call}")
         self.unwinds = meter.create_counter("otelc.function.unwinds", unit="{observation}")
         self.duration = meter.create_histogram("otelc.function.duration", unit="s")
+        if plan.get('lifetimes', {}).get('enabled', False):
+            from .lifetimes import Lifetimes
+            self.lifetimes = Lifetimes(self, meter)
         meter.create_observable_counter("otelc.runtime.dropped_observations", callbacks=[self.loss_points], unit="{observation}")
         meter.create_observable_counter("otelc.export.dropped_batches", callbacks=[lambda _: [Observation(self.export_loss)]], unit="{batch}")
         if self.traces is not None:
@@ -309,6 +318,8 @@ class Runtime:
             if path.exists() and path.lstat().st_ino == self.socket_identity:
                 path.unlink()
         with self.lock:
+            if self.lifetimes is not None:
+                self.lifetimes.shutdown()
             self.loss["incomplete"] += sum(frame.metrics or frame.trace is not None and frame.trace.sampled for frame in self.pending.values())
             self.pending.clear()
             if self.traces is not None:
@@ -317,6 +328,8 @@ class Runtime:
         report = {"schema_version": 1, "language": "python", "pid": os.getpid(), "export_finished": not self.reader._daemon_thread.is_alive(), "function_calls": sum(v["count"] for v in self.calls.values()), "functions": {name: {k: v for k, v in data.items() if k != "attributes"} for name, data in self.calls.items()}, "losses": self.loss, "export_loss": self.export_loss}
         if self.traces is not None:
             report["traces"] = self.traces.report()
+        if self.lifetimes is not None:
+            report['lifetimes'] = self.lifetimes.report()
         if path := os.environ.get("OTELC_REPORT_PATH"):
             Path(path).write_text(json.dumps(report, indent=2) + "\n")
         self.report = report
