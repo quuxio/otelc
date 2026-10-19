@@ -1,4 +1,5 @@
 //! Source-free Rust body guards and language-native SDK metrics.
+mod compiler_abi;
 mod control;
 pub mod policy;
 mod reader;

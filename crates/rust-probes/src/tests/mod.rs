@@ -1,3 +1,4 @@
+mod compiler_abi;
 mod spans;
 use super::*;
 use opentelemetry_proto::tonic::metrics::v1::{metric, number_data_point};

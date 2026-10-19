@@ -16,6 +16,36 @@ pub struct Function {
     pub line: usize,
     pub selected: bool,
     pub unsupported: Option<&'static str>,
+    #[serde(skip)]
+    pub(crate) compiler_site: CompilerSite,
+}
+#[derive(Debug, Serialize)]
+pub(crate) struct CompilerSite {
+    pub leaf: String,
+    pub header_start: usize,
+    pub header_end: usize,
+    pub body_start_line: usize,
+    pub body_start_column: usize,
+    pub body_end_line: usize,
+    pub body_end_column: usize,
+    pub startup: bool,
+    #[serde(skip)]
+    pub asynchronous: bool,
+}
+impl CompilerSite {
+    fn new(leaf: String, header: Span, body: Span, startup: bool, asynchronous: bool) -> Self {
+        Self {
+            leaf,
+            header_start: header.start().line,
+            header_end: body.start().line,
+            body_start_line: body.start().line,
+            body_start_column: body.start().column + 1,
+            body_end_line: body.end().line,
+            body_end_column: body.end().column + 1,
+            startup,
+            asynchronous,
+        }
+    }
 }
 struct Parser<'a> {
     source: &'a str,
@@ -148,6 +178,13 @@ impl Parser<'_> {
             line: position.line,
             selected,
             unsupported,
+            compiler_site: CompilerSite::new(
+                "<closure>".into(),
+                node.span(),
+                node.body.span(),
+                false,
+                node.asyncness.is_some(),
+            ),
         });
         if selected {
             if let Some(reason) = unsupported {
@@ -228,6 +265,13 @@ impl Parser<'_> {
             line: sig.fn_token.span.start().line,
             selected,
             unsupported,
+            compiler_site: CompilerSite::new(
+                sig.ident.to_string(),
+                span,
+                body.span(),
+                self.startup && root && sig.ident == "main",
+                sig.asyncness.is_some(),
+            ),
         });
         let mut code = String::new();
         if self.startup && root && sig.ident == "main" {
