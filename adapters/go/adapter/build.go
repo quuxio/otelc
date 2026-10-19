@@ -248,7 +248,7 @@ func Run(planPath string, args []string, sdkRoot string) (int, error) {
 	cmd.Env = append(os.Environ(), "OTELC_GO_PLAN="+planPath)
 	if err = cmd.Run(); err != nil {
 		if failure, ok := err.(*exec.ExitError); ok {
-			return failure.ExitCode(), nil
+			return childExit(failure)
 		}
 		return 1, err
 	}

@@ -38,6 +38,8 @@ Using LLVM somewhere in a compiler pipeline does not imply that it accepts our p
 
 A release lists exact tested compiler/runtime versions. "Clang supports the target" is insufficient evidence that otelc works there. Apple Clang and upstream Clang have separate capabilities even when their displayed major numbers look similar.
 
+On the qualified Unix host, managed Python, JavaScript, TypeScript, Java, Go and Rust launches preserve ordinary application exit codes and parent-observed signal termination. Launcher-owned temporary plans and generated workspaces are removed before a child signal is re-emitted. A runtime may handle a signal itself: for example, a JVM's ordinary SIGTERM exit code is preserved as that code. Fatal termination does not guarantee telemetry export, and matching core-dump files is outside this contract. Signal forwarding from a supervisor to a running launcher is a separate, unqualified capability.
+
 ## Initial callback boundaries
 
 | Scenario | M1 contract |

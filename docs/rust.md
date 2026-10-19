@@ -21,6 +21,27 @@ rustc --edition=2024 -O -g examples/apps/rust_app.rs -o /tmp/plain-rust-app
 
 Both applications print `72`. Rust's normal panic hook also prints the two caught panic diagnostics. Instrumentation records 15 calls: recursion, receiver methods, an escaping panic, an internally caught panic, parsed closures and thread work. Two escaping-unwind observations include the outer escaping function and the closure that panics inside the catching function. The escaping payload remains the original `String`; internally caught panics do not become escaping-unwind observations.
 
+## Build once and launch repeatedly
+
+For standalone sources, keep compiler diagnostics separate from application output:
+
+```sh
+mkdir -p build
+./target/debug/quux-otelc --config examples/rust.toml rust \
+  --build examples/apps/rust_app.rs --output-dir build/rust-example \
+  >build/rust-build.stdout 2>build/rust-build.stderr
+./target/debug/quux-otelc --config examples/rust.toml rust --run build/rust-example
+./target/debug/quux-otelc --config examples/rust.toml rust --run build/rust-example
+```
+
+Build-only compiles without executing the application and refuses an existing output directory. The private bundle contains `application`, the retained resolved `plan.json` and `build.json`. The manifest records SHA-256 fingerprints for the executable, policy, original entry source, SDK and adapter, plus the actual compiler program/argv/version and the baseline flags `--edition=2024 -O -g`. Use those same flags for the ordinary build when comparing runtime latency. Compiler warnings remain in the build's original channels.
+
+`--run DIRECTORY [APP_ARGS...]` verifies the executable/policy pair and exact matching adapter before launching. It invokes no compiler and needs neither original source nor an SDK rlib. It resolves the supplied common configuration again: runtime metrics, traces, export endpoints and resource settings can change, while build-time source/function selectors, backend and annotation settings must match. A changed build-time policy requires a new bundle. Application stdout/stderr and exit status belong to the application run; fatal termination still cannot guarantee export.
+
+The manifest is written last; incomplete, malformed or mismatched bundles are rejected. The bundle is tied to its qualified adapter binary, so retain that adapter for replay or rebuild after changing it. Build-only Cargo projects and general cross-host redistribution still require qualification; the existing combined Cargo route below is unchanged.
+
+## Cargo launch
+
 From an existing Cargo project, supply an absolute CLI and configuration path:
 
 ```sh

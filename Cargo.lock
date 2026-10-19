@@ -716,6 +716,7 @@ dependencies = [
  "opentelemetry-proto",
  "prost",
  "quux-otelc-config",
+ "quux-otelc-process",
  "quux-otelc-symbols",
  "serde_json",
  "shell-words",
@@ -748,6 +749,13 @@ dependencies = [
  "quux-otelc-config",
  "serde_json",
  "ureq",
+]
+
+[[package]]
+name = "quux-otelc-process"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -795,9 +803,11 @@ dependencies = [
  "proc-macro2",
  "quote",
  "quux-otelc-config",
+ "quux-otelc-process",
  "quux-otelc-rust",
  "serde",
  "serde_json",
+ "sha2",
  "syn 3.0.6",
  "tempfile",
 ]
