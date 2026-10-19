@@ -1,6 +1,6 @@
 # Python collection lifetime spans
 
-Use common configuration to measure selected ordinary Python instances from successful initialisation to observed collection. Application and dependency source stays unchanged. Collection is not a deterministic close/destructor boundary or a leak verdict. Resource close/dispose and arbitrary object lifetime spans remain separate work.
+Use common configuration to measure selected ordinary Python instances from successful initialisation to observed collection. Application and dependency source stays unchanged. Collection is not a deterministic close/destructor boundary or a leak verdict. Explicit synchronous close boundaries have their own [resource guide](python-resources.md); arbitrary object destruction remains separate work.
 
 ## Run the unchanged example
 
@@ -45,6 +45,8 @@ Admitted/completed/live counts and durations apply to instances admitted while m
 ## Qualified boundaries and trade-offs
 
 The qualified shape is CPython 3.12+ with an ordinary synchronous Python `__init__` with a positional receiver defined on the selected class, the standard `object.__new__`, standard `type` metaclass, weak-reference support and no `__del__` in its hierarchy. Own initialisers with `super()` and recursive delegation admit once; classes with `__slots__` can qualify when they already support weak references. Original signatures, layouts, results and exception identity remain application-owned.
+
+Metadata inspection uses builtin string operations and snapshots raw class namespaces without application key hashing/equality. Class qualified names and code names stored as `str` subclasses therefore remain selectable without invoking their overridden methods. Classes whose namespaces contain keys other than exact builtin strings are reported as `unsupported_metadata`: their custom key semantics cannot be resolved passively. The adapter does not replace application code objects or class dictionaries to achieve this.
 
 Inherited-only/C/decorated/async/generator initialisers and varargs-only receivers, classes without initialisers, custom `__new__`, metaclasses, finalisers/resurrection and dynamic changes to lifecycle methods are unqualified. Initialiser arguments must retain their original receiver binding. Manual initialisation calls on previously unobserved instances are unqualified; reinitialising an already tracked instance does not create another lifetime. Observed unsupported shapes produce loss diagnostics; completely unobserved constructors cannot supply instance counts. Inspection currently inventories functions rather than proving all class shapes.
 

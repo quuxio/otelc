@@ -6,12 +6,13 @@ import sys
 import tokenize
 from pathlib import Path
 
+from .metadata import text
 from .policy import Selection, source_name
 
 
 def function_identity(source: str, code) -> str:
-    display = source.removesuffix(".py").replace("/", ".") + "." + code.co_qualname
-    if code.co_name.startswith("<"):
+    display = source.removesuffix(".py").replace("/", ".") + "." + text(code.co_qualname)
+    if text(code.co_name).startswith("<"):
         column = next((position[2] for position in code.co_positions() if position[2]), 0)
         display += f"@{code.co_firstlineno}:{column + 1}"
     return display
@@ -59,12 +60,13 @@ class Monitor:
                     self.tags[str(path.resolve())] = annotations(path)
 
     def display_name(self, code) -> str | None:
-        name = source_name(code.co_filename, self.root)
-        if not name or not self.sources.accepts(name) or Path(code.co_filename).resolve().is_relative_to(self.protected):
+        filename = text(code.co_filename)
+        name = source_name(filename, self.root)
+        if not name or not self.sources.accepts(name) or Path(filename).resolve().is_relative_to(self.protected):
             return None
         if not code.co_flags & inspect.CO_NEWLOCALS:
             return None
-        tag = self.tags.get(str(Path(code.co_filename).resolve()), {}).get(code.co_firstlineno)
+        tag = self.tags.get(str(Path(filename).resolve()), {}).get(code.co_firstlineno)
         if tag == "otelc.exclude":
             return None
         display = function_identity(name, code)
@@ -124,10 +126,15 @@ class Monitor:
         return parent
 
     def lifetime_code(self, code):
-        if self.runtime is None or self.runtime.lifetimes is None or code.co_name != '__init__':
+        if self.runtime is None or self.runtime.lifetimes is None:
             return False
-        name = source_name(code.co_filename, self.root)
-        return bool(name and self.sources.accepts(name) and not Path(code.co_filename).resolve().is_relative_to(self.protected))
+        releases = self.runtime.lifetimes.releases
+        method = text(code.co_name)
+        if method != '__init__' and (releases is None or method not in releases.methods):
+            return False
+        filename = text(code.co_filename)
+        name = source_name(filename, self.root)
+        return bool(name and self.sources.accepts(name) and not Path(filename).resolve().is_relative_to(self.protected))
 
     def returned(self, code, _, value):
         if self.lifetime_code(code):
