@@ -27,9 +27,8 @@ export async function install(plan, root = process.cwd()) {
     if (typed && /\.(?:ts|mts|cts|tsx)$/.test(filename)) {
       const source = fs.readFileSync(filename, 'utf8');
       const selected = sources.accepts(name);
-      const prepared = typed.transpile(source, filename, name, selected ? plan : { ...plan, annotations: { ...plan.annotations, read_existing: false } }, root);
       const hinted = context.format?.replace('-typescript', '');
-      if (['module', 'commonjs'].includes(hinted)) prepared.format = hinted;
+      const prepared = typed.transpile(source, filename, name, selected ? plan : { ...plan, annotations: { ...plan.annotations, read_existing: false } }, root, hinted);
       const executionPlan = selected ? plan : { ...plan,
         function_matchers: { include: [], exclude: [] }, annotations: { ...plan.annotations, read_existing: false } };
       const output = transform(prepared.code, filename, name, executionPlan, runtime, prepared);
