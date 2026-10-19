@@ -23,18 +23,23 @@ export function compilerOptions(root = process.cwd()) {
   if (options.paths || options.baseUrl || options.jsx || options.emitDecoratorMetadata || options.outFile) throw new Error('TypeScript paths/baseUrl, JSX, decorator metadata and outFile are unsupported by the Node source adapter');
   if (options.target !== undefined && options.target < ts.ScriptTarget.ES2018) throw new Error('TypeScript target must be ES2018 or newer to preserve async and generator timing');
   if ([ts.ModuleKind.AMD, ts.ModuleKind.UMD, ts.ModuleKind.System, ts.ModuleKind.None].includes(options.module)) throw new Error('TypeScript module format is unsupported by the Node source adapter');
-  return { ...options, target: options.target ?? ts.ScriptTarget.ES2022, module: ts.ModuleKind.Preserve,
+  return { ...options, target: options.target ?? ts.ScriptTarget.ES2022, module: options.module ?? ts.ModuleKind.Preserve,
     sourceMap: true, inlineSourceMap: false, inlineSources: true, removeComments: false,
     declaration: false, declarationMap: false, emitDeclarationOnly: false, noEmit: false,
     // Modules execute at original URLs; rewritten output extensions have no file.
     allowImportingTsExtensions: false, rewriteRelativeImportExtensions: false, verbatimModuleSyntax: true, isolatedModules: true };
 }
-export function transpile(source, filename, sourceName, plan, root = process.cwd()) {
+export function transpile(source, filename, sourceName, plan, root = process.cwd(), hintedFormat) {
   if (/\.d\.(?:ts|mts|cts)$/.test(filename) || /\.tsx$/.test(filename)) throw new Error('TypeScript declarations and JSX are not executable adapter inputs');
   if (source.includes(IDENTITY)) throw new Error('TypeScript source is already prepared for instrumentation');
   const options = compilerOptions(root);
-  if (/\.cts$/.test(filename)) options.module = ts.ModuleKind.CommonJS;
-  if (plan.backend === 'native') return nativeEmit(source, filename, sourceName, plan, options, undefined, root);
+  const format = /\.cts$/.test(filename) ? 'commonjs' : /\.mts$/.test(filename) ? 'module'
+    : ['module', 'commonjs'].includes(hintedFormat) ? hintedFormat
+    : options.module === ts.ModuleKind.CommonJS ? 'commonjs' : undefined;
+  // Emit the format Node will execute, before parsing or inserting probes.
+  options.module = format === 'commonjs' ? ts.ModuleKind.CommonJS : ts.ModuleKind.Preserve;
+  options.verbatimModuleSyntax = format !== 'commonjs';
+  if (plan.backend === 'native') return { ...nativeEmit(source, filename, sourceName, plan, options, undefined, root), format };
   const transformer = context => file => {
     const prefix = sourceName.replace(/\.(?:ts|mts|cts)$/, '').replaceAll('/', '.');
     function visit(node, parents = [], names = []) {
@@ -58,5 +63,5 @@ export function transpile(source, filename, sourceName, plan, root = process.cwd
   error(result.diagnostics ?? []);
   const map = JSON.parse(result.sourceMapText);
   map.sources = [filename];
-  return { code: result.outputText.replace(/\n\/\/# sourceMappingURL=.*(?:\n|$)/, '\n'), map, format: /\.cts$/.test(filename) ? 'commonjs' : /\.mts$/.test(filename) ? 'module' : undefined };
+  return { code: result.outputText.replace(/\n\/\/# sourceMappingURL=.*(?:\n|$)/, '\n'), map, format };
 }
