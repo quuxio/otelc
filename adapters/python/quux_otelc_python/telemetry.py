@@ -15,6 +15,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult, PeriodicExportingMetricReader
 from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceResponse
 
@@ -42,6 +43,32 @@ class Session(requests.Session):
             response._content = b""
             response.reason = "OTLP acknowledgement" if response.status_code == 200 else "OTLP export rejected"
         return response
+
+
+
+class MetricsSession(Session):
+    """Send resolved metric headers without the SDK's generic-header fallback."""
+
+    def __init__(self, headers: dict[str, str]):
+        super().__init__()
+        self.signal_headers = dict(headers)
+        value = (os.environ.get("OTEL_EXPORTER_OTLP_METRICS_COMPRESSION")
+                 or os.environ.get("OTEL_EXPORTER_OTLP_COMPRESSION") or "none")
+        try:
+            self.compression = Compression(value.strip().lower())
+        except ValueError:
+            raise ValueError("unsupported OTLP metrics compression") from None
+
+    def request(self, *args, **kwargs):
+        self.headers.clear()
+        headers = {"Content-Type": "application/x-protobuf"}
+        if self.compression != Compression.NoCompression:
+            headers["Content-Encoding"] = self.compression.value
+        kwargs["headers"] = {**headers, **self.signal_headers}
+        try:
+            return super().request(*args, **kwargs)
+        except (requests.RequestException, UnicodeError, ValueError):
+            raise requests.RequestException("OTLP metrics request failed") from None
 
 
 def export_headers(signal="OTEL_EXPORTER_OTLP_METRICS_HEADERS") -> dict[str, str]:
@@ -140,7 +167,9 @@ class Runtime:
             from .traces import TraceStore
             self.traces = TraceStore(self, resource, trace_delegate)
         if delegate is None:
-            delegate = OTLPMetricExporter(endpoint=plan["metrics_endpoint"], headers=export_headers(), timeout=self.timeout_ms / 1000, session=Session())
+            session = MetricsSession(export_headers())
+            delegate = OTLPMetricExporter(endpoint=plan["metrics_endpoint"], headers=session.signal_headers,
+                                          compression=session.compression, timeout=self.timeout_ms / 1000, session=session)
         self.exporter = Exporter(self, delegate)
         self.reader = PeriodicExportingMetricReader(self.exporter, export_interval_millis=plan["export"]["interval_ms"], export_timeout_millis=self.timeout_ms + (self.traces.timeout_ms if self.traces else 0))
         self.provider = MeterProvider(resource=resource, metric_readers=[self.reader], shutdown_on_exit=False, views=[View(instrument_name=name, aggregation=ExplicitBucketHistogramAggregation(plan["metrics"]["histogram_boundaries_seconds"])) for name in ('otelc.function.duration', 'otelc.lifetime.duration')])

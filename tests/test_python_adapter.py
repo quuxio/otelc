@@ -273,6 +273,7 @@ class PythonAdapterTests(unittest.TestCase):
         self.assertEqual(runtime.loss["function_capacity"], 1)
 
     def test_launcher_script_module_doctor_and_invalid_requests(self):
+        self.addCleanup(sys.modules.__setitem__, "__main__", sys.modules["__main__"])
         if not hasattr(sys, "monitoring"):
             self.skipTest("requires Python 3.12+")
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
