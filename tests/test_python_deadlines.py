@@ -13,7 +13,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import requests
-from test_python_adapter import plan
+from test_python_adapter import Capture, plan
+from test_python_spans import trace_plan
 from quux_otelc_python.telemetry import Runtime, Session
 from quux_otelc_python.traces import TraceSession
 from quux_otelc_python.deadlines import Adapter, Deadline, workers
@@ -77,6 +78,39 @@ def trickle_receiver(mode: str, tls: ssl.SSLContext | None = None, statuses: lis
 
 
 class PythonDeadlineTests(unittest.TestCase):
+    def test_sdk_wall_clock_jumps_cannot_extend_or_cancel_the_monotonic_budget(self):
+        for signal in ("metrics", "traces"):
+            for jump in (-60, 60):
+                for mode in ("fast", "body"):
+                    with self.subTest(signal=signal, jump=jump, mode=mode), trickle_receiver(mode) as (endpoint, received):
+                        policy = plan() if signal == "metrics" else trace_plan()
+                        policy["export"]["timeout_ms"] = 40
+                        policy["runtime"]["shutdown_timeout_ms"] = 1000
+                        policy["metrics_endpoint"] = endpoint + "/v1/metrics"
+                        if signal == "traces":
+                            policy["trace_export"].update(endpoint=endpoint + "/v1/traces", timeout_ms=40)
+                        runtime = Runtime(policy) if signal == "metrics" else Runtime(policy, Capture())
+                        self.addCleanup(runtime.close)
+                        runtime.enter(1, "selected"); runtime.exit(1, False)
+                        calls = 0
+
+                        def jumped_time():
+                            nonlocal calls
+                            calls += 1
+                            return 100 if calls == 1 else 100 + jump
+
+                        clock = SimpleNamespace(time=jumped_time, monotonic=time.monotonic)
+                        started = time.monotonic()
+                        with patch("opentelemetry.exporter.otlp.common.http.time", clock):
+                            runtime.reader.collect()
+                        self.assertLess(time.monotonic() - started, 0.3)
+                        self.assertEqual(len(received), 1, "a clock correction must not cancel the valid transport budget before sending")
+                        if mode == "fast":
+                            self.assertEqual(runtime.export_loss, 0)
+                        else:
+                            self.assertGreater(runtime.export_loss, 0)
+                        runtime.close()
+
     def test_valid_acknowledgement_completed_after_deadline_is_not_accepted(self):
         def delayed_decode(body: bytes):
             time.sleep(0.06)
@@ -217,7 +251,7 @@ class PythonDeadlineTests(unittest.TestCase):
             for mode in ("body", "headers", "no_eof"):
                 with self.subTest(signal=signal, mode=mode), trickle_receiver(mode) as (endpoint, _):
                     deadline = time.monotonic() + 0.04
-                    store = SimpleNamespace(headers={}, deadline=deadline,
+                    store = SimpleNamespace(headers={}, deadline=deadline, timeout_ms=40,
                                             runtime=SimpleNamespace(shutdown_deadline=None))
                     session = Session() if signal == "metrics" else TraceSession(store)
                     self.addCleanup(session.close)

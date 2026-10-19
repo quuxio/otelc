@@ -131,6 +131,10 @@ class MetricsSession(Session):
             raise ValueError("unsupported OTLP metrics compression") from None
 
     def total_deadline(self, timeout: float) -> float:
+        # The SDK's timeout argument is derived from wall time. Own the entire
+        # configured budget here so clock corrections cannot extend or erase it.
+        if self.runtime is not None:
+            timeout = self.runtime.timeout_ms / 1000
         deadline = super().total_deadline(timeout)
         if self.runtime is not None and self.runtime.shutdown_deadline is not None:
             deadline = min(deadline, self.runtime.shutdown_deadline)
