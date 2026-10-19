@@ -2,6 +2,8 @@
 import re
 from pathlib import Path
 
+from .metadata import text
+
 
 class Selection:
     def __init__(self, matchers: dict):
@@ -17,7 +19,7 @@ class Selection:
 
 def source_name(filename: str, root: Path) -> str | None:
     try:
-        path = Path(filename).resolve().relative_to(root)
+        path = Path(text(filename)).resolve().relative_to(root)
     except (ValueError, OSError):
         return None
     if any(part in (".venv", "node_modules", "__pycache__", "site-packages") for part in path.parts):
