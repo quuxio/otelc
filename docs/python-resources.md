@@ -14,7 +14,7 @@ OTELC_REPORT_PATH=build/python-resource-report.json \
   ./target/debug/quux-otelc --config examples/python-resource.toml python examples/apps/python_resource_app.py
 ```
 
-Both ordinary and instrumented runs print `resources=2; value=7; failed_close=1; layouts=true`. The source has an ordinary `Resource.__init__`, a `close(fail=False)` method and a factory returning two resources. A failed close raises its original exception; a subsequent normal close completes that resource. Repeated close remains application-owned and creates no second lifetime span. The example verifies the original instance fields before and after release.
+Both ordinary and instrumented runs print `resources=2; value=7; failed_close=1; layouts=true; retained=0`. The source has an ordinary `Resource.__init__`, a `close(fail=False)` method and a factory returning two resources. A failed close raises its original exception; a subsequent normal close completes that resource. Repeated close remains application-owned and creates no second lifetime span. The example verifies the original instance fields before and after release. It also uses its own weak references and collection requests: a strong-reference control must remain alive, and both closed resources must collect after application owners are cleared while the observer is still running. The instrumentation never requests collection.
 
 The common policy adds explicit bindings alongside independent lifetime selection:
 
@@ -44,7 +44,7 @@ Collection without an observed release censors the resource, records `unreleased
 
 ## Qualified scope
 
-The constructor restrictions and weak-reference/introspection trade-offs in the [collection guide](python-collection.md#qualified-boundaries-and-trade-offs) also apply. Release must be an ordinary synchronous Python method defined on the selected class with a positional receiver. Async/generator methods, descriptors, static/class methods, inherited-only/C release methods and dynamic lifecycle replacement are unqualified. Constructor/destructor names cannot be configured as release methods. Unsupported observed shapes produce diagnostics without changing the application method.
+The constructor restrictions and weak-reference/introspection trade-offs in the [collection guide](python-collection.md#qualified-boundaries-and-trade-offs) also apply. Release must be an ordinary synchronous Python method defined on the selected class with a positional receiver. The receiver binding must remain unchanged through return; rebinding produces `receiver_changed` and leaves the observation incomplete. Async/generator methods, descriptors, static/class methods, inherited-only/C release methods and dynamic lifecycle replacement are unqualified. Constructor/destructor names cannot be configured as release methods. Unsupported observed shapes produce diagnostics without changing the application method.
 
 Object destruction, arbitrary allocation/acquisition APIs, external/process-transferred ownership and automatic context-manager interpretation remain separate work. Existing `__exit__` can be bound explicitly when its normal return meets this contract; the observer does not infer exception suppression or close status. Other languages carry these common bindings but still reject unsupported lifetime execution. Metrics admission remains fixed at initialisation across live enable/disable; standalone span sampling does not change aggregate resource counts.
 

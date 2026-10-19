@@ -155,6 +155,24 @@ class PythonResourceTests(PythonSpanHarness, unittest.TestCase):
         self.assertEqual(report['lifetimes']['completed'], 1)
         self.assertFalse(report['lifetimes']['losses'])
 
+    def test_closed_instances_collect_while_the_observer_remains_active(self):
+        runtime, _, _, app, monitor = self.monitored(SOURCE, resource_plan())
+        value = app['Resource']()
+        reference = weakref.ref(value)
+        value.close()
+        control = [value]
+        del value
+        gc.collect()
+        self.assertIs(reference(), control[0], 'the retention control must stay alive')
+        control.clear()
+        gc.collect()
+        self.assertIsNone(reference(), 'the running observer must not retain a closed instance')
+        self.assertFalse(runtime.closed)
+        report = self.finish(runtime, monitor)
+        self.assertEqual(report['lifetimes']['completed'], 1)
+        self.assertEqual(report['lifetimes']['censored'], 0)
+        self.assertFalse(report['lifetimes']['losses'])
+
     def test_collection_without_release_is_censored_without_completed_span(self):
         runtime, _, capture, app, monitor = self.monitored(SOURCE, resource_plan())
         value = app['Resource']()
@@ -205,8 +223,9 @@ class Resource:
         variants = [
             '    async def close(self): pass',
             '    def close(self): yield 1',
-            '    close = property(lambda self: lambda: None)',
+            '    @property\n    def close(self): raise AssertionError("observer evaluated descriptor")',
             '    @staticmethod\n    def close(): pass',
+            '    @classmethod\n    def close(cls): pass',
             '    close = len',
             '    def different(self): pass',
         ]
