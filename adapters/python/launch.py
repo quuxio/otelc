@@ -2,6 +2,10 @@
 import atexit
 import json
 import inspect
+import os
+from importlib.machinery import SourceFileLoader, SourcelessFileLoader
+from pkgutil import get_importer
+from types import ModuleType
 import runpy
 import sys
 from pathlib import Path
@@ -17,6 +21,28 @@ def close_application(monitor: Monitor | None, runtime: Runtime) -> None:
             monitor.close()
     finally:
         runtime.close()
+
+
+def run_script(argument: str) -> None:
+    """Use ordinary script metadata while retaining the caller's argv spelling."""
+    filename = argument if os.path.isabs(argument) else os.path.join(os.getcwd(), argument)
+    # Keep the existing directory/zip entry-point support.
+    if get_importer(filename) is not None:
+        runpy.run_path(argument, run_name="__main__")
+        return
+    bytecode = filename.endswith(".pyc")
+    loader = (SourcelessFileLoader if bytecode else SourceFileLoader)("__main__", filename)
+    code = loader.get_code("__main__") if bytecode else compile(
+        Path(filename).read_bytes(), filename, "exec", dont_inherit=True)
+    module = ModuleType("__main__")
+    module.__dict__.update(__file__=filename, __cached__=None,
+                           __package__=None, __spec__=None, __loader__=loader)
+    previous = sys.modules["__main__"]
+    sys.modules["__main__"] = module
+    try:
+        exec(code, module.__dict__)
+    finally:
+        sys.modules["__main__"] = previous
 
 
 def main(args: list[str]) -> int:
@@ -73,7 +99,7 @@ def main(args: list[str]) -> int:
         else:
             sys.argv = args[1:]
             sys.path[0] = str(Path(args[1]).resolve().parent)
-            runpy.run_path(args[1], run_name="__main__")
+            run_script(args[1])
     finally:
         if not deferred:
             close_application(monitor, runtime)
