@@ -2,7 +2,7 @@
 
 ## What you can run today
 
-This guide uses the locally tested macOS ARM64 C/C++ LLVM backend. It instruments application functions without editing original files, reads optional existing Clang function annotations, preserves C++ exceptions and can turn metrics admission on/off in a running process. Rust, TypeScript/JavaScript, Java, Python and Go have implemented function-metrics adapters using the same configuration contract. Their language-specific build, source and annotation examples are in the [language guides](languages.md). Sampled function spans are documented in the language span guides; automatic object lifetimes remain TODO.
+This guide uses the locally tested macOS ARM64 C/C++ LLVM backend. It instruments application functions without editing original files, reads optional existing Clang function annotations, preserves C++ exceptions and can turn metrics admission on/off in a running process. Rust, TypeScript/JavaScript, Java, Python and Go have implemented function-metrics adapters using the same configuration contract. Their language-specific build, source and annotation examples are in the [language guides](languages.md). Sampled function spans are documented in the language span guides; [ordinary Python collection spans](python-collection.md) are available; automatic destruction/resource boundaries remain TODO.
 
 The compiler wrapper adds probes in LLVM IR and links the native runtime. The runtime aggregates completed function counts and inclusive duration histograms, then sends OTLP/HTTP protobuf to the Collector. Prometheus stores the scraped data; Grafana displays it. Application arguments and return values are not exported.
 
