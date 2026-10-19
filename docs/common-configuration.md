@@ -33,7 +33,7 @@ Resolved matcher expressions operate on UTF-8 bytes and use dot-all matching, as
 
 Exclusions always win. Empty includes supply no configuration opt-ins; supported annotation opt-ins can still select functions when reading is enabled. Instrumentation code and SDK/runtime dependencies must remain protected from self-instrumentation. Existing annotation interpretation is optional and requires an adapter that implements it; exclusions cannot be overridden by annotation metadata. Generated annotations must not modify original files.
 
-`lifetimes.boundary` is `object`, `resource` or `collection`. `object` requires language-defined initialisation/destruction or drop boundaries, `resource` requires observable existing close/dispose operations, and `collection` requests allocation-to-collection measurement where supported. These are distinct intervals. An adapter must report an unsupported boundary; it must not manufacture a destructor or silently require manual application probes.
+`lifetimes.boundary` is `object`, `resource` or `collection`. `object` requires language-defined initialisation/destruction or drop boundaries, `resource` requires observable existing close/dispose operations, and `collection` requests allocation-to-collection measurement where supported. Python supports successful ordinary own-initializer construction to observed collection with tracing enabled; see [Python collection lifetimes](python-collection.md). Other automatic boundaries remain unavailable. These are distinct intervals. An adapter must report an unsupported boundary; it must not manufacture a destructor or silently require manual application probes.
 
 ## Resolve and validate
 
