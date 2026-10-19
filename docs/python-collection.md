@@ -1,6 +1,6 @@
 # Python collection lifetime spans
 
-Use common configuration to measure selected ordinary Python instances from successful initialisation to observed collection. Application and dependency source stays unchanged. Collection is not a deterministic close/destructor boundary or a leak verdict. Resource close/dispose and arbitrary object lifetime spans remain separate work.
+Use common configuration to measure selected ordinary Python instances from successful initialisation to observed collection. Application and dependency source stays unchanged. Collection is not a deterministic close/destructor boundary or a leak verdict. Explicit synchronous close boundaries have their own [resource guide](python-resources.md); arbitrary object destruction remains separate work.
 
 ## Run the unchanged example
 

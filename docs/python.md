@@ -18,7 +18,7 @@ The CLI uses the checkout's `.venv/bin/python` when present, otherwise `python3`
 
 The unchanged example produces `151`. It exercises selected functions, recursive calls, ordinary threads, exceptions caught in a caller, generators, async suspension and cancellation. The annotated example produces `30`; only `selected` and externally configured `configured` are measured.
 
-See [collection lifetime spans](python-collection.md) for independent external type selection, collection metrics, creation links and qualified class shapes.
+See [collection lifetime spans](python-collection.md) and [resource lifetime spans](python-resources.md) for independent external type selection, metrics, creation links and qualified class/release shapes.
 
 ## Common selection and optional metadata
 
@@ -76,7 +76,7 @@ See the [Collector/Grafana guide](observability-stack.md). Select service `otelc
 
 ## Boundaries
 
-This is a function-metrics adapter for CPython 3.12+ on the tested macOS/Linux CI lanes. C-extension internals, PyPy, subprocess/fork propagation, distributed spans, annotation injection and automatic destruction/resource lifetimes are unavailable; ordinary-class collection spans are qualified separately in the [collection guide](python-collection.md) and requested unsupported capabilities fail configuration resolution. Generator/coroutine timing begins at first execution, not object allocation. Fatal process termination cannot guarantee export. Source/class behaviour is preserved; full debugger/profiler combinations still require qualification, and otelc claims a free monitoring ID rather than replacing another tool.
+This is a function-metrics adapter for CPython 3.12+ on the tested macOS/Linux CI lanes. C-extension internals, PyPy, subprocess/fork propagation, distributed spans, annotation injection and automatic destruction lifetimes are unavailable; ordinary-class collection and explicitly bound resource spans are qualified separately in the [collection guide](python-collection.md) and [resource guide](python-resources.md) and requested unsupported capabilities fail configuration resolution. Generator/coroutine timing begins at first execution, not object allocation. Fatal process termination cannot guarantee export. Source/class behaviour is preserved; full debugger/profiler combinations still require qualification, and otelc claims a free monitoring ID rather than replacing another tool.
 
 Function spans can be enabled through the same external policy; see the [Python span guide](python-spans.md) for unchanged source, coroutine/generator parenting, loss and viewing commands.
 

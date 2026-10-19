@@ -118,10 +118,12 @@ class Runtime:
         self.report = None
         self.plan = plan
         if plan.get('lifetimes', {}).get('enabled', False):
-            if (plan['lifetimes'].get('boundary') != 'collection' or not plan.get('traces', {}).get('enabled')
+            if (plan['lifetimes'].get('boundary') not in ('collection', 'resource') or not plan.get('traces', {}).get('enabled')
                     or type(plan['runtime'].get('max_live_lifetimes')) is not int
                     or not 1 <= plan['runtime']['max_live_lifetimes'] <= 65536):
-                raise ValueError('Python collection lifetimes require tracing and a valid live-instance limit')
+                raise ValueError('Python lifetimes require tracing, a supported boundary and a valid live-instance limit')
+            from .resources import bindings
+            bindings(plan['lifetimes'])
         self.enabled = plan["metrics"]["enabled"]
         self.timeout_ms = min(plan["export"]["timeout_ms"], plan["runtime"]["shutdown_timeout_ms"])
         self.calls = {}

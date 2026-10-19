@@ -122,7 +122,7 @@ class TraceStore:
     def begin_lifetime(self, name, token, creation, wall):
         links = [Link(creation.context)] if creation is not None and creation.sampled else []
         return self.tracer.start_span(name + ' lifetime', context=Context(), links=links, start_time=wall,
-                                      attributes={'code.type.name': name, 'otelc.lifetime.boundary': 'collection',
+                                      attributes={'code.type.name': name, 'otelc.lifetime.boundary': self.runtime.plan['lifetimes']['boundary'],
                                                   'otelc.lifetime.instance': str(token)})
 
     def finish_lifetime(self, span, elapsed):
