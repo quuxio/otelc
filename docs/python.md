@@ -80,6 +80,8 @@ This is a function-metrics adapter for CPython 3.12+ on the tested macOS/Linux C
 
 Function spans can be enabled through the same external policy; see the [Python span guide](python-spans.md) for unchanged source, coroutine/generator parenting, loss and viewing commands.
 
+Python metrics and trace headers use independent signal-specific overrides. An explicitly empty metrics header variable suppresses generic OTLP headers at the actual HTTP boundary. Metrics retain the SDK's `none`, `gzip` and `deflate` compression options; unsupported compression values fail before launch without echoing their contents.
+
 Script launches preserve CPython's absolute `__file__` spelling, including a supplied `./` component, and the original `sys.argv[0]`. They supply the ordinary script loader metadata, so resource lookup relative to the script continues to work after `chdir`. Source and precompiled-bytecode script controls cover relative, absolute and space-containing paths without rewriting inputs. Module (`-m`) metadata and the existing directory/zip entry-point path are retained.
 
 The application retains its own `__main__` module through exit callbacks. Script, bytecode, module, package, directory and zip launches use normal code loaders and metadata, with application globals/classes and module identity retained. Its initial annotation namespace follows the interpreter, including lazy module annotations in Python 3.14. Cleanup code can import `__main__` and pickle its classes; launcher globals are not injected into the application namespace. Loaders without executable code fail explicitly before target execution.
