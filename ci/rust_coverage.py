@@ -103,7 +103,7 @@ def write_reports(environment):
         raise ValueError("Rust/native line coverage is below 80%")
     enforce_rust_adapter_coverage(report)
     enforce_node_observer_coverage(report)
-    enforce_rust_trace_coverage(report)
+    enforce_rust_file_coverage(report)
 
 
 def enforce_rust_adapter_coverage(report):
@@ -137,11 +137,12 @@ def enforce_node_observer_coverage(report):
         raise ValueError("Node native observer line coverage is below 80%")
 
 
-def enforce_rust_trace_coverage(report):
-    """Require independent floors for Rust contexts and the shared span store."""
+def enforce_rust_file_coverage(report):
+    """Require independent floors for trace stores and build artefact validation."""
     for path, label in (("/crates/rust-probes/src/traces.rs", "Rust trace context"),
                         ("/crates/export/src/traces.rs", "Shared trace store"),
-                        ("/crates/runtime/src/traces.rs", "Native trace bridge")):
+                        ("/crates/runtime/src/traces.rs", "Native trace bridge"),
+                        ("/crates/rust-adapter/src/artifact.rs", "Rust build artifacts")):
         selected = []
         include = False
         for line in report.splitlines():
