@@ -9,6 +9,8 @@ import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.ReadableSpan;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.SpanLimits;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -76,6 +78,9 @@ final class TraceStore implements AutoCloseable {
           || !("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()) && loopback)) throw new IllegalArgumentException();
     } catch (RuntimeException ignored) { throw new IllegalArgumentException("invalid resolved Java trace settings"); }
     provider = SdkTracerProvider.builder().setResource(resource).setSampler(Sampler.parentBased(Sampler.traceIdRatioBased(ratio)))
+      // SDK 1.67 needs a consumer to record spans. Our bounded whole-tree store
+      // owns transport; this synchronous SDK consumer has no queue or network I/O.
+      .addSpanProcessor(SimpleSpanProcessor.create(SpanExporter.noop()))
       .setSpanLimits(SpanLimits.builder().setMaxNumberOfAttributes(1).setMaxNumberOfEvents(0).setMaxNumberOfLinks(0).setMaxAttributeValueLength(1024).build()).build();
     tracer = provider.tracerBuilder("quux.otelc").setInstrumentationVersion("0.1.0").build();
     exporter = new TraceExporter(this);
