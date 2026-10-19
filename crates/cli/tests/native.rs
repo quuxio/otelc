@@ -2833,6 +2833,10 @@ fn native_selection_matches_equivalent_source_paths_in_both_schemas() {
     let root = setup("");
     let original = std::fs::read(root.path().join("main.c")).unwrap();
     let absolute = root.path().join("main.c").canonicalize().unwrap();
+    std::os::unix::fs::symlink("main.c", root.path().join("alias.c")).unwrap();
+    let directory_alias = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(root.path(), directory_alias.path().join("project")).unwrap();
+    let aliased_absolute = directory_alias.path().join("project/main.c");
     for schema in [1, 2] {
         for excluded in [false, true] {
             let selection = if schema == 1 {
@@ -2843,7 +2847,13 @@ fn native_selection_matches_equivalent_source_paths_in_both_schemas() {
             let exclusion = if excluded { "\nexclude=['main.c']" } else { "" };
             let config = format!("schema_version={schema}\n{selection}{exclusion}\n[functions]\ninclude=['selected_*']\n");
             std::fs::write(root.path().join("otelc.toml"), config).unwrap();
-            for source in ["main.c", "./main.c", absolute.to_str().unwrap()] {
+            for source in [
+                "main.c",
+                "./main.c",
+                absolute.to_str().unwrap(),
+                "alias.c",
+                aliased_absolute.to_str().unwrap(),
+            ] {
                 success(cli(
                     &["clang", "-O1", "-g", source, "-o", "app"],
                     root.path(),
