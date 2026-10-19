@@ -1,11 +1,14 @@
 """Bounded application identities, SDK metrics and owner-only live admission control."""
 import json
+import math
 import os
+import random
 import socket
 import stat
 import threading
 import time
 import urllib.parse
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from dataclasses import dataclass
 import requests
@@ -18,18 +21,85 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceResponse
+from .deadlines import Adapter, CURRENT, Deadline, workers
 
 
 class Session(requests.Session):
     """Reject invalid/partial OTLP success and keep response bodies out of SDK logs."""
     ack_type = ExportMetricsServiceResponse
     rejected_field = "rejected_data_points"
+
+    def __init__(self):
+        super().__init__()
+        workers()
+        self.mount("http://", Adapter())
+        self.mount("https://", Adapter())
+
+    def total_deadline(self, timeout: float) -> float:
+        """Use one elapsed budget for all attempts, not a fresh socket idle wait."""
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise requests.Timeout("invalid OTLP deadline")
+        return time.monotonic() + timeout
+
     def request(self, *args, **kwargs):
         kwargs.update(allow_redirects=False, stream=True)
-        response = super().request(*args, **kwargs)
+        timeout = kwargs.get("timeout")
+        state = Deadline(self.total_deadline(float(10 if timeout is None else timeout)))
+        supervisor, _ = workers()
+        supervisor.add(state)
+        token = CURRENT.set(state)
+        try:
+            for attempt in range(6):
+                kwargs["timeout"] = state.remaining()
+                try:
+                    response = super().request(*args, **kwargs)
+                except requests.RequestException:
+                    if attempt == 5:
+                        raise requests.RequestException("OTLP request failed") from None
+                    # One immediate stale-connection retry, then bounded backoff.
+                    if attempt:
+                        self.retry_delay(state, 2 ** (attempt - 1) * random.uniform(0.8, 1.2))
+                    continue
+                if response.status_code in (429, 502, 503, 504):
+                    response.close()
+                    if attempt < 5:
+                        delay = self.retry_after(response.headers.get("Retry-After"), 2 ** attempt * random.uniform(0.8, 1.2))
+                        if math.isfinite(delay) and 0 <= delay < state.remaining():
+                            time.sleep(delay)
+                            continue
+                    # The SDK must not start another wall-clock-based retry loop.
+                    response.status_code = 422
+                return self.acknowledge(response, state)
+            raise requests.RequestException("OTLP request failed")
+        finally:
+            state.finish()
+            supervisor.remove(state)
+            CURRENT.reset(token)
+
+    @staticmethod
+    def retry_delay(state: Deadline, delay: float) -> None:
+        """Retry connection failures only while the original budget permits it."""
+        if delay >= state.remaining():
+            raise requests.Timeout("OTLP retry deadline elapsed")
+        time.sleep(delay)
+
+    @staticmethod
+    def retry_after(value: str | None, fallback: float) -> float:
+        """Interpret Retry-After without letting a wall-clock date extend the budget."""
+        if value is None:
+            return fallback
+        try:
+            value = value.strip()
+            return float(value) if value.isdecimal() else max(0, parsedate_to_datetime(value).timestamp() - time.time())
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+
+    def acknowledge(self, response: requests.Response, state: Deadline) -> requests.Response:
+        """Validate a bounded acknowledgement and redact its content on every path."""
         try:
             if response.status_code == 200:
                 body = response.raw.read(65537, decode_content=True)
+                state.remaining()
                 result = self.ack_type.FromString(body)
                 if len(body) > 65536 or getattr(result.partial_success, self.rejected_field):
                     raise ValueError("invalid or partially rejected OTLP batch")
@@ -37,7 +107,6 @@ class Session(requests.Session):
                 raise ValueError("OTLP requires HTTP 200 acknowledgement")
         except Exception:
             response.status_code = 422
-            response.reason = "invalid or partially rejected OTLP batch"
         finally:
             response.close()
             response._content = b""
@@ -49,8 +118,9 @@ class Session(requests.Session):
 class MetricsSession(Session):
     """Send resolved metric headers without the SDK's generic-header fallback."""
 
-    def __init__(self, headers: dict[str, str]):
+    def __init__(self, headers: dict[str, str], runtime=None):
         super().__init__()
+        self.runtime = runtime
         self.signal_headers = dict(headers)
         value = (os.environ.get("OTEL_EXPORTER_OTLP_METRICS_COMPRESSION")
                  or os.environ.get("OTEL_EXPORTER_OTLP_COMPRESSION") or "none")
@@ -58,6 +128,12 @@ class MetricsSession(Session):
             self.compression = Compression(value.strip().lower())
         except ValueError:
             raise ValueError("unsupported OTLP metrics compression") from None
+
+    def total_deadline(self, timeout: float) -> float:
+        deadline = super().total_deadline(timeout)
+        if self.runtime is not None and self.runtime.shutdown_deadline is not None:
+            deadline = min(deadline, self.runtime.shutdown_deadline)
+        return deadline
 
     def request(self, *args, **kwargs):
         self.headers.clear()
@@ -167,7 +243,7 @@ class Runtime:
             from .traces import TraceStore
             self.traces = TraceStore(self, resource, trace_delegate)
         if delegate is None:
-            session = MetricsSession(export_headers())
+            session = MetricsSession(export_headers(), self)
             delegate = OTLPMetricExporter(endpoint=plan["metrics_endpoint"], headers=session.signal_headers,
                                           compression=session.compression, timeout=self.timeout_ms / 1000, session=session)
         self.exporter = Exporter(self, delegate)
