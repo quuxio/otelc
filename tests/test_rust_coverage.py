@@ -54,13 +54,25 @@ class CoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
             (target / "debug/deps").mkdir(parents=True)
+            sdk_map = target / "debug/deps/rust-sdk-test"
+            sdk_map.write_text("SDK test coverage map")
+            sdk_map.chmod(0o700)
             (target / "native-binaries").mkdir()
             (target / "native-binaries/app").write_text("map")
             (target / "test.profraw").write_bytes(b"profile")
             environment = {"CARGO_TARGET_DIR": directory, "OTELC_COVERAGE_BIN_DIR": str(target / "native-binaries")}
             for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/crates/process/src/lib.rs\nDA:1,1\nSF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\nSF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/compiler_abi.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_inventory.rs\nDA:1,1\n", True)):
                 with patch.object(rust_coverage.subprocess, "run"), patch.object(Path, "write_text"):
-                    with patch.object(rust_coverage.subprocess, "check_output", return_value=report) as export:
+                    def export_map(command, **_):
+                        # LLVM can select a zero-hit library map when exported C
+                        # symbols collide across objects. Only the isolated SDK
+                        # test map carries the matching compiler-hook profile.
+                        objects = [command[index + 1] for index, value in enumerate(command) if value == "--object"]
+                        if objects == [str(sdk_map)]:
+                            return report
+                        return report.replace("/compiler_abi.rs\nDA:1,1", "/compiler_abi.rs\nDA:1,0")
+
+                    with patch.object(rust_coverage.subprocess, "check_output", side_effect=export_map) as export:
                         if passes:
                             rust_coverage.write_reports(environment)
                         else:

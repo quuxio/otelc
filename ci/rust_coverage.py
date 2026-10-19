@@ -87,14 +87,12 @@ def write_reports(environment):
     native.extend((target / "debug").glob("libotelc_pass.*"))
     native.extend((target / "debug").glob("otelc_node_observer.node"))
     command = [environment.get("LLVM_COV", "llvm-cov"), "export", "--format=lcov", "--instr-profile=" + str(merged), "--ignore-filename-regex=/tests/|build.rs|/.cargo/registry/|/rustlib/src/|/opt/homebrew/.*/include/|/include/node/|/Library/Developer/|/\\.tmp[^/]+/"]
-    for path in objects:
-        command.extend(["--object", str(path)])
-    reports = [subprocess.check_output(command, text=True, env=environment)]
     # Extern C functions have identical names in Rust test and static-library
-    # builds, but different coverage hashes. Export each native map separately
-    # so LLVM selects its matching hash, then merge by source/line.
-    for path in native:
-        reports.append(subprocess.check_output(command[:5] + ["--object", str(path)], text=True, env=environment))
+    # builds, but different coverage hashes. This also affects the compiler ABI
+    # in Rust-only executables. Isolate every map so LLVM selects its matching
+    # profile, then merge the observed hits by source/line.
+    reports = [subprocess.check_output(command + ["--object", str(path)], text=True, env=environment)
+               for path in [*objects, *native]]
     report = merge_line_reports(reports)
     (build / "rust-coverage.lcov").write_text(report)
     percentage = line_coverage(report)
