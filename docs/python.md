@@ -84,6 +84,8 @@ This is a function-metrics adapter for CPython 3.12+ on the tested macOS/Linux C
 
 Function spans can be enabled through the same external policy; see the [Python span guide](python-spans.md) for unchanged source, coroutine/generator parenting, loss and viewing commands.
 
+Python monitoring stays active through ordinary non-daemon thread completion and application `atexit` callbacks. The adapter registers its final cleanup before running application code, so application callbacks run first. It then disables monitoring and drains telemetry within the configured shutdown budget. It does not join or terminate application threads itself; unfinished daemon work remains an incomplete observation. Fatal termination still cannot guarantee export.
+
 Python metrics and trace headers use independent signal-specific overrides. An explicitly empty metrics header variable suppresses generic OTLP headers at the actual HTTP boundary. Metrics retain the SDK's `none`, `gzip` and `deflate` compression options; unsupported compression values fail before launch without echoing their contents.
 
 Script launches preserve CPython's absolute `__file__` spelling, including a supplied `./` component, and the original `sys.argv[0]`. They supply the ordinary script loader metadata, so resource lookup relative to the script continues to work after `chdir`. Source and precompiled-bytecode script controls cover relative, absolute and space-containing paths without rewriting inputs. Module (`-m`) metadata and the existing directory/zip entry-point path are retained.

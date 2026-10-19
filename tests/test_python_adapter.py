@@ -279,13 +279,18 @@ class PythonAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             path = Path(directory) / "plan.json"
             path.write_text(json.dumps(plan()))
-            with patch.object(launch, "Runtime", side_effect=lambda policy: Runtime(policy, Capture())), patch.object(sys, "argv", []), patch.object(sys, "path", list(sys.path)), contextlib.redirect_stdout(io.StringIO()) as output:
+            callbacks = []
+            with patch.object(launch.atexit, "register", side_effect=lambda callback, *args: callbacks.append((callback, args))), patch.object(launch, "Runtime", side_effect=lambda policy: Runtime(policy, Capture())), patch.object(sys, "argv", []), patch.object(sys, "path", list(sys.path)), contextlib.redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(launch.main([str(path), "--doctor"]), 0)
                 self.assertEqual(launch.main([str(path), "examples/apps/python_annotated.py"]), 0)
+                callback, arguments = callbacks.pop()
+                callback(*arguments)
                 self.assertEqual(launch.main([str(path), "--inspect", "examples/apps/python_app.py", "--json"]), 0)
                 with self.assertRaises(ValueError):
                     launch.main([str(path), "--inspect"])
                 self.assertEqual(launch.main([str(path), "-m", "examples.apps.python_app"]), 0)
+                callback, arguments = callbacks.pop()
+                callback(*arguments)
                 with self.assertRaises(ValueError):
                     launch.main([str(path), "-m"])
                 with self.assertRaises(ValueError):

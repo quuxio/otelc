@@ -1,4 +1,5 @@
 """External launch adapter: quux-otelc python SCRIPT or python -m MODULE."""
+import atexit
 import builtins
 import json
 import importlib.util
@@ -12,6 +13,15 @@ from pathlib import Path
 
 from quux_otelc_python.monitor import Monitor, function_identity
 from quux_otelc_python.telemetry import Runtime
+
+
+def close_application(monitor: Monitor | None, runtime: Runtime) -> None:
+    """Flush after application threads and exit callbacks, within the SDK budget."""
+    try:
+        if monitor is not None:
+            monitor.close()
+    finally:
+        runtime.close()
 
 
 def execute_main(code: CodeType, filename: str | None, loader: object,
@@ -70,6 +80,8 @@ def run_script(argument: str) -> None:
 def main(args: list[str]) -> int:
     if len(args) < 2:
         raise ValueError("python requires SCRIPT [ARGS...] or -m MODULE [ARGS...]")
+    if args[1] == "-m" and len(args) < 3:
+        raise ValueError("-m requires a module name")
     plan = json.loads(Path(args[0]).read_text())
     if plan["language"] != "python" or not plan["execution_available"]:
         raise ValueError("Python adapter requires an executable Python policy")
@@ -106,12 +118,13 @@ def main(args: list[str]) -> int:
         return 0
     runtime = Runtime(plan)
     monitor = None
+    deferred = False
     try:
         monitor = Monitor(plan, runtime)
         monitor.install()
+        atexit.register(close_application, monitor, runtime)
+        deferred = True
         if args[1] == "-m":
-            if len(args) < 3:
-                raise ValueError("-m requires a module name")
             sys.argv = args[2:]
             sys.path[0] = str(Path.cwd())
             run_module(args[2])
@@ -120,9 +133,8 @@ def main(args: list[str]) -> int:
             sys.path[0] = str(Path(args[1]).resolve().parent)
             run_script(args[1])
     finally:
-        if monitor:
-            monitor.close()
-        runtime.close()
+        if not deferred:
+            close_application(monitor, runtime)
     return 0
 
 
