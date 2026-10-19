@@ -12,6 +12,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 quux-otelc-config = { path = "../config" }
+quux-otelc-process = { path = "../process" }
 quux-otelc-rust = { path = "../rust-probes" }
 syn = { version = "=3.0.6", features = ["full", "visit"] }
 proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }

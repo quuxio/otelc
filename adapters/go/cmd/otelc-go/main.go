@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,10 @@ func main() {
 	root := filepath.Dir(filepath.Dir(binary))
 	code, err := adapter.Run(os.Args[1], os.Args[2:], root)
 	if err != nil {
+		var terminated *adapter.ChildSignal
+		if errors.As(err, &terminated) {
+			terminated.Terminate()
+		}
 		fmt.Fprintln(os.Stderr, "otelc Go:", err)
 		code = 1
 	}
