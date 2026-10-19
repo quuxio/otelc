@@ -84,3 +84,5 @@ See the [developer 101](developer-101.md) for complete unchanged/annotated sourc
 The Java agent consumes the same trace policy and independent transport settings for bounded [method-body spans](java-spans.md). Existing bytecode annotations remain optional; a returned asynchronous stage is timed only until the method returns.
 
 JavaScript consumes the common trace policy through its in-memory loader, with private direct-call/await contexts and an independent trace phase. See [JavaScript spans](javascript-spans.md); [TypeScript spans](typescript-spans.md) use the same backend after qualified compiler emission.
+
+Native C/C++ source selection uses canonical file identities relative to the canonical working directory. Plain relative paths, `./` prefixes and equivalent absolute paths select the same file; canonical target exclusions also apply to aliases. Missing inputs retain Clang diagnostics. This normalisation does not edit source files.
