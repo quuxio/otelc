@@ -226,6 +226,7 @@ class Resource:
             '    @property\n    def close(self): raise AssertionError("observer evaluated descriptor")',
             '    @staticmethod\n    def close(): pass',
             '    @classmethod\n    def close(cls): pass',
+            '    def finish(self): pass\n    close = finish',
             '    close = len',
             '    def different(self): pass',
         ]
