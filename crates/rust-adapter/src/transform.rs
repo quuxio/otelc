@@ -28,20 +28,42 @@ pub(crate) struct CompilerSite {
     pub body_start_column: usize,
     pub body_end_line: usize,
     pub body_end_column: usize,
+    pub declaration_start_line: usize,
+    pub declaration_start_column: usize,
+    pub declaration_end_line: usize,
+    pub declaration_end_column: usize,
     pub startup: bool,
     #[serde(skip)]
     pub asynchronous: bool,
 }
 impl CompilerSite {
-    fn new(leaf: String, header: Span, body: Span, startup: bool, asynchronous: bool) -> Self {
+    fn new(
+        source: &str,
+        leaf: String,
+        declaration: (Span, Span),
+        body: Span,
+        startup: bool,
+        asynchronous: bool,
+    ) -> Self {
+        let (header, declaration_end) = declaration;
+        // Rust debug-info columns count bytes. proc-macro2 positions count
+        // Unicode characters, including the closure's original prefix tokens.
+        let column = |position: proc_macro2::LineColumn| {
+            let offset = position_offset(source, position);
+            offset - source[..offset].rfind('\n').map_or(0, |index| index + 1) + 1
+        };
         Self {
             leaf,
             header_start: header.start().line,
             header_end: body.start().line,
             body_start_line: body.start().line,
-            body_start_column: body.start().column + 1,
+            body_start_column: column(body.start()),
             body_end_line: body.end().line,
-            body_end_column: body.end().column + 1,
+            body_end_column: column(body.end()),
+            declaration_start_line: header.start().line,
+            declaration_start_column: column(header.start()),
+            declaration_end_line: declaration_end.start().line,
+            declaration_end_column: column(declaration_end.start()),
             startup,
             asynchronous,
         }
@@ -179,8 +201,9 @@ impl Parser<'_> {
             selected,
             unsupported,
             compiler_site: CompilerSite::new(
+                self.source,
                 "<closure>".into(),
-                node.span(),
+                (node.span(), node.inputs_begin.span),
                 node.body.span(),
                 false,
                 node.asyncness.is_some(),
@@ -266,8 +289,9 @@ impl Parser<'_> {
             selected,
             unsupported,
             compiler_site: CompilerSite::new(
+                self.source,
                 sig.ident.to_string(),
-                span,
+                (span, sig.fn_token.span),
                 body.span(),
                 self.startup && root && sig.ident == "main",
                 sig.asyncness.is_some(),

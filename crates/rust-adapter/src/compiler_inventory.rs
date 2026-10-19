@@ -14,8 +14,19 @@ pub struct Definition {
     #[serde(flatten)]
     site: crate::transform::CompilerSite,
 }
+impl Definition {
+    pub(crate) fn selected_or_startup(&self) -> bool {
+        self.selected || self.site.startup
+    }
+    pub(crate) fn startup(&self) -> bool {
+        self.site.startup
+    }
+    pub(crate) fn unsupported_reason(&self) -> Option<&str> {
+        (!self.unsupported.is_empty()).then_some(&self.unsupported)
+    }
+}
 
-/// The caller supplies the canonical original source path, never a generated copy.
+/// The caller supplies the absolute original compiler source path, never a generated copy.
 pub fn source_definitions(
     source: &str,
     file: &Path,

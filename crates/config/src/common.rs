@@ -288,7 +288,7 @@ impl CommonConfig {
             }
             let allowed: &[&str] = match language {
                 Language::C | Language::Cpp => &["auto", "callbacks", "llvm", "source"],
-                Language::Rust => &["auto", "compiler", "source"],
+                Language::Rust => &["auto", "compiler", "llvm", "source"],
                 Language::TypeScript => &["auto", "source", "loader", "native"],
                 Language::JavaScript => &["auto", "source", "loader"],
                 Language::Java => &["auto", "agent", "aspectj"],
@@ -381,8 +381,8 @@ impl CommonConfig {
                 unavailable.push("automatic Go lifetimes are not implemented".into());
             }
         } else if language == Language::Rust {
-            if backend != "compiler" {
-                unavailable.push("Rust requires the compiler backend".into());
+            if !matches!(backend.as_str(), "compiler" | "llvm") {
+                unavailable.push("Rust requires the compiler or llvm backend".into());
             }
             if self.lifetimes.enabled {
                 unavailable.push("automatic Rust lifetimes are not implemented".into());

@@ -57,6 +57,8 @@ Defaults include empty source/function selections, annotation processing off, au
 
 The default backend preferences are LLVM for C/C++, compiler integration for Rust, source processing for TypeScript, a loader for JavaScript, an agent for Java, a monitoring/profile adapter for Python and compile-time integration for Go. They select the implemented function-metrics backends; they do not install dependencies automatically. The example selects the implemented Java agent. AspectJ remains an unavailable alternative. TypeScript additionally accepts `adapters.typescript.backend="native"` for pinned TypeScript 7.0.2 executable emission; its default `source` backend retains 6.0.3 API emission. Both use the common policy and the 6.0.3 identity parser. See the [native compiler guide](typescript-native.md) for qualification and module limits. JavaScript does not accept the TypeScript native backend.
 
+Rust also accepts the explicit [experimental `llvm` profile](rust-compiler.md) for original-source synchronous standalone compilation. Its pinned toolchain and qualification differ from the default `compiler` backend; async, Cargo and diagnostic invocation scopes are unavailable in this profile.
+
 ## Use the same file with native C/C++
 
 ```sh

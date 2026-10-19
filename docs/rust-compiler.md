@@ -1,31 +1,69 @@
-# Rust compiler-hook backend work
+# Experimental Rust compiler hooks
 
-This backend is in development. The current CLI still uses generated source guards; its documented source-column limitation remains. This work does not yet provide a selectable compiler backend or close issue #66.
+The explicit `llvm` backend instruments unchanged standalone Rust source after parsing and macro expansion. It remains under qualification and does not replace the default generated-source backend. The default backend's source-column limitation and issue #66 remain open. Async completion, Cargo integration, automatic lifetimes and diagnostic invocation scopes are unavailable in this compiler profile.
 
-## Expected behaviour
+## Build the pinned profile
 
-Instrument the compiler's function bodies after Rust has parsed the original source and expanded macros. Configuration and existing annotations must select original declarations through the shared policy. Preserve source files, function signatures, object layout, return values, panic payloads and source observations such as `column!`, `file!`, `line!`, `Location::caller()` and panic locations.
+The qualified local pairing is macOS ARM64, rustc `1.101.0-nightly` from `nightly-2026-09-28`, full commit `d080e7dff1b0fc54541545252818f8cccf995d05` (LLVM 23.1.1), and a pass built with LLVM 23.1.3. Other nightlies, hosts or pass versions are rejected.
 
-The initial compiler profile targets synchronous functions and closures. Async constructors must not be reported as completed future bodies. The existing source backend remains available for its separately qualified async support until compiler-level future completion is implemented and tested.
+```sh
+rustup toolchain install nightly-2026-09-28 --profile minimal
+brew install llvm@23
+OTELC_RUSTC="$(rustup which --toolchain nightly-2026-09-28 rustc)" make rust-llvm-build
+```
 
-## Current evidence
+The ordinary CLI build still uses Rust 1.98.1. The builder creates a separate nightly SDK and records the actual compiler, SDK/pass fingerprints and protected SDK source roots in `target/debug/otelc-rust-llvm.json`. It refuses unexpected compiler wrappers, Rust flags and cross-target settings. The installed LLVM must report exactly 23.1.3; installing an unqualified version does not enable the backend.
 
-A local prototype loads the LLVM pass with rustc `1.101.0-nightly`, commit `d080e7dff1b0fc54541545252818f8cccf995d05` (LLVM 23.1.1), using a pass built with LLVM 23.1.3 on macOS ARM64. This is a specific experimental pairing, not support for arbitrary nightly releases.
+## Source and common configuration
 
-Both baseline and instrumented compilations use `--edition=2024 -O -g -Zmir-enable-passes=-Inline,-ForceInline -Ccodegen-units=1`. MIR inlining otherwise removes some selected bodies before the LLVM pass can observe them. The baseline must retain these flags too; overhead comparisons against a differently optimised binary would be misleading.
+The [example source](../examples/apps/rust_compiler_locations.rs) contains ordinary Rust, including `line!`, `column!` and a tracked caller. It has no probes or SDK imports. Its [policy](../examples/rust-compiler.toml) selects the function externally:
 
-The prototype leaves original source untouched and preserves the tested column and caller-location output byte for byte. The real Rust SDK reports three completed calls, one completed tree and zero loss. Independently decoded Tempo data contains the selected parent and two children. This proves that small example only; it does not establish the broader source-preservation or language support contract.
+```toml
+schema_version = 2
+languages = ["rust"]
+[adapters.rust]
+backend = "llvm"
+[sources]
+include = ["examples/apps/rust_compiler_locations.rs"]
+[functions]
+include = ["*.selected"]
+[traces]
+enabled = true
+root_sample_ratio = 1.0
+```
 
-The private v1 hooks keep each synchronous guard in aligned storage on that function's stack. They reuse SDK admission, context and completion handling. No application arguments are passed to the hooks. The original-source inventory reuses the source parser's selection and annotation rules, preserving declaration and body coordinates for compiler matching. Async entries carry an explicit unsupported reason.
+Existing annotations use the same original-source parser and exclusion rules as the default backend. Set `annotations.read_existing=true` to read them. No annotation is required, and the compiler backend never inserts text into application or dependency sources.
 
-## Acceptance gates before availability
+```sh
+make stack-up
+./target/debug/quux-otelc --config examples/rust-compiler.toml rust --doctor
+./target/debug/quux-otelc --config examples/rust-compiler.toml rust \
+  --build examples/apps/rust_compiler_locations.rs --output-dir build/rust-compiler
+./target/debug/quux-otelc --config examples/rust-compiler.toml rust --run build/rust-compiler
+```
 
-- Integrate an explicit common-policy backend, doctor checks and reproducible SDK/pass builds. Reject unqualified compiler/pass combinations and existing compiler wrappers before compiling the application.
-- Exclude SDK implementation source roots using matching build metadata, including generic SDK bodies emitted into an application module. A broad application selection must never instrument the telemetry runtime itself.
-- Require unambiguous original declaration matching and successful entry-point mapping. Missing probes cannot pass merely because application output matches. Preserve resolved source/probe provenance with the executable.
-- Retain split build/run operation, compiler identity, baseline flags and executable fingerprints. Running a built artefact must not require the compiler, original sources or SDK installation.
-- Test direct, qualified, aliased and forwarded location macros; nested and same-line declarations; closures; Unicode; CRLF; attributes; tracked callers; and panic locations. Compare raw application channels, exit status and unchanged source hashes with a matched baseline.
-- Decode actual OTLP spans for normal completion, recursion, threads and escaping/caught panics. Test cleanup, parent restoration, rejected admission and later recovery. Inconclusive or incomplete observations must remain visible.
-- Enforce at least 80% coverage for the new Rust ABI, inventory/driver and LLVM pass, with the qualified compiler profile exercised in CI. Review the final published head and require all repository checks before merge.
+Build-only does not execute the application. The output directory must not already exist. `--run` needs the matching adapter and bundle; it needs neither compiler, original source nor matching SDK installation. Runtime policy can change; build-time selectors, backend and annotation settings must still match.
 
-Automatic async completion, task/service propagation, object lifetimes, Cargo integration and diagnostic invocation scopes require their own qualification; this prototype supplies none of those capabilities.
+## Baselines and provenance
+
+Use the actual compiler and `baseline_flags` recorded in `build.json` for the ordinary build. This profile records `--edition=2024 -O -g -Zmir-enable-passes=-Inline,-ForceInline -Ccodegen-units=1`. Disabling MIR inlining retains selected bodies until LLVM instrumentation; a baseline with different optimisation settings would misstate runtime overhead.
+
+LLVM bundles use build schema 2 and `backend="llvm"`. Legacy source bundles retain schema 1. In addition to executable/plan/adapter/SDK fingerprints, the compiler bundle retains:
+
+- `profile.json`: the exact compiler/SDK/pass descriptor.
+- `inventory.json` (schema 2): original input hashes, declaration byte coordinates, resolved common selection and the dependency-discovery command.
+- `resolved.json` (schema 1): actual symbols matched and instrumented at `llvm-pipeline-start`, with original names, source hashes, body coordinates and selected/startup flags.
+
+All three records are fingerprinted and checked on launch. They bind build provenance; they do not prove that a particular runtime invocation completed. Raw spans carry function names without a diagnostic nonce/probe-ID API. Consumers must not credit a startup call to a later tested invocation.
+
+The driver asks the original compiler for dependency information and parses actual inputs, rather than unrelated files elsewhere in the project. It retains input hashes and rejects changes observed around compilation. Environment-dependency comments are discarded because `env!` values can contain application data. This adds a compiler discovery pass to build time. Custom macro-generated declarations and concurrent source mutation still require qualification.
+
+## Evidence and remaining gates
+
+Six local tests use the real pinned SDK/pass, compare raw baseline/application channels and decode OTLP spans. They cover direct/qualified/aliased/forwarded location macros, tracked callers, inline bodies, untouched annotations, nested same-line functions/closures/specialised methods, Unicode, CRLF, module names containing spaces/`#`/`$`, caught panics, isolated replay and explicit async/Cargo refusal. Output equality alone cannot pass a missing-probe case.
+
+A missing-probe regression exposed character-based parser columns being compared with byte-based compiler debug columns. The inventory converts them and uses LLVM closure-declaration records to distinguish zero-sized nested bodies. Ambiguous known declarations fail instead of silently skipping instrumentation. A crate-attribute macro experiment was rejected because it collapsed tested locations to line/column 1.
+
+The earlier three-function CLI example stored three spans and one complete tree in Tempo with unchanged source/output and zero loss. This is scoped local evidence, not broad semantic equivalence or production-overhead qualification.
+
+Before merge, complete compiler-profile CI/LLVM coverage, broader unwind/thread/admission/recovery checks, benchmark integration, independent consumer qualification and final integration review. Every new product component must meet its own 80% floor. This implementation remains a draft until those gates pass.
