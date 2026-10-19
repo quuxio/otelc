@@ -807,6 +807,7 @@ dependencies = [
  "quux-otelc-rust",
  "serde",
  "serde_json",
+ "sha2",
  "syn 3.0.6",
  "tempfile",
 ]

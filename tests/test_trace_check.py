@@ -143,15 +143,28 @@ class TraceCheckTests(unittest.TestCase):
             self.assertEqual(check.execute([Path('/bin/app')], Path('/root'), {}), 'output')
             self.assertTrue(run.call_args.kwargs['check'])
             self.assertEqual(run.call_args.kwargs['timeout'], 180)
-        with tempfile.TemporaryDirectory() as directory, patch.object(check, 'execute') as execute:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); folder = root / 'output'; folder.mkdir()
             metadata = root / 'target/debug'; metadata.mkdir(parents=True)
             (metadata / 'otelc-llvm-toolchain.json').write_text('{"bindir":"/llvm"}')
-            for language in check.EXAMPLES:
-                plain, instrumented = check.commands(root, folder, language, root / 'source', root / 'policy', {})
-                self.assertTrue(plain)
-                self.assertEqual(instrumented[:2], [root / 'target/debug/quux-otelc', '--config'])
-            self.assertEqual(execute.call_count, 5)
+            def build(command, _root, _environment, channels=False):
+                if '--build' in command:
+                    bundle = command[-1]; bundle.mkdir()
+                    (bundle / 'build.json').write_text(json.dumps({'compiler': {'program': 'rustc'}, 'baseline_flags': ['--edition=2024', '-O', '-g']}))
+                return (b'compiler output', b'warning\r\n') if channels else ''
+            with patch.object(check, 'execute', side_effect=build) as execute:
+                for language in check.EXAMPLES:
+                    plain, instrumented = check.commands(root, folder, language, root / 'source', root / 'policy', {})
+                    self.assertTrue(plain)
+                    self.assertEqual(instrumented[:2], [root / 'target/debug/quux-otelc', '--config'])
+                    if language == 'rust':
+                        self.assertEqual(instrumented[-2], '--run')
+                self.assertEqual(execute.call_count, 6)
+                rustc = next(call.args[0] for call in execute.call_args_list if call.args[0][0] == 'rustc')
+                self.assertEqual(rustc[1:4], ['--edition=2024', '-O', '-g'])
+            for phase in ('baseline', 'instrumented'):
+                self.assertEqual((folder / (phase + '-build.stderr')).read_bytes(), b'warning\r\n')
+                self.assertEqual((folder / (phase + '-build.stdout')).read_bytes(), b'compiler output')
 
     def example(self, directory, changed=False, mismatch=False, stderr_mismatch=False):
         root = Path(directory); (root / 'examples/apps').mkdir(parents=True)

@@ -178,6 +178,12 @@ fn sdk_arguments(
     );
     Ok(())
 }
+pub(crate) const BASELINE_FLAGS: [&str; 3] = ["--edition=2024", "-O", "-g"];
+pub(crate) struct Compilation {
+    pub binary: PathBuf,
+    pub argv: Vec<String>,
+}
+
 pub fn compile(
     plan: &Plan,
     filename: &Path,
@@ -186,6 +192,17 @@ pub fn compile(
     sdk: &Path,
     rustc: &str,
 ) -> Result<PathBuf> {
+    Ok(compile_recorded(plan, filename, root, scratch, sdk, rustc)?.binary)
+}
+
+pub(crate) fn compile_recorded(
+    plan: &Plan,
+    filename: &Path,
+    root: &Path,
+    scratch: &Path,
+    sdk: &Path,
+    rustc: &str,
+) -> Result<Compilation> {
     let original_argument = filename.to_path_buf();
     let filename = filename.canonicalize()?;
     let generated = scratch.join("source");
@@ -193,23 +210,26 @@ pub fn compile(
     source_tree(root, &generated, plan, &filename)?;
     let source = generated.join(filename.strip_prefix(root)?);
     let binary = scratch.join("application");
-    let mut args = vec![
-        source.as_os_str().to_owned(),
-        "--edition=2024".into(),
-        "-O".into(),
-        "-g".into(),
-        "-o".into(),
-        binary.as_os_str().to_owned(),
-    ];
+    let mut args = vec![source.as_os_str().to_owned()];
+    args.extend(BASELINE_FLAGS.map(OsString::from));
+    args.extend(["-o".into(), binary.as_os_str().to_owned()]);
     sdk_arguments(&mut args, sdk, &source, &original_argument)?;
     let status = Command::new(rustc)
-        .args(args)
+        .args(&args)
         .status()
         .context("compile generated Rust input")?;
     if !status.success() {
         bail!("Rust compilation failed");
     }
-    Ok(binary)
+    let argv = args
+        .iter()
+        .map(|arg| {
+            arg.to_str()
+                .map(str::to_owned)
+                .context("Rust build arguments require UTF-8 paths")
+        })
+        .collect::<Result<_>>()?;
+    Ok(Compilation { binary, argv })
 }
 pub fn wrapper(args: Vec<OsString>) -> Result<i32> {
     let compiler = args
@@ -260,6 +280,12 @@ pub fn wrapper(args: Vec<OsString>) -> Result<i32> {
 }
 pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
     let plan = Plan::load(plan_path)?;
+    if args.first().is_some_and(|arg| arg == "--run") {
+        let directory = args
+            .get(1)
+            .context("Rust artifact launch requires --run DIRECTORY [ARGS...]")?;
+        return crate::artifact::launch(plan_path, Path::new(directory), &args[2..], adapter);
+    }
     let root = std::env::current_dir()?.canonicalize()?;
     let sdk = adapter
         .parent()
@@ -298,6 +324,22 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
                 &serde_json::json!({"language":"rust","functions":functions})
             )?
         );
+        return Ok(0);
+    }
+    if args.first().is_some_and(|arg| arg == "--build") {
+        if args.len() != 4 || args[2] != "--output-dir" || !args[1].ends_with(".rs") {
+            bail!("Rust build-only requires --build SOURCE.rs --output-dir DIRECTORY; Cargo build-only is not yet qualified");
+        }
+        doctor(&rustc)?;
+        crate::artifact::build(
+            plan_path,
+            Path::new(&args[1]),
+            Path::new(&args[3]),
+            &root,
+            &sdk,
+            &rustc,
+            adapter,
+        )?;
         return Ok(0);
     }
     let target = args
