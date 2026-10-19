@@ -355,8 +355,9 @@ class CustomMeta(metaclass=Meta):
             policy['lifetimes']['boundary'] = boundary
             policy['traces']['enabled'] = tracing
             policy['runtime']['max_live_lifetimes'] = maximum
+            capture, trace_capture = Capture(), TraceCapture()
             with self.assertRaisesRegex(ValueError, 'collection lifetimes require'):
-                Runtime(policy, Capture(), TraceCapture())
+                Runtime(policy, capture, trace_capture)
         policy = collection_plan()
         policy['function_matchers'] = {'include': [], 'exclude': []}
         policy['export']['max_queued_batches'] = 1
