@@ -1,0 +1,26 @@
+schema_version = 2
+languages = ["python"]
+
+[resource]
+service_name = "otelc-python-collection"
+
+[sources]
+include = ["examples/apps/python_collection_app.py"]
+
+[functions]
+include = ["examples.apps.python_collection_app.create"]
+
+[lifetimes]
+enabled = true
+boundary = "collection"
+include = ["examples.apps.python_collection_app.Item"]
+
+[traces]
+enabled = true
+root_sample_ratio = 1.0
+
+[runtime]
+max_live_lifetimes = 16
+
+[export]
+max_queued_batches = 8
