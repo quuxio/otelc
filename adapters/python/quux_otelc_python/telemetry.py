@@ -103,6 +103,7 @@ class Session(requests.Session):
                 result = self.ack_type.FromString(body)
                 if len(body) > 65536 or getattr(result.partial_success, self.rejected_field):
                     raise ValueError("invalid or partially rejected OTLP batch")
+                state.remaining()
             elif 200 <= response.status_code < 400:
                 raise ValueError("OTLP requires HTTP 200 acknowledgement")
         except Exception:

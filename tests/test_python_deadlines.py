@@ -77,6 +77,16 @@ def trickle_receiver(mode: str, tls: ssl.SSLContext | None = None, statuses: lis
 
 
 class PythonDeadlineTests(unittest.TestCase):
+    def test_valid_acknowledgement_completed_after_deadline_is_not_accepted(self):
+        def delayed_decode(body: bytes):
+            time.sleep(0.06)
+            return ExportMetricsServiceResponse.FromString(body)
+
+        with trickle_receiver("fast") as (endpoint, _), Session() as session:
+            session.ack_type = SimpleNamespace(FromString=delayed_decode)
+            response = session.post(endpoint, data=b"", timeout=0.04)
+            self.assertEqual(response.status_code, 422)
+
     def test_transient_retries_reuse_serialised_bytes_and_are_finitely_bounded(self):
         for statuses, expected, count in (([503, 200], 200, 2), ([503], 422, 6)):
             with self.subTest(statuses=statuses), trickle_receiver("fast", statuses=statuses) as (endpoint, received), Session() as session:
