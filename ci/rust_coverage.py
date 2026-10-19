@@ -138,11 +138,13 @@ def enforce_node_observer_coverage(report):
 
 
 def enforce_rust_file_coverage(report):
-    """Require independent floors for trace stores and build artefact validation."""
+    """Require independent floors for trace, artefact and compiler-hook boundaries."""
     for path, label in (("/crates/rust-probes/src/traces.rs", "Rust trace context"),
                         ("/crates/export/src/traces.rs", "Shared trace store"),
                         ("/crates/runtime/src/traces.rs", "Native trace bridge"),
-                        ("/crates/rust-adapter/src/artifact.rs", "Rust build artifacts")):
+                        ("/crates/rust-adapter/src/artifact.rs", "Rust build artifacts"),
+                        ("/crates/rust-probes/src/compiler_abi.rs", "Rust compiler ABI"),
+                        ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory")):
         selected = []
         include = False
         for line in report.splitlines():
