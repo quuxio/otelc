@@ -173,17 +173,17 @@ pub fn wrap(compiler: &str, args: &[String], config_path: &Path) -> Result<i32> 
         .as_deref()
         .unwrap_or_else(|| Path::new(compiler));
     let selection = config.path_selection()?;
-    let cwd = std::env::current_dir()?;
+    let cwd = std::env::current_dir()?.canonicalize()?;
     let selected: Vec<_> = sources
         .iter()
         .map(|path| {
             let path = Path::new(path);
-            let normalized = if path.is_absolute() {
-                path.strip_prefix(&cwd).unwrap_or(path)
-            } else {
-                path
-            };
-            selection.accepts(&normalized.to_string_lossy().replace('\\', "/"))
+            // Existing sources share one physical project-relative identity,
+            // including ./ prefixes and absolute paths through directory aliases.
+            // Leave missing-file diagnostics to Clang.
+            let absolute = path.canonicalize().unwrap_or_else(|_| cwd.join(path));
+            let relative = absolute.strip_prefix(&cwd).unwrap_or(&absolute);
+            selection.accepts(&relative.to_string_lossy().replace('\\', "/"))
         })
         .collect();
     if selected.iter().any(|v| *v) && selected.iter().any(|v| !*v) {
