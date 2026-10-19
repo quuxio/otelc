@@ -8,13 +8,32 @@ import unittest
 import zipfile
 import importlib.util
 
-import launch
-
-from test_python_adapter import ADAPTER, plan
+from test_python_adapter import ADAPTER, plan, launch
 from test_python_spans import receiver
 
 
 class MainNamespaceTests(unittest.TestCase):
+    def test_initial_globals_and_module_annotations_match_the_running_interpreter(self):
+        sources = ["print(sorted(globals()))\n",
+                   "import sys\nvalue: int = 3\nprint(sys.modules['__main__'].__annotations__)\n",
+                   "from __future__ import annotations\nimport sys\nvalue: int = 3\nprint(sys.modules['__main__'].__annotations__)\n"]
+        with tempfile.TemporaryDirectory() as name, receiver() as (endpoint, _):
+            root = Path(name)
+            policy = plan(); policy["metrics"]["enabled"] = False
+            policy["metrics_endpoint"] = endpoint + "/v1/metrics"
+            config = root / "plan.json"; config.write_text(json.dumps(policy))
+            for source in sources:
+                script = root / "entry.py"; script.write_text(source)
+                for invocation in ([script.name], ["-m", "entry"]):
+                    with self.subTest(source=source, invocation=invocation):
+                        plain = subprocess.run([sys.executable, *invocation], cwd=root, capture_output=True, timeout=10)
+                        measured = subprocess.run([sys.executable, str(ADAPTER / "launch.py"), str(config), *invocation],
+                                                  cwd=root, capture_output=True, timeout=10)
+                        self.assertEqual(measured.returncode, plain.returncode)
+                        self.assertEqual(measured.stdout, plain.stdout)
+                        self.assertEqual(measured.stderr, plain.stderr)
+                        self.assertEqual(script.read_text(), source)
+
     def test_script_module_and_package_keep_globals_classes_and_module_identity(self):
         source = '''import atexit, builtins, importlib, json, pickle, sys
 import __main__

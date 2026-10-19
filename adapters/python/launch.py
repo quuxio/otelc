@@ -25,6 +25,10 @@ def execute_main(code: CodeType, filename: str | None, loader: object,
                            __cached__=spec.cached if spec else None,
                            __package__=spec.parent if spec else None,
                            __spec__=spec, __loader__=loader)
+    # Interpreter-created __main__ has this eager dictionary through 3.13.
+    # Seeding it on 3.14 would suppress the compiler's lazy module annotations.
+    if sys.version_info < (3, 14):
+        module.__annotations__ = {}
     sys.modules["__main__"] = module
     exec(code, module.__dict__)
 
