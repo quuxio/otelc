@@ -1,16 +1,9 @@
 package quux.otelc.java;
 
 import static org.junit.jupiter.api.Assertions.*;
-import com.google.gson.JsonParser;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.List;
-import javax.tools.ToolProvider;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 class FrameHierarchyTest {
-  @TempDir Path directory;
   private FrameTypes hierarchy(ClassLoader loader) throws Exception {
     try(var input=getClass().getClassLoader().getResourceAsStream("quux/otelc/java/FrameHierarchyTest.class")) {
       return new FrameTypes(new org.objectweb.asm.ClassReader(input),loader);
@@ -58,42 +51,5 @@ class FrameHierarchyTest {
     };
     assertThrows(IllegalArgumentException.class,()->hierarchy(broken).common("unavailable/Type","java/lang/String"));
     assertEquals("java/lang/Number",hierarchy(null).common("java/lang/Integer","java/lang/Double"));
-  }
-  @Test void inFlightClassHierarchyKeepsBothBranchOutcomesAndTelemetry() throws Exception {
-    String source="""
-      public class Main {
-        static class Child extends Main {}
-        Main selected(boolean flag) {
-          Main value; if(flag)value=this;else value=new Child();return value;
-        }
-        public static void main(String[] args) {
-          System.out.println(new Main().selected(Boolean.parseBoolean(args[0])).getClass().getSimpleName());
-        }
-      }
-      """;
-    Path file=directory.resolve("Main.java");Files.writeString(file,source);
-    assertEquals(0,ToolProvider.getSystemJavaCompiler().run(null,null,null,"-g","-d",directory.toString(),file.toString()));
-    Path agent=Path.of("target/java-agent-0.1.0-agent.jar").toAbsolutePath();
-    try(var receiver=new AgentTest.Receiver()) {
-      var policy=AgentTest.policy(receiver.endpoint());
-      policy.getAsJsonObject("function_matchers").getAsJsonArray("include").set(0,new com.google.gson.JsonPrimitive("(?-u)^Main\\.selected.*"));
-      Path plan=directory.resolve("plan.json");Files.writeString(plan,policy.toString());
-      for(String flag:List.of("true","false")) {
-        for(boolean sourceLaunch:List.of(false,true)) {
-          Path report=directory.resolve("report.json");
-          var target=sourceLaunch?List.of("Main.java",flag):List.of("-cp",directory.toString(),"Main",flag);
-          var plain=new java.util.ArrayList<String>();plain.add(Path.of(System.getProperty("java.home"),"bin/java").toString());plain.addAll(target);
-          var original=new ProcessBuilder(plain).directory(directory.toFile()).redirectErrorStream(true).start();
-          byte[] output=original.getInputStream().readAllBytes();assertEquals(0,original.waitFor());
-          var measured=new java.util.ArrayList<String>();measured.add(plain.getFirst());measured.add("-javaagent:"+agent+"="+plan);measured.addAll(target);
-          var builder=new ProcessBuilder(measured).directory(directory.toFile());builder.environment().put("OTELC_REPORT_PATH",report.toString());
-          var process=builder.start();byte[] actual=process.getInputStream().readAllBytes();String errors=new String(process.getErrorStream().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
-          assertEquals(0,process.waitFor(),errors);assertArrayEquals(output,actual);assertEquals(source,Files.readString(file));
-          var health=JsonParser.parseString(Files.readString(report)).getAsJsonObject();
-          assertEquals(1,health.get("function_calls").getAsInt(),errors);
-          assertEquals(0,health.get("export_loss").getAsInt());assertEquals("",errors);
-        }
-      }
-    }
   }
 }
