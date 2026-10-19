@@ -174,8 +174,16 @@ def commands(root, folder, language, source, config, environment, tasks=False):
     if language in ("c", "cpp", "rust"):
         plain, instrumented = folder / "plain", folder / "instrumented"
         if language == "rust":
-            execute([environment.get("OTELC_RUSTC", "rustc"), "--edition=2024", source, "-o", plain], root, environment)
-            return [plain], prefix + ["rust", source]
+            bundle = folder / ("rust-artifact-" + uuid.uuid4().hex)
+            stdout, stderr = execute(prefix + ["rust", "--build", source, "--output-dir", bundle], root, environment, channels=True)
+            (folder / "instrumented-build.stdout").write_bytes(stdout)
+            (folder / "instrumented-build.stderr").write_bytes(stderr)
+            metadata = json.loads((bundle / "build.json").read_text())
+            stdout, stderr = execute([metadata["compiler"]["program"], *metadata["baseline_flags"], source, "-o", plain], root, environment, channels=True)
+            (folder / "baseline-build.stdout").write_bytes(stdout)
+            (folder / "baseline-build.stderr").write_bytes(stderr)
+            (folder / "rust-build.json").write_text(json.dumps({"directory": str(bundle), "metadata": metadata}, indent=2) + "\n")
+            return [plain], prefix + ["rust", "--run", bundle]
         tool = "clang++" if language == "cpp" else "clang"
         compiler = root / "target/debug/otelc-llvm-toolchain.json"
         flags = ["-O2", "-g", "-pthread", "-std=c++17"] if language == "cpp" else ["-O1", "-g", "-pthread"]
@@ -231,6 +239,7 @@ def run_example(root, output, language, timeout, run_id, workload="functions"):
         stored = wait_for_storage(service, spans, trees, errors, timeout, allow_late_children=tasks)
         return {"language": language, "workload": workload, "service": service, "source_sha256": hashlib.sha256(original).hexdigest(),
                 "output": actual[0].decode("utf-8"), "stderr": actual[1].decode("utf-8"), "runtime": report, "stored_trees": stored,
+                **({"build_artifact": json.loads((folder / "rust-build.json").read_text())} if language == "rust" else {}),
                 "dashboard": "http://localhost:3000/d/otelc-traces?" + urllib.parse.urlencode({
                     "var-service": service, "var-traceId": stored[0]["trace_id"]})}
     finally:
