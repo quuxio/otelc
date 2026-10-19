@@ -2827,3 +2827,48 @@ fn java_worker_context_uses_common_policy_preserves_classes_and_decodes_causal_s
         String::from_utf8_lossy(&doctor.stdout).contains("ThreadPoolExecutor/FutureTask context")
     );
 }
+
+#[test]
+fn native_selection_matches_equivalent_source_paths_in_both_schemas() {
+    let root = setup("");
+    let original = std::fs::read(root.path().join("main.c")).unwrap();
+    let absolute = root.path().join("main.c").canonicalize().unwrap();
+    for schema in [1, 2] {
+        for excluded in [false, true] {
+            let selection = if schema == 1 {
+                "[build]\nbackend='llvm'\ninclude=['main.c']"
+            } else {
+                "languages=['c']\n[sources]\ninclude=['main.c']"
+            };
+            let exclusion = if excluded { "\nexclude=['main.c']" } else { "" };
+            let config = format!("schema_version={schema}\n{selection}{exclusion}\n[functions]\ninclude=['selected_*']\n");
+            std::fs::write(root.path().join("otelc.toml"), config).unwrap();
+            for source in ["main.c", "./main.c", absolute.to_str().unwrap()] {
+                success(cli(
+                    &["clang", "-O1", "-g", source, "-o", "app"],
+                    root.path(),
+                ));
+                let output = success(cli(&["inspect", "app", "--json"], root.path()));
+                let manifest: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                let names: Vec<_> = manifest["functions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|f| f["selected"] == true)
+                    .map(|f| f["display_name"].as_str().unwrap())
+                    .collect();
+                assert_eq!(
+                    names.contains(&"selected_recursive"),
+                    !excluded,
+                    "schema={schema} source={source}"
+                );
+                assert_eq!(
+                    names.contains(&"selected_work"),
+                    !excluded,
+                    "schema={schema} source={source}"
+                );
+                assert_eq!(std::fs::read(root.path().join("main.c")).unwrap(), original);
+            }
+        }
+    }
+}
