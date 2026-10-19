@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from opentelemetry.metrics import Observation
 
+from .metadata import class_members, member, text
 from .policy import Selection, source_name
 from .resources import Releases, bindings
 
@@ -64,12 +65,12 @@ class Lifetimes:
 
     @staticmethod
     def receiver(frame, code):
-        return frame.f_locals.get(code.co_varnames[0]) if code.co_argcount else None
+        return member(frame.f_locals, text(code.co_varnames[0])) if code.co_argcount else None
 
     def start(self, frame, code, root):
         if self.closed:
             return
-        if code.co_name != '__init__':
+        if text(code.co_name) != '__init__':
             if self.releases is not None:
                 self.releases.start(frame, code)
             return
@@ -77,7 +78,7 @@ class Lifetimes:
         if source is None:
             return
         if not code.co_argcount or code.co_flags & (inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR):
-            guess = source.removesuffix('.py').replace('/', '.') + '.' + code.co_qualname.rsplit('.', 1)[0]
+            guess = source.removesuffix('.py').replace('/', '.') + '.' + text(code.co_qualname).rsplit('.', 1)[0]
             if self.selection.accepts(guess):
                 self.reject('unsupported_initializer')
             return
@@ -85,17 +86,20 @@ class Lifetimes:
         cls = type(value)
         # Read raw class dictionaries, never user attribute hooks/descriptors.
         if type(cls) is not type:
-            guess = source.removesuffix('.py').replace('/', '.') + '.' + code.co_qualname.rsplit('.', 1)[0]
+            guess = source.removesuffix('.py').replace('/', '.') + '.' + text(code.co_qualname).rsplit('.', 1)[0]
             if self.selection.accepts(guess):
                 self.reject('unsupported_metaclass')
             return
-        name = source.removesuffix('.py').replace('/', '.') + '.' + type.__getattribute__(cls, '__qualname__')
+        name = source.removesuffix('.py').replace('/', '.') + '.' + text(type.__getattribute__(cls, '__qualname__'))
         if not self.selection.accepts(name):
             return
         if self.releases is not None and name not in self.releases.bindings:
             return
         hierarchy = type.__getattribute__(cls, '__mro__')
-        mappings = [type.__getattribute__(base, '__dict__') for base in hierarchy]
+        mappings = [class_members(base) for base in hierarchy]
+        if any(mapping is None for mapping in mappings):
+            self.reject('unsupported_metadata')
+            return
         initializer = mappings[0].get('__init__')
         # Only the most-derived ordinary initializer admits the instance. Its
         # super calls are ignored; inherited/decorated/C initializers are unqualified.
@@ -131,7 +135,7 @@ class Lifetimes:
             self.frames[id(frame)] = (identity, name)
 
     def returned(self, frame, code, value, parent):
-        if code.co_name != '__init__':
+        if text(code.co_name) != '__init__':
             if self.releases is not None:
                 self.releases.returned(frame, code)
             return

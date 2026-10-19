@@ -2,6 +2,8 @@
 import inspect
 import types
 
+from .metadata import class_members, text
+
 
 def bindings(policy: dict) -> dict[str, str]:
     """Validate resolved bindings before starting SDK threads or application code."""
@@ -38,7 +40,7 @@ class Releases:
     def qualified(self, name: str, mapping) -> bool:
         method = mapping.get(self.bindings[name])
         return (type(method) is types.FunctionType and method.__code__.co_argcount > 0
-                and method.__code__.co_name == self.bindings[name]
+                and text(method.__code__.co_name) == self.bindings[name]
                 and not method.__code__.co_flags & (inspect.CO_GENERATOR | inspect.CO_COROUTINE | inspect.CO_ASYNC_GENERATOR))
 
     def start(self, frame, code):
@@ -52,7 +54,11 @@ class Releases:
             cls = type(value)
             if type(cls) is not type:
                 return
-            method = type.__getattribute__(cls, '__dict__').get(self.bindings[item.name])
+            namespace = class_members(cls)
+            if namespace is None:
+                owner.reject('unsupported_metadata')
+                return
+            method = namespace.get(self.bindings[item.name])
             if type(method) is not types.FunctionType or method.__code__ is not code:
                 return
             token = owner.identities[item.identity]

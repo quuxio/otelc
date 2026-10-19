@@ -39,6 +39,32 @@ class Resource:
 
 
 class PythonResourceTests(PythonSpanHarness, unittest.TestCase):
+    def test_resource_metadata_hooks_are_passive_across_failed_and_repeated_close(self):
+        from test_python_metadata import STRING_HOOKS
+        policy = resource_plan()
+        policy['function_matchers'] = {'include': [], 'exclude': []}
+        runtime, _, capture, app, monitor = self.monitored(STRING_HOOKS + SOURCE, policy)
+        cls = app['Resource']
+        cls.__qualname__ = app['Name']('Resource')
+        for name in ('__init__', 'close'):
+            method = vars(cls)[name]
+            method.__code__ = method.__code__.replace(co_name=app['Name'](name))
+        app['seen'].clear()
+        value = cls()
+        with self.assertRaises(ValueError) as caught:
+            value.close(True)
+        self.assertIs(caught.exception, app['failure'])
+        self.assertEqual(runtime.lifetimes.completed, 0)
+        self.assertEqual(value.close(), 7)
+        self.assertEqual(value.close(), 7)
+        report = self.finish(runtime, monitor)['lifetimes']
+        self.assertEqual(app['seen'], [])
+        self.assertEqual(report['admitted'], 1)
+        self.assertEqual(report['completed'], 1)
+        self.assertEqual(report['failed_releases'], 1)
+        self.assertFalse(report['losses'])
+        self.assertEqual([span.name for span in capture.spans()], ['trace_fixture.Resource lifetime'])
+
     def test_hook_protocol_handles_rebound_receivers_stale_returns_and_transport_failure(self):
         # CPython suspends tracing inside monitoring callbacks. Exercise the
         # hook protocol directly as well as the actual-event tests below.
