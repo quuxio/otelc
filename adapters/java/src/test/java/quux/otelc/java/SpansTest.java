@@ -26,6 +26,25 @@ import org.junit.jupiter.api.io.TempDir;
 
 class SpansTest {
   @TempDir Path directory;
+  @Test void sdkProducerRetainsSampledSpansUntilTheWholeTreeCompletes() throws Exception {
+    try(var metrics=new AgentTest.Receiver(); var traces=new Receiver();
+        var runtime=new Telemetry(new Plan(policy(metrics.endpoint(),traces.endpoint())))) {
+      long root=runtime.enter("producer.root");
+      var parent=runtime.parent();
+      assertTrue(parent.sampled(),"configured tracing must create a recording sampled SDK context");
+      assertTrue(parent.context().isValid());
+      long child=runtime.enter("producer.child");runtime.exit(child,false);
+      assertTrue(runtime.traces.flush().get(2,TimeUnit.SECONDS));
+      assertTrue(traces.requests.isEmpty(),"a completed child must not export its still-open tree");
+      runtime.exit(root,false);runtime.close();
+      var spans=traces.spans();assertEquals(2,spans.size());
+      var rootSpan=spans.stream().filter(span -> span.getName().equals("producer.root")).findFirst().orElseThrow();
+      var childSpan=spans.stream().filter(span -> span.getName().equals("producer.child")).findFirst().orElseThrow();
+      assertEquals(rootSpan.getTraceId(),childSpan.getTraceId());
+      assertEquals(rootSpan.getSpanId(),childSpan.getParentSpanId());
+      assertEquals(0,runtime.exportLoss.get());
+    }
+  }
   static JsonObject policy(String metrics, String traces) {
     var data = AgentTest.policy(metrics);
     data.getAsJsonObject("export").addProperty("max_queued_batches", 8);
