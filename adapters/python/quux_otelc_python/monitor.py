@@ -73,11 +73,13 @@ class Monitor:
     def start(self, code, _):
         if not self.runtime.observing or self.runtime.closed:
             return
+        if self.lifetime_code(code):
+            self.runtime.lifetimes.start(sys._getframe(1), code, self.root)
         entry = self.names.get(id(code))
         if entry is None:
             name = self.display_name(code)
             if name is None:
-                return sys.monitoring.DISABLE
+                return None if self.lifetime_code(code) else sys.monitoring.DISABLE
             if len(self.names) >= self.plan["runtime"]["max_functions"] or len(name.encode()) > 1024:
                 if self.runtime.traces is not None:
                     self.runtime.reject_observation("function_capacity", self.parent_key(sys._getframe(1)),
@@ -121,18 +123,34 @@ class Monitor:
                     self.runtime.traces.reject(None, "parent_depth")
         return parent
 
+    def lifetime_code(self, code):
+        if self.runtime is None or self.runtime.lifetimes is None or code.co_name != '__init__':
+            return False
+        name = source_name(code.co_filename, self.root)
+        return bool(name and self.sources.accepts(name) and not Path(code.co_filename).resolve().is_relative_to(self.protected))
+
     def returned(self, code, _, value):
+        if self.lifetime_code(code):
+            frame = sys._getframe(1)
+            with self.runtime.lock:
+                pending = self.runtime.pending.get(id(frame))
+                if pending is None:
+                    pending = self.runtime.pending.get(self.parent_key(frame))
+                parent = pending.trace if pending is not None else self.context.current.get() if self.context else None
+                self.runtime.lifetimes.returned(frame, code, value, parent)
         if id(code) not in self.names:
             # A selected frame may have started while monitoring was off.
             # Disabling its return location would also silence later admitted
             # invocations of that same code after live enable.
-            return sys.monitoring.DISABLE if self.runtime.observing and self.display_name(code) is None else None
+            return sys.monitoring.DISABLE if self.runtime.observing and self.display_name(code) is None and not self.lifetime_code(code) else None
         key = id(sys._getframe(1))
         if self.context is not None:
             self.context.suspend(key)
         self.runtime.exit(key, False)
 
     def unwound(self, code, _, exception):
+        if self.lifetime_code(code):
+            self.runtime.lifetimes.unwound(sys._getframe(1))
         if id(code) in self.names:
             key = id(sys._getframe(1))
             if self.context is not None:

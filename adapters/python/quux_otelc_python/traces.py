@@ -15,7 +15,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-from opentelemetry.trace import NonRecordingSpan, Status, StatusCode
+from opentelemetry.trace import Link, NonRecordingSpan, Status, StatusCode
 
 from .telemetry import Session, export_headers
 
@@ -109,7 +109,8 @@ class TraceStore:
         self.provider = TracerProvider(
             resource=resource, sampler=ParentBased(TraceIdRatioBased(ratio)),
             shutdown_on_exit=False,
-            span_limits=SpanLimits(max_attributes=2, max_events=0, max_links=0,
+            span_limits=SpanLimits(max_attributes=3 if plan.get('lifetimes', {}).get('enabled') else 2,
+                                   max_events=0, max_links=1 if plan.get('lifetimes', {}).get('enabled') else 0,
                                    max_span_attribute_length=1024))
         self.tracer = self.provider.get_tracer("quux.otelc", "0.1.0")
         self.delegate = delegate if delegate is not None else OTLPSpanExporter(
@@ -117,6 +118,26 @@ class TraceStore:
             timeout=min(timeout, plan["runtime"]["shutdown_timeout_ms"]) / 1000,
             session=TraceSession(self), compression=Compression.NoCompression,
             max_request_size=16 * 1024 * 1024)
+
+    def begin_lifetime(self, name, token, creation, wall):
+        links = [Link(creation.context)] if creation is not None and creation.sampled else []
+        return self.tracer.start_span(name + ' lifetime', context=Context(), links=links, start_time=wall,
+                                      attributes={'code.type.name': name, 'otelc.lifetime.boundary': 'collection',
+                                                  'otelc.lifetime.instance': str(token)})
+
+    def finish_lifetime(self, span, elapsed):
+        if not span.is_recording():
+            return
+        span.end(end_time=span.start_time + elapsed)
+        if len(self.ready) >= self.capacity or self.retained >= 1048576:
+            self.losses['queue_capacity'] += 1
+            return
+        identity = span.get_span_context()
+        tree = Tree(identity.span_id, 0, span.start_time, nodes={identity.span_id: span},
+                    active=0, closed=True, bytes=len(span.name.encode()) * 2 + 512)
+        self.retained += 1
+        self.completed += 1
+        self.ready.append(tree)
 
     def reject(self, parent, reason):
         if parent is not None and parent.sampled:
