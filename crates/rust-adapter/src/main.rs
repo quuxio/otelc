@@ -20,6 +20,9 @@ fn main() {
     match result {
         Ok(code) => std::process::exit(code),
         Err(error) => {
+            if let Some(signal) = error.downcast_ref::<quux_otelc_process::ChildSignal>() {
+                signal.terminate();
+            }
             eprintln!("otelc Rust: {error:#}");
             std::process::exit(1);
         }
