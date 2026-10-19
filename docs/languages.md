@@ -16,6 +16,6 @@ The common TOML policy remains the configuration entry point. Existing annotatio
 
 See the [common configuration](common-configuration.md), [Python guide](python.md), [JavaScript guide](javascript.md), [TypeScript guide](typescript.md), [Java guide](java.md), [Go guide](go.md), [Rust guide](rust.md), [developer 101](developer-101.md) and [support matrix](support.md).
 
-C/C++, Rust, Python, Java, JavaScript, TypeScript and Go function spans are available through the common trace policy; see [C spans](c-spans.md), [Rust spans](rust-spans.md), [Python spans](python-spans.md), [Java spans](java-spans.md), [JavaScript spans](javascript-spans.md) and [TypeScript spans](typescript-spans.md) and [Go spans](go-spans.md). Automatic task/distributed parenting and source-free lifetimes remain separate gaps.
+C/C++, Rust, Python, Java, JavaScript, TypeScript and Go function spans are available through the common trace policy; see [C spans](c-spans.md), [Rust spans](rust-spans.md), [Python spans](python-spans.md), [Java spans](java-spans.md), [JavaScript spans](javascript-spans.md) and [TypeScript spans](typescript-spans.md) and [Go spans](go-spans.md). Qualified Python/Java task parenting and [ordinary Python collection lifetimes](python-collection.md) are available; other task/distributed integrations and destruction/resource boundaries remain separate gaps.
 
 Java method-body spans are available through the bytecode agent, with private same-thread parenting; see [Java spans](java-spans.md). Task completion remains a separate propagation capability.
