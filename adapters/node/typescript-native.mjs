@@ -9,6 +9,7 @@ import MagicString from 'magic-string';
 import remapping from '@jridgewell/remapping';
 import { collectIdentities } from './typescript-identities.mjs';
 import { IDENTITY } from './transform.mjs';
+import { collectLifetimeClasses, TYPE_IDENTITY } from './typescript-lifetimes.mjs';
 
 const require = createRequire(import.meta.url);
 function nativeBinary() {
@@ -24,6 +25,11 @@ export function nativeVersion(run = spawnSync) {
 export function nativeEmit(source, filename, sourceName, plan, options, run = spawnSync, root = process.cwd()) {
   const augmented = new MagicString(source);
   const identities = collectIdentities(source, filename, sourceName, plan);
+  const classes = collectLifetimeClasses(source, filename, sourceName, plan);
+  for (const item of classes) {
+    const marker = JSON.stringify(TYPE_IDENTITY + Buffer.from(JSON.stringify(item.metadata)).toString('base64')) + ';';
+    augmented.appendLeft(item.position, item.implicit ? 'constructor(){' + marker + '}' : marker);
+  }
   for (const item of identities) {
     const marker = IDENTITY + Buffer.from(JSON.stringify(item.metadata)).toString('base64');
     // Native lowering can discard constructor/namespace comments. A private string
@@ -50,6 +56,9 @@ export function nativeEmit(source, filename, sourceName, plan, options, run = sp
     const extension = /\.mts$/.test(filename) ? '.mjs' : /\.cts$/.test(filename) ? '.cjs' : '.js';
     const generated = path.join(output, path.basename(filename).replace(/\.(?:ts|mts|cts)$/, extension));
     const code = fs.readFileSync(generated, 'utf8');
+    for (const item of classes) {
+      if (!code.includes(TYPE_IDENTITY + Buffer.from(JSON.stringify(item.metadata)).toString('base64'))) throw new Error('native TypeScript emission lost an original class identity');
+    }
     for (const item of identities) {
       if (!code.includes(IDENTITY + Buffer.from(JSON.stringify(item.metadata)).toString('base64'))) throw new Error('native TypeScript emission lost an original function identity');
     }
