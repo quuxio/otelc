@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 from scripts import benchmark_live as live
@@ -78,14 +79,14 @@ class LiveBenchmarkTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 live.measure("cli", "socket", plain, instrumented, 4, 2)
 
-    def setup_run(self, root, output, evidence):
+    def setup_run(self, root, output):
         (root / "examples/apps").mkdir(parents=True)
         (root / "target/debug").mkdir(parents=True)
         (root / "examples/apps/live-latency.cpp").write_text("unchanged input")
         (root / "examples/live.toml").write_text('socket="build/control/metrics.sock"')
         (root / "target/debug/otelc-llvm-toolchain.json").write_text('{"bindir":"/compiler"}')
         output.mkdir()
-        (output / "runtime.json").write_text(json.dumps(evidence))
+
 
     def test_end_to_end_driver_and_evidence_failures(self):
         evidence = {"drained": True, "export_finished": True, "export_dropped_batches": 0, "losses": {"queue": 0}, "function_calls": 3000}
@@ -93,10 +94,11 @@ class LiveBenchmarkTests(unittest.TestCase):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root, output = Path(temporary), Path(temporary) / "output"
                 current = {**evidence, "drained": failure != "telemetry"}
-                self.setup_run(root, output, current)
+                self.setup_run(root, output)
                 processes = [Process(1, exit_code=1 if failure == "exit" else 0, running=True), Process(2, running=True)]
                 samples = {key: [{"elapsed_ns": n, "checksum": 9, "calls": 1000}] for key, n in [("baseline", 10), ("metrics_off", 20), ("metrics_on", 30)]}
                 def measure(*_args):
+                    (output / "runtime.json").write_text(json.dumps(current))
                     if failure == "source":
                         (root / "examples/apps/live-latency.cpp").write_text("modified")
                     return samples
@@ -109,11 +111,27 @@ class LiveBenchmarkTests(unittest.TestCase):
                         self.assertTrue(result["complete_telemetry"])
                         self.assertEqual(result["same_instrumented_pid"], 2)
                         self.assertEqual(json.loads((output / "report.json").read_text())["runtime"]["function_calls"], 3000)
+                        socket = Path(tomllib.loads((output / "live.toml").read_text())["socket"])
+                        self.assertLessEqual(len(str(socket).encode()), 90)
+                        self.assertFalse(socket.parent.exists())
                 if failure == "startup":
                     self.assertTrue(processes[0].terminated)
         for iterations, runs in [(0, 8), (1000001, 8), (1000, 1), (1000, 101)]:
             with self.assertRaises(ValueError):
                 live.run(Path("unused"), Path("unused"), iterations, runs)
+
+    def test_previous_native_report_cannot_validate_a_missing_shutdown_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = Path(directory), Path(directory) / "output"
+            evidence = {"drained": True, "export_finished": True, "export_dropped_batches": 0, "losses": {}, "function_calls": 3000}
+            self.setup_run(root, output)
+            (output / "runtime.json").write_text(json.dumps(evidence))
+            (output / "report.json").write_text('{"complete_telemetry":true}')
+            samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 1000}] for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
+            with patch.object(live.platform, "platform", return_value="test"), patch.object(live.platform, "machine", return_value="arm64"), patch.object(live.subprocess, "run"), patch.object(live.subprocess, "Popen", side_effect=[Process(1), Process(2)]), patch.object(live, "read_line", return_value="ready"), patch.object(live, "batch"), patch.object(live, "control"), patch.object(live, "measure", return_value=samples), patch.object(live.subprocess, "check_output", return_value="clang test"):
+                with self.assertRaises(FileNotFoundError):
+                    live.run(root, output, 1000, 2)
+            self.assertFalse((output / "report.json").exists())
 
     def test_main(self):
         with patch("sys.argv", ["benchmark_live", "--iterations", "1000", "--runs", "2"]), patch.object(live, "run", return_value={"summary": {"metrics_added_ns_per_call": 5}}), contextlib.redirect_stdout(io.StringIO()) as output:
