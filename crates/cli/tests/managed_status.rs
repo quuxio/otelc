@@ -7,7 +7,7 @@ use std::{
     io::{BufRead, BufReader, Read},
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -133,6 +133,14 @@ fn prepare(language: &str, directory: &Path) -> (Vec<String>, Vec<String>) {
     }
 }
 
+fn captured_output(child: Child, reader: Option<thread::JoinHandle<Vec<u8>>>) -> Output {
+    let mut output = child.wait_with_output().unwrap();
+    if let Some(reader) = reader {
+        output.stdout = reader.join().unwrap();
+    }
+    output
+}
+
 fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>) -> Output {
     let ready = directory.join("ready.pid");
     let _ = fs::remove_file(&ready);
@@ -172,7 +180,13 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
         let mut output_ready = false;
         let pid = loop {
             if let Ok(line) = ready_output.try_recv() {
-                assert_eq!(line, b"ready\n", "unexpected readiness output");
+                if line != b"ready\n" {
+                    let _ = child.kill();
+                    panic!(
+                        "unexpected readiness output: {:?}",
+                        captured_output(child, output_reader)
+                    );
+                }
                 output_ready = true;
             }
             if let Ok(value) = fs::read_to_string(&ready) {
@@ -184,14 +198,18 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
                     }
                 }
             }
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "target exited before readiness: {:?}",
-                child.wait_with_output().unwrap()
-            );
+            if child.try_wait().unwrap().is_some() {
+                panic!(
+                    "target exited before readiness: {:?}",
+                    captured_output(child, output_reader)
+                );
+            }
             if Instant::now() >= deadline {
                 let _ = child.kill();
-                panic!("target did not become ready");
+                panic!(
+                    "target did not become ready: {:?}",
+                    captured_output(child, output_reader)
+                );
             }
             thread::sleep(Duration::from_millis(5));
         };
@@ -200,10 +218,7 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
     }
     loop {
         if child.try_wait().unwrap().is_some() {
-            let mut output = child.wait_with_output().unwrap();
-            if let Some(reader) = output_reader {
-                output.stdout = reader.join().unwrap();
-            }
+            let output = captured_output(child, output_reader);
             let leftovers: Vec<_> = fs::read_dir(scratch.path())
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
@@ -220,10 +235,25 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            panic!("launcher did not terminate");
+            panic!(
+                "launcher did not terminate: {:?}",
+                captured_output(child, output_reader)
+            );
         }
         thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn early_exit_keeps_complete_stdout_and_stderr_in_the_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let (arguments, _) = prepare("python", directory.path());
+    fs::write(directory.path().join("termination.py"), "import sys\nprint('ready',flush=True)\nprint('diagnostic-tail',flush=True)\nprint('diagnostic-stderr',file=sys.stderr,flush=True)\nraise SystemExit(7)\n").unwrap();
+    let failure = std::panic::catch_unwind(|| launch(&arguments, directory.path(), -1, Some(15)))
+        .expect_err("fixture should exit before publishing its PID");
+    let message = failure.downcast_ref::<String>().unwrap();
+    assert!(message.contains("diagnostic-tail"), "{message}");
+    assert!(message.contains("diagnostic-stderr"), "{message}");
 }
 
 #[test]

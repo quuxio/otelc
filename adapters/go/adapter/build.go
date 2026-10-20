@@ -15,9 +15,14 @@ import (
 )
 
 type Package struct {
-	Dir, ImportPath, Name string
-	GoFiles, CgoFiles     []string
-	Module                *struct{ Main bool }
+	Dir, ImportPath, Name                 string
+	GoFiles, CgoFiles                     []string
+	CFiles, CXXFiles, MFiles, HFiles      []string
+	FFiles, SFiles, SysoFiles, EmbedFiles []string
+	Module                                *struct {
+		Main  bool
+		GoMod string
+	}
 }
 
 func command(goTool, cwd string, args ...string) *exec.Cmd {
@@ -65,6 +70,10 @@ func Doctor(goTool, root string) error {
 	return nil
 }
 func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (string, error) {
+	return buildRecorded(plan, target, root, scratch, sdkRoot, goTool, nil)
+}
+
+func buildRecorded(plan policy.Plan, target, root, scratch, sdkRoot, goTool string, recipe *buildRecipe) (string, error) {
 	canonical, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", err
@@ -83,6 +92,9 @@ func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (str
 	if original == "" || original == os.DevNull {
 		if !strings.HasSuffix(target, ".go") {
 			return "", fmt.Errorf("go package execution requires an existing go.mod")
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(root, target)
 		}
 		target, err = filepath.Abs(target)
 		if err != nil {
@@ -112,6 +124,11 @@ func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (str
 	before, err := snapshotModules(goTool, cwd, modfile, "readonly", filepath.Join(scratch, "modules-original.json"))
 	if err != nil {
 		return "", fmt.Errorf("cannot record original Go module identities: %w", err)
+	}
+	if recipe != nil {
+		if err = recipe.prepare(goTool, cwd, target, root, original, modfile, scratch, sdkRoot); err != nil {
+			return "", err
+		}
 	}
 	if _, err = output(goTool, cwd, "mod", "edit", "-modfile="+modfile, "-require=io.quux.otelc/go@v0.0.0", "-replace=io.quux.otelc/go="+sdkRoot); err != nil {
 		return "", err
@@ -192,7 +209,19 @@ func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (str
 		return "", err
 	}
 	binary := filepath.Join(scratch, "application")
-	if _, err = output(goTool, cwd, "build", "-mod=mod", "-modfile="+modfile, "-overlay="+overlay, "-o", binary, target); err != nil {
+	buildArgs := []string{"build", "-mod=mod", "-modfile=" + modfile, "-overlay=" + overlay, "-o", binary, target}
+	if recipe != nil {
+		recipe.InstrumentedArgs = buildArgs
+		if err = recipe.capturePackages(goTool, cwd, modfile, overlay, target); err != nil {
+			return "", err
+		}
+	}
+	if recipe != nil {
+		err = recordedBuild(goTool, cwd, scratch, "instrumented-build", buildArgs)
+	} else {
+		_, err = output(goTool, cwd, buildArgs...)
+	}
+	if err != nil {
 		return "", err
 	}
 	// Generated imports may load additional lazy dependencies during compilation.
@@ -200,12 +229,27 @@ func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (str
 	if err = verifyModules(before, goTool, cwd, modfile, scratch); err != nil {
 		return "", err
 	}
+	if recipe != nil {
+		if err = recipe.finish(binary); err != nil {
+			return "", err
+		}
+	}
 	return binary, nil
 }
 func Run(planPath string, args []string, sdkRoot string) (int, error) {
 	plan, err := policy.Load(planPath)
 	if err != nil {
 		return 1, err
+	}
+	if len(args) > 0 && (args[0] == "--run" || args[0] == "--run-baseline") {
+		if len(args) < 2 {
+			return 1, fmt.Errorf("go artifact launch requires DIRECTORY [APP_ARGS...]")
+		}
+		adapter, err := os.Executable()
+		if err != nil {
+			return 1, err
+		}
+		return launchBundle(planPath, args[1], args[2:], adapter, args[0] == "--run-baseline")
 	}
 	root, err := os.Getwd()
 	if err != nil {
@@ -217,9 +261,9 @@ func Run(planPath string, args []string, sdkRoot string) (int, error) {
 	}
 	if len(args) == 1 && args[0] == "--doctor" {
 		if err = Doctor(goTool, root); err == nil {
-			fmt.Println("Go: compiler overlays, deferred function probes and OTLP/HTTP metrics available")
+			fmt.Println("Go: compiler overlays, deferred probes, OTLP/HTTP metrics and retained build/run bundles available")
 			if plan.Traces.Enabled {
-				fmt.Println("Go: sampled function spans with private same-goroutine parenting available; qualified on Go 1.27.1")
+				fmt.Println("Go: sampled function spans with private same-goroutine parenting available; qualified on Go 1.27.2")
 			}
 		}
 		return 0, err
@@ -246,6 +290,16 @@ func Run(planPath string, args []string, sdkRoot string) (int, error) {
 			return 1, err
 		}
 		return 0, json.NewEncoder(os.Stdout).Encode(map[string]any{"language": "go", "functions": functions})
+	}
+	if len(args) > 0 && args[0] == "--build" {
+		if len(args) != 4 || args[2] != "--output-dir" || strings.HasPrefix(args[1], "-") {
+			return 1, fmt.Errorf("go build-only requires --build SOURCE.go|PACKAGE --output-dir DIRECTORY")
+		}
+		adapter, err := os.Executable()
+		if err != nil {
+			return 1, err
+		}
+		return 0, buildBundle(planPath, args[1], args[3], root, sdkRoot, goTool, adapter)
 	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		return 1, fmt.Errorf("go requires SOURCE.go or PACKAGE [APP_ARGS...]")
