@@ -62,7 +62,11 @@ impl Definitions<'_> {
             return Ok(None);
         }
         let source = fs::read_to_string(&file)?;
-        if format!("{:x}", Sha256::digest(source.as_bytes())) != self.request.sources[&file]
+        if Sha256::digest(source.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            != self.request.sources[&file]
             || !location.file.src_hash.matches(&source)
         {
             bail!("original Rust source differs from the compiler's loaded input");
@@ -192,7 +196,11 @@ impl Definitions<'_> {
             return Ok(None);
         }
         let source = fs::read_to_string(&file)?;
-        if format!("{:x}", Sha256::digest(source.as_bytes())) != request.sources[&file]
+        if Sha256::digest(source.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            != request.sources[&file]
             || !location.file.src_hash.matches(&source)
         {
             bail!("original Rust source differs from the compiler's loaded input");

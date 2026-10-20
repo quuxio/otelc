@@ -29,7 +29,11 @@ pub(crate) fn hash(path: &Path) -> Result<String> {
         }
         digest.update(&bytes[..count]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,7 +99,10 @@ impl Profile {
                 bail!("Rust compiler SDK/pass/frontend fingerprint mismatch; rebuild the compiler profile");
             }
         }
-        profile.fingerprint = format!("{:x}", Sha256::digest(&bytes));
+        profile.fingerprint = Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         profile.bytes = bytes;
         Ok(profile)
     }
@@ -206,6 +213,25 @@ mod tests {
             assert!(Profile::validate_version(true, &changed).is_err());
         }
         assert!(Profile::validate_version(false, &version).is_err());
+    }
+
+    #[test]
+    fn sha256_fingerprints_keep_the_canonical_lowercase_encoding() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("input");
+        for (bytes, expected) in [
+            (
+                b"".as_slice(),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                b"abc".as_slice(),
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(hash(&path).unwrap(), expected);
+        }
     }
 
     #[test]

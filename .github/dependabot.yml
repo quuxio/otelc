@@ -17,13 +17,15 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: cargo
-    directory: /
+    directories:
+      - /
+      - /native/rust/frontend
+      - /native/rust/mir
     schedule:
       interval: weekly
-  - package-ecosystem: cargo
-    directory: /native/rust/frontend
-    schedule:
-      interval: weekly
+    groups:
+      rust-dependencies:
+        patterns: ["*"]
   - package-ecosystem: maven
     directory: /adapters/java
     schedule:

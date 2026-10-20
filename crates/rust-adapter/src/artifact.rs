@@ -51,7 +51,11 @@ fn hash(path: &Path) -> Result<String> {
         }
         digest.update(&bytes[..count]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 fn read(path: &Path) -> Result<Vec<u8>> {
@@ -182,20 +186,27 @@ pub(crate) fn launch(
     }
     if let Some(hook) = &metadata.compiler_hook {
         let inventory = read(&directory.join("inventory.json"))?;
-        if format!("{:x}", Sha256::digest(&inventory)) != hook.inventory_sha256 {
+        if Sha256::digest(&inventory)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            != hook.inventory_sha256
+        {
             bail!("Rust compiler inventory fingerprint mismatch");
         }
-        if format!(
-            "{:x}",
-            Sha256::digest(read(&directory.join("resolved.json"))?)
-        ) != hook.resolved_sha256
+        if Sha256::digest(read(&directory.join("resolved.json"))?)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            != hook.resolved_sha256
         {
             bail!("Rust resolved compiler provenance fingerprint mismatch");
         }
-        if format!(
-            "{:x}",
-            Sha256::digest(read(&directory.join("profile.json"))?)
-        ) != hook.profile_sha256
+        if Sha256::digest(read(&directory.join("profile.json"))?)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            != hook.profile_sha256
         {
             bail!("Rust compiler profile fingerprint mismatch");
         }
@@ -209,7 +220,12 @@ pub(crate) fn launch(
     }
     let stored_path = directory.join("plan.json");
     let stored_bytes = read(&stored_path)?;
-    if format!("{:x}", Sha256::digest(&stored_bytes)) != metadata.plan_sha256 {
+    if Sha256::digest(&stored_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        != metadata.plan_sha256
+    {
         bail!("Rust artifact policy fingerprint mismatch");
     }
     let stored: serde_json::Value = serde_json::from_slice(&stored_bytes)?;
