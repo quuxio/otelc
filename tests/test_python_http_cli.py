@@ -1,5 +1,7 @@
 """Exercise public policies and two unchanged apps through the actual CLI."""
 import hashlib
+import contextlib
+import io
 import json
 import os
 import select
@@ -11,9 +13,27 @@ import unittest
 from pathlib import Path
 
 from test_python_spans import ExportTraceServiceRequest, ROOT, receiver
+from test_python_spans import trace_plan
+from test_python_adapter import launch
 
 
 class PythonHTTPCLITests(unittest.TestCase):
+    def test_doctor_checks_stdlib_http_support_and_refuses_an_unknown_binding(self):
+        policy = trace_plan()
+        policy['propagation'] = {'http': True}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'plan.json'
+            path.write_text(json.dumps(policy))
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(0, launch.main([str(path), '--doctor']))
+            self.assertIn('function spans', output.getvalue())
+            self.assertIn('HTTPConnection/HTTPSConnection/urllib and BaseHTTPRequestHandler context',
+                          output.getvalue())
+            policy['http_integration'] = 'unsupported'
+            path.write_text(json.dumps(policy))
+            with self.assertRaisesRegex(ValueError, '^Python HTTP integration requires stdlib$'):
+                launch.main([str(path), '--doctor'])
+
     def run_pair(self, folder: Path, environment: dict[str, str],
                  instrumented: bool, path: str, sampled: bool = True) -> dict[str, object]:
         with socket.socket() as reservation:
