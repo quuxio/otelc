@@ -11,8 +11,8 @@ from opentelemetry.trace import INVALID_SPAN_CONTEXT, SpanContext, TraceFlags, T
 class PythonCarrierTests(unittest.TestCase):
     def test_shared_language_vectors_do_not_log_header_payloads(self):
         fixture = json.loads((Path(__file__).parent / 'fixtures/trace-context.json').read_text())
-        self.assertEqual(fixture['schema_version'], 1)
-        self.assertEqual(len({case['name'] for case in fixture['cases']}), len(fixture['cases']))
+        self.assertEqual(1, fixture['schema_version'])
+        self.assertEqual(len(fixture['cases']), len({case['name'] for case in fixture['cases']}))
         for case in fixture['cases']:
             with self.subTest(case=case['name']), self.assertNoLogs('opentelemetry.trace.span', level='WARNING'):
                 context = extract(case['traceparent'], case['tracestate'])
@@ -22,14 +22,14 @@ class PythonCarrierTests(unittest.TestCase):
                     continue
                 actual_trace_id = f'{context.trace_id:032x}'
                 actual_parent_id = f'{context.span_id:016x}'
-                self.assertEqual(actual_trace_id, expected['trace_id'])
-                self.assertEqual(actual_parent_id, expected['parent_id'])
-                self.assertEqual(int(context.trace_flags), expected['flags'])
+                self.assertEqual(expected['trace_id'], actual_trace_id)
+                self.assertEqual(expected['parent_id'], actual_parent_id)
+                self.assertEqual(expected['flags'], int(context.trace_flags))
                 outgoing = {'traceparent': f"00-{expected['trace_id']}-{expected['parent_id']}-{expected['flags']:02x}"}
                 if expected['tracestate'] is not None:
                     outgoing['tracestate'] = expected['tracestate']
-                self.assertEqual(inject(context), outgoing)
-                self.assertEqual(inject(extract([outgoing['traceparent']], [outgoing.get('tracestate', '')])), outgoing)
+                self.assertEqual(outgoing, inject(context))
+                self.assertEqual(outgoing, inject(extract([outgoing['traceparent']], [outgoing.get('tracestate', '')])))
 
     def test_invalid_python_values_and_sdk_contexts_are_not_stringified(self):
         self.assertTrue(ADAPTER.is_dir())
@@ -61,7 +61,7 @@ class PythonCarrierTests(unittest.TestCase):
         context = SpanContext(1, 2, False, TraceFlags(0xff), TraceState(pairs))
         result = inject(from_sdk(context))
         self.assertTrue(result['traceparent'].endswith('-03'))
-        self.assertEqual(result['tracestate'], ','.join(f'{key}={value}' for key, value in pairs[:22]))
+        self.assertEqual(','.join(f'{key}={value}' for key, value in pairs[:22]), result['tracestate'])
 
     def test_public_context_cannot_emit_invalid_identity_or_state(self):
         for arguments in ((0, 2, 1, None), (1 << 128, 2, 1, None),
@@ -72,5 +72,5 @@ class PythonCarrierTests(unittest.TestCase):
                           (1, 2, 1, 'a=' + 'x' * 257)):
             with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                 Context(*arguments)
-        self.assertEqual(inject(Context(1, 2, 0, None)), {
-            'traceparent': '00-' + '0' * 31 + '1-' + '0' * 15 + '2-00'})
+        self.assertEqual({'traceparent': '00-' + '0' * 31 + '1-' + '0' * 15 + '2-00'},
+                         inject(Context(1, 2, 0, None)))
