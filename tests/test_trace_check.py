@@ -176,10 +176,12 @@ class TraceCheckTests(unittest.TestCase):
                 Path(environment['OTELC_REPORT_PATH']).write_text(json.dumps(report))
                 self.assertNotIn('OTEL_EXPORTER_OTLP_ENDPOINT', environment)
                 self.assertEqual(environment['OTEL_SERVICE_NAME'], 'otelc-python-trace-check-run')
+                self.assertEqual(environment.get('OTELC_ADAPTER_ROOT'), str(root / 'adapters'))
+                self.assertEqual(environment['OTELC_PYTHON'], check.sys.executable)
                 if changed: (root / 'examples/apps/python_trace_app.py').write_text('changed')
                 return (b'wrong' if mismatch else b'42', b'extra' if stderr_mismatch else b'')
             return (b'42', b'')
-        with patch.object(check, 'commands', return_value=(['plain'], ['instrumented'])), patch.object(check, 'execute', side_effect=execute), patch.object(check, 'wait_for_storage', return_value=[{'trace_id': TRACE, 'spans': []}]), patch.dict(os.environ, {'OTEL_EXPORTER_OTLP_ENDPOINT': 'ambient'}):
+        with patch.object(check, 'commands', return_value=(['plain'], ['instrumented'])), patch.object(check, 'execute', side_effect=execute), patch.object(check, 'wait_for_storage', return_value=[{'trace_id': TRACE, 'spans': []}]), patch.dict(os.environ, {'OTEL_EXPORTER_OTLP_ENDPOINT': 'ambient', 'OTELC_ADAPTER_ROOT': '/decoy/adapters', 'OTELC_PYTHON': '/decoy/python'}):
             return check.run_example(root, root / 'output', 'python', 60, 'run')
 
     def test_examples_compare_results_hash_sources_and_never_hide_mutation(self):

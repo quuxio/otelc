@@ -224,7 +224,7 @@ def run_example(root, output, language, timeout, run_id, workload="functions"):
     environment = {key: value for key, value in os.environ.items() if not key.startswith(("OTEL_", "OTELC_"))}
     # Preserve only explicit toolchain choices, never ambient signal configuration.
     environment.update({key: value for key, value in os.environ.items() if key in ("OTELC_NODE", "OTELC_JAVA", "OTELC_GO", "OTELC_RUSTC")})
-    environment.update(OTELC_PYTHON=sys.executable, OTEL_SERVICE_NAME=service)
+    environment.update(OTELC_PYTHON=sys.executable, OTELC_ADAPTER_ROOT=str(root / "adapters"), OTEL_SERVICE_NAME=service)
     report_path = folder / "runtime.json"
     report_path.unlink(missing_ok=True)
     try:
