@@ -1,11 +1,15 @@
-"""Private standard-library HTTP request scopes; no application object registry."""
+"""Private standard-library HTTP scopes without owning application objects."""
 import functools
 import email.message
 import http.client
 import http.server
+import ipaddress
+import socket
 import socketserver
+import ssl
 import threading
 import time
+import urllib.parse
 
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
@@ -16,6 +20,7 @@ from .traces import SUPPRESSED
 
 _HANDLER_DICT = socketserver.BaseRequestHandler.__dict__['__dict__']
 _MESSAGE_DICT = email.message.Message.__dict__['__dict__']
+_SOCKET_ADDRESS = socket.socket.getsockname
 
 
 def request_fields(handler):
@@ -26,7 +31,7 @@ def request_fields(handler):
     values = member(_MESSAGE_DICT.__get__(headers, type(headers)), '_headers')
     if type(values) is not list or len(values) > 100:
         return None
-    parents, states = [], []
+    parents, states, hosts = [], [], []
     for pair in values:
         if (type(pair) is not tuple or len(pair) != 2
                 or type(pair[0]) is not str or type(pair[1]) is not str):
@@ -36,33 +41,79 @@ def request_fields(handler):
             parents.append(value)
         elif name.lower() == 'tracestate':
             states.append(value)
-    return parents, states
+        elif name.lower() == 'host':
+            hosts.append(value)
+    return parents, states, hosts
 
 
 class HTTPContext:
     """Own bounded local HTTP trees independently of distributed trace IDs."""
 
     def __init__(self, runtime):
+        from .http_client_context import HTTPClientContext
         self.runtime = runtime
         self.local = threading.local()
         self.active = {}
         self.previous = {}
         self.wrappers = {}
         self.closed = False
+        self.clients = HTTPClientContext(self)
+        self.targets = [urllib.parse.urlsplit(endpoint) for endpoint in
+                        (runtime.plan['metrics_endpoint'], runtime.plan['trace_export']['endpoint'])]
 
     def current(self):
         return getattr(self.local, 'identity', None)
 
     def boundary(self, code):
-        return any(code is wrapper.__code__ for wrapper in self.wrappers.values())
+        return (any(code is wrapper.__code__ for wrapper in self.wrappers.values())
+                or self.clients.boundary(code))
 
     @property
     def active_count(self):
-        return len(self.active)
+        return len(self.active) + self.clients.active_count
 
     def loss(self, reason):
         with self.runtime.lock:
             self.runtime.traces.losses[reason] += 1
+
+    def telemetry_request(self, handler, hosts):
+        """Match the configured signal endpoint, not arbitrary paths or DNS guesses."""
+        namespace = _HANDLER_DICT.__get__(handler, type(handler))
+        path, connection = member(namespace, 'path'), member(namespace, 'connection')
+        if type(path) is not str or type(connection) not in (socket.socket, ssl.SSLSocket):
+            return False
+        try:
+            address = _SOCKET_ADDRESS(connection)
+            local = ipaddress.ip_address(address[0])
+        except (OSError, ValueError):
+            return False
+        scheme = 'https' if type(connection) is ssl.SSLSocket else 'http'
+        authority = None
+        if len(hosts) == 1 and len(hosts[0]) <= 1024:
+            try:
+                candidate = urllib.parse.urlsplit('//' + hosts[0])
+                if not candidate.path and not candidate.query and not candidate.fragment and candidate.username is None:
+                    authority = (candidate.hostname, candidate.port or (443 if scheme == 'https' else 80))
+            except ValueError:
+                pass  # Malformed application Host fields cannot identify an OTLP sink.
+        for target in self.targets:
+            port = target.port or (443 if target.scheme == 'https' else 80)
+            if scheme != target.scheme or address[1] != port or path != (target.path or '/'):
+                continue
+            if authority is not None:
+                if authority == (target.hostname, port):
+                    return True
+                continue
+            if hosts:
+                continue
+            if target.hostname == 'localhost' and local.is_loopback:
+                return True
+            try:
+                if local == ipaddress.ip_address(target.hostname):
+                    return True
+            except ValueError:
+                pass  # External DNS names are matched through the actual Host field.
+        return False
 
     def enter_server(self, handler, entry):
         if self.closed or self.runtime.closed:
@@ -72,8 +123,14 @@ class HTTPContext:
             self.loss('http_unsupported_headers')
             self.bind(entry, SUPPRESSED)
             return
-        remote = extract(*fields)
+        if self.telemetry_request(handler, fields[2]):
+            self.bind(entry, SUPPRESSED)
+            return
+        remote = extract(*fields[:2])
         with self.runtime.lock:
+            if self.closed or self.runtime.closed:
+                self.bind(entry, SUPPRESSED)
+                return
             if len(self.runtime.pending) + self.active_count >= self.runtime.plan['runtime']['max_active_calls']:
                 self.loss('http_capacity')
                 identity = SUPPRESSED
@@ -183,10 +240,16 @@ class HTTPContext:
         for name, wrapper in self.wrappers.items():
             wrapper._otelc_http_context = True
             setattr(handler, name, wrapper)
+        try:
+            self.clients.install()
+        except BaseException:
+            self.close()
+            raise
         self.runtime.http = self
 
     def close(self):
         self.closed = True
+        self.clients.close()
         for name, wrapper in self.wrappers.items():
             if getattr(http.server.BaseHTTPRequestHandler, name) is wrapper:
                 setattr(http.server.BaseHTTPRequestHandler, name, self.previous[name])

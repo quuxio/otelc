@@ -68,12 +68,14 @@ def serve(handler):
 
 
 class PythonHTTPContextTests(PythonSpanHarness, unittest.TestCase):
-    def monitored_server(self, policy=None):
+    def monitored_server(self, policy=None, client_hooks=False):
         policy = policy or trace_plan()
         policy['propagation'] = {'http': True, 'tasks': policy.get('propagation', {}).get('tasks', False)}
         policy['function_matchers']['exclude'] = [r'(?-u).*\.log_message$']
         source = 'from http.server import BaseHTTPRequestHandler\n' + SOURCE
         runtime, metrics, capture, namespace, monitor = self.monitored(source, policy)
+        if not client_hooks:
+            monitor.http.clients.close()
         namespace['original_error'] = ValueError('original handler exception')
         return runtime, capture, namespace, monitor
 

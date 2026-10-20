@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.exporter.otlp.proto.http import Compression
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExportResult
@@ -18,6 +17,7 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from opentelemetry.trace import Link, NonRecordingSpan, SpanContext as SDKSpanContext, SpanKind, Status, StatusCode, TraceFlags, TraceState
 
 from .carrier import Context as WireContext
+from .trace_wire import TraceExporter
 from .telemetry import Session, export_headers
 
 
@@ -127,7 +127,7 @@ class TraceStore:
                                                                or plan.get('propagation', {}).get('http')) else 0,
                                    max_span_attribute_length=1024))
         self.tracer = self.provider.get_tracer("quux.otelc", "0.1.0")
-        self.delegate = delegate if delegate is not None else OTLPSpanExporter(
+        self.delegate = delegate if delegate is not None else TraceExporter(
             endpoint=export["endpoint"], headers=self.headers,
             timeout=min(timeout, plan["runtime"]["shutdown_timeout_ms"]) / 1000,
             session=TraceSession(self), compression=Compression.NoCompression,
@@ -148,7 +148,8 @@ class TraceStore:
             return
         identity = span.get_span_context()
         tree = Tree(identity.span_id, 0, span.start_time, nodes={identity.span_id: span},
-                    active=0, closed=True, bytes=len(span.name.encode()) * 2 + 512)
+                    active=0, closed=True, bytes=len(span.name.encode()) * 2 + 512
+                    + sum(len(link.context.trace_state.to_header()) + 64 for link in span.links))
         self.retained += 1
         self.completed += 1
         self.ready.append(tree)
@@ -209,7 +210,7 @@ class TraceStore:
                 return self.reject(parent, "invalid")
             tree.active += 1
         tree.nodes[identity.span_id] = span
-        tree.bytes += len(name.encode()) * 2 + 256
+        tree.bytes += len(name.encode()) * 2 + 512 + len(identity.trace_state.to_header())
         self.retained += 1
         return SpanContext(identity, True, local_root)
 

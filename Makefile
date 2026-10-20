@@ -111,6 +111,8 @@ python-check:
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/traces.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/carrier.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/http_context.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/http_client_context.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/trace_wire.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/task_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/worker_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/lifetimes.py' --fail-under=80

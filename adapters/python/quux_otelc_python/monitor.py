@@ -217,9 +217,9 @@ class Monitor:
             if self.runtime.traces is None:
                 self.close()
                 raise ValueError('Python HTTP propagation requires tracing')
-            self.http = HTTPContext(self.runtime)
-            monitoring.register_callback(self.tool, events.EXCEPTION_HANDLED, self.handled_http_exception)
             try:
+                self.http = HTTPContext(self.runtime)
+                monitoring.register_callback(self.tool, events.EXCEPTION_HANDLED, self.handled_http_exception)
                 self.http.install()
             except BaseException:
                 self.close()

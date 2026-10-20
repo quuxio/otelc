@@ -17,7 +17,7 @@ from test_python_adapter import Capture, ROOT, plan
 from quux_otelc_python.monitor import Monitor
 from quux_otelc_python.telemetry import Runtime
 from quux_otelc_python.traces import TraceSession
-from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from quux_otelc_python.trace_wire import encode_spans
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
