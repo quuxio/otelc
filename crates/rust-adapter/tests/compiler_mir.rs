@@ -506,3 +506,128 @@ fn cargo_outside_project_root_is_refused_before_build_or_execution() {
         assert_eq!(fs::read_to_string(project.join(name)).unwrap(), text);
     }
 }
+
+#[test]
+fn cargo_target_named_project_and_source_paths_keep_their_probes() {
+    let temporary = tempfile::tempdir().unwrap();
+    for (project, entry) in [
+        ("target/project", "src/main.rs"),
+        ("ordinary", "target/input.rs"),
+    ] {
+        let root = temporary.path().join(project);
+        let input = root.join(entry);
+        fs::create_dir_all(input.parent().unwrap()).unwrap();
+        let manifest = format!("[package]\nname='path-pair'\nversion='0.1.0'\nedition='2024'\n[[bin]]\nname='path-pair'\npath={entry:?}\n");
+        let lock = "version=4\n[[package]]\nname='path-pair'\nversion='0.1.0'\n";
+        let source = "fn selected_path()->(&'static str,u32){(file!(),column!())}\nfn main(){println!(\"{:?}\",selected_path());eprintln!(\"application stderr\");}\n";
+        fs::write(root.join("Cargo.toml"), &manifest).unwrap();
+        fs::write(root.join("Cargo.lock"), lock).unwrap();
+        fs::write(&input, source).unwrap();
+        success(
+            Command::new("cargo")
+                .current_dir(&root)
+                .args(["build", "--locked", "--offline", "--target-dir"])
+                .arg(root.join("plain-target"))
+                .bounded_output(),
+        );
+        let plain = success(
+            Command::new(root.join("plain-target/debug/path-pair"))
+                .current_dir(&root)
+                .bounded_output(),
+        );
+        let receiver = Receiver::new();
+        let plan = policy(&root, &receiver);
+        let measured = success(command(&root, &plan).arg("Cargo.toml").bounded_output());
+        assert_eq!(plain.stdout, measured.stdout);
+        assert_eq!(plain.stderr, b"application stderr\n");
+        assert!(measured.stderr.ends_with(&plain.stderr));
+        let report: Value =
+            serde_json::from_slice(&fs::read(root.join("report.json")).unwrap()).unwrap();
+        assert_eq!(report["function_calls"], 1);
+        assert_eq!(receiver.spans().len(), 1);
+        assert_eq!(fs::read_to_string(&input).unwrap(), source);
+        assert_eq!(
+            fs::read_to_string(root.join("Cargo.toml")).unwrap(),
+            manifest
+        );
+        assert_eq!(fs::read_to_string(root.join("Cargo.lock")).unwrap(), lock);
+    }
+}
+
+#[test]
+fn cargo_observed_output_directory_is_refused_before_application_execution() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    fs::create_dir(root.join("src")).unwrap();
+    let files = [
+        ("Cargo.toml", "[package]\nname='output-path'\nversion='0.1.0'\nedition='2024'\n"),
+        ("Cargo.lock", "version=4\n[[package]]\nname='output-path'\nversion='0.1.0'\n"),
+        ("build.rs", "fn main(){}\n"),
+        ("src/main.rs", "fn selected_path()->&'static str{env!(\"OUT_DIR\")}\nfn main(){std::fs::write(\"application-ran\",\"yes\").unwrap();println!(\"{}\",selected_path());}\n"),
+    ];
+    for (name, text) in files {
+        fs::write(root.join(name), text).unwrap();
+    }
+    success(
+        Command::new("cargo")
+            .current_dir(root)
+            .args(["build", "--locked", "--offline", "--target-dir"])
+            .arg(root.join("plain-target"))
+            .bounded_output(),
+    );
+    let baseline = success(
+        Command::new(root.join("plain-target/debug/output-path"))
+            .current_dir(root)
+            .bounded_output(),
+    );
+    assert!(String::from_utf8_lossy(&baseline.stdout).contains("plain-target"));
+    fs::remove_file(root.join("application-ran")).unwrap();
+    let receiver = Receiver::new();
+    let plan = policy(root, &receiver);
+    let measured = command(root, &plan).arg("Cargo.toml").bounded_output();
+    assert!(!measured.status.success());
+    assert!(String::from_utf8_lossy(&measured.stderr).contains(
+        "Cargo OUT_DIR-dependent source requires original build-output path qualification"
+    ));
+    assert!(measured.stdout.is_empty());
+    assert!(!root.join("application-ran").exists());
+    assert!(!root.join("report.json").exists());
+    assert!(receiver.spans().is_empty());
+    for (name, text) in files {
+        assert_eq!(fs::read_to_string(root.join(name)).unwrap(), text);
+    }
+}
+
+#[test]
+fn standalone_explicit_output_directory_environment_keeps_its_value() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let source = "fn selected_path()->&'static str{env!(\"OUT_DIR\")}\nfn main(){println!(\"{}\",selected_path());}\n";
+    let value = "explicit-original-output-value";
+    fs::write(root.join("app.rs"), source).unwrap();
+    success(
+        Command::new("rustc")
+            .current_dir(root)
+            .env("OUT_DIR", value)
+            .args(["app.rs", "--edition=2024", "-O", "-g", "-o", "plain"])
+            .bounded_output(),
+    );
+    let baseline = success(
+        Command::new(root.join("plain"))
+            .current_dir(root)
+            .bounded_output(),
+    );
+    let receiver = Receiver::new();
+    let plan = policy(root, &receiver);
+    let measured = success(
+        command(root, &plan)
+            .env("OUT_DIR", value)
+            .arg("app.rs")
+            .bounded_output(),
+    );
+    assert_eq!(baseline.stdout, measured.stdout);
+    assert_eq!(baseline.stderr, measured.stderr);
+    assert_eq!(measured.stdout, format!("{value}\n").as_bytes());
+    assert_eq!(receiver.spans().len(), 1);
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}

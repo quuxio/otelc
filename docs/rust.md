@@ -54,6 +54,8 @@ From an existing Cargo project, supply an absolute CLI and configuration path:
 
 An existing lockfile is required. The manifest must be inside the current project directory; an outside manifest is refused before Cargo builds or runs the application. Cargo keeps the original manifests, dependency resolution, build scripts and compiler flags. Project crates are compiled from their original paths with compiler-owned probes; registry and external dependency sources remain untouched. Build artefacts and compiler-request records are temporary. Cargo compilation diagnostics remain on stderr before application output. Multiple binary targets require `--bin NAME`. Application arguments and exit codes pass through.
 
+Project crates with a compiler-recorded dependency on Cargo's `OUT_DIR` are refused before application execution. The private build directory can otherwise change observable compile-time values. Original build-output identities, generated sources outside the project root and arbitrary dependency/build-script path observations require separate qualification. This refusal is an interim boundary, not completed support for those Cargo inputs. Standalone sources retain explicitly supplied environment values. Project ancestors or source directories named `target` do not disable instrumentation.
+
 Compact async bodies, including a return immediately before the closing brace, preserve their original delimiters and concrete return coercions. The [compact async fixture](../examples/apps/rust_async_compact.rs) covers primitive, borrowed, function-pointer and trait-object results, empty bodies and explicit returns.
 
 ## Source, policy and optional annotations
@@ -100,6 +102,8 @@ It prints `30` and records two calls. Unknown instrumentation comments fail. A b
 The source shown above is also the source read by the instrumented compiler. Probe entry, normal return and unwind operations are inserted into typed MIR, after source parsing and macro expansion. Original `file!()`, `line!()`, `column!()` and tracked caller locations are preserved. A compiler-inserted main boundary starts and closes the SDK even when main timing is excluded. Exit observations include cleanup inside the original function's MIR; later destruction of a closure object is a separate boundary.
 
 Inspection uses the same compilation path in a private temporary directory. Its schema-3 inventory records original declarations, compiler names, actual emitted symbols, source hashes and selection. It never executes `main` or exports telemetry. Compilation and a matching compiler profile are required. Configured insertion does not create annotated application files; existing adjacent annotations continue to guide selection.
+
+An async source owner can have separate emitted constructor and coroutine-body symbols; inlining can remove some instances. `selected` records source-policy intent. It does not mean every listed symbol is timed: constructing an unpolled future is deliberately unmeasured. Symbol counts do not establish invocation counts, probe roles or completed observations, and this inventory is not a complete drop-glue map. Use decoded runtime evidence for those observations; an invocation-scoped witness API remains unavailable.
 
 ## Live metrics and latency
 

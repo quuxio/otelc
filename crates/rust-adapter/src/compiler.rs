@@ -61,10 +61,9 @@ pub fn wrapper(args: Vec<OsString>) -> Result<i32> {
     }) {
         let original = PathBuf::from(&options[index]);
         let absolute = original.canonicalize()?;
+        // Build outputs already use a private CARGO_TARGET_DIR. A directory
+        // named target in an original source path is not a build-script marker.
         if absolute.starts_with(&root)
-            && !absolute
-                .components()
-                .any(|part| part.as_os_str() == "target")
             && !options
                 .windows(2)
                 .any(|values| values[0] == "--crate-name" && values[1] == "build_script_build")

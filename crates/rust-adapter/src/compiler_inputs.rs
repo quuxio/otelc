@@ -97,7 +97,17 @@ pub(crate) fn discover_arguments(
     if bytes.len() > 4 * 1024 * 1024 {
         bail!("Rust compiler dependency information exceeds 4 MiB");
     }
-    let inputs = dependencies(std::str::from_utf8(&bytes)?, root)?;
+    let dependency_info = std::str::from_utf8(&bytes)?;
+    if std::env::var_os("OTELC_RUST_ROOT").is_some()
+        && dependency_info
+            .lines()
+            .any(|line| line.starts_with("# env-dep:OUT_DIR="))
+    {
+        // Cargo's private target directory changes this observable value.
+        // Check only the dependency key; never retain its application value.
+        bail!("Cargo OUT_DIR-dependent source requires original build-output path qualification");
+    }
+    let inputs = dependencies(dependency_info, root)?;
     // Do not retain env-dep comments: env! inputs can contain application secrets.
     let argv = arguments
         .iter()
