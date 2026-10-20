@@ -53,7 +53,7 @@ The callback backend provides normal-return function timing using Clang's `-fins
 
 ## Local workflow
 
-The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Build the CLI and runtime together, then use the supplied local fixture configuration:
+The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Go builds [refuse SDK resolution that changes application language or existing dependencies](docs/go.md#build-and-runtime-boundaries); older/incompatible module graphs require separate dependency isolation. Build the CLI and runtime together, then use the supplied local fixture configuration:
 
 ```sh
 make build
@@ -118,6 +118,7 @@ Start with the [developer 101](docs/developer-101.md) for source examples, confi
 | [Build the internal C/C++ examples](docs/local-implementation.md) | `make examples` |
 | [Compare plain, probes-disabled and metrics-enabled builds](docs/benchmarks.md) | `make benchmark` |
 | [Measure metrics off/on in the same process](docs/benchmarks.md#live-metrics-latency-in-one-process) | `make benchmark-live` |
+| [Reuse ordinary and instrumented Go executables](docs/go-builds.md) | `go --build`, then `go --run-baseline` / `go --run` through the CLI |
 | [Verify stored function and worker traces](docs/traces.md) | `make trace-check`; add `TRACE_CHECK_ARGS='--workload tasks'` for Python/Java workers |
 
 Open the [Grafana dashboard](http://localhost:3000/d/otelc-local) after starting the stack. For exception-enabled C++, select `examples/exceptions.toml` with the matched LLVM backend. Benchmark reports retain raw samples and telemetry-loss evidence.
