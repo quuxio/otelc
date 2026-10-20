@@ -186,5 +186,6 @@ class CoverageTests(unittest.TestCase):
                 rust_coverage.enforce_rust_file_coverage(missing_component)
         with self.assertRaisesRegex(ValueError, "no instrumented"):
             rust_coverage.enforce_rust_file_coverage("SF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\n")
+        no_carrier = good.replace("SF:/tmp/crates/export/src/carrier.rs\nDA:1,1\n", "")
         with self.assertRaisesRegex(ValueError, "no instrumented"):
-            rust_coverage.enforce_rust_file_coverage(good.replace("SF:/tmp/crates/export/src/carrier.rs\nDA:1,1\n", ""))
+            rust_coverage.enforce_rust_file_coverage(no_carrier)
