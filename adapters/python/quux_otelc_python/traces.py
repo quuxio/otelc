@@ -122,7 +122,8 @@ class TraceStore:
         self.provider = TracerProvider(
             resource=resource, sampler=ParentBased(TraceIdRatioBased(ratio)),
             shutdown_on_exit=False,
-            span_limits=SpanLimits(max_attributes=3 if plan.get('lifetimes', {}).get('enabled') else 2,
+            span_limits=SpanLimits(max_attributes=4 if runtime.witness_state is not None else
+                                   3 if plan.get('lifetimes', {}).get('enabled') else 2,
                                    max_events=0, max_links=1 if (plan.get('lifetimes', {}).get('enabled')
                                                                or plan.get('propagation', {}).get('http')) else 0,
                                    max_span_attribute_length=1024))
@@ -213,6 +214,21 @@ class TraceStore:
         tree.bytes += len(name.encode()) * 2 + 512 + len(identity.trace_state.to_header())
         self.retained += 1
         return SpanContext(identity, True, local_root)
+
+    def bind_witness(self, identity, scope_id: str, probe_id: str) -> bool:
+        """Tag a retained actual SDK span; rejected trees cannot become witnesses."""
+        if self.runtime.witness_state is None or identity is None or not identity.sampled:
+            return False
+        tree = self.roots.get(identity.local_root)
+        if tree is None or tree.invalid:
+            return False
+        span = tree.nodes.get(identity.context.span_id)
+        if span is None or span.end_time is not None:
+            return False
+        span.set_attribute('otelc.scope.id', scope_id)
+        span.set_attribute('otelc.probe.id', probe_id)
+        tree.bytes += len(scope_id) + len(probe_id) + 64
+        return True
 
     def acquire(self, parent):
         """Reserve a continuation before its creator can finish; caller holds the runtime lock."""

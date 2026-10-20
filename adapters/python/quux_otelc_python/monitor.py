@@ -40,10 +40,11 @@ def annotations(path: Path) -> dict[int, str]:
 
 
 class Monitor:
-    def __init__(self, plan: dict, runtime):
+    def __init__(self, plan: dict, runtime, *, witness=None):
         if not hasattr(sys, "monitoring"):
             raise ValueError("Python instrumentation requires CPython 3.12+")
         self.runtime = runtime
+        self.witness = witness
         self.plan = plan
         self.root = Path.cwd().resolve()
         self.protected = Path(__file__).resolve().parents[1]
@@ -74,6 +75,7 @@ class Monitor:
         return display if self.functions.accepts(display, tag == "otelc.instrument") else None
 
     def start(self, code, _):
+        witness_event = self.witness.entered(sys._getframe(1)) if self.witness is not None else None
         if not self.runtime.observing or self.runtime.closed:
             return
         if self.lifetime_code(code):
@@ -82,7 +84,7 @@ class Monitor:
         if entry is None:
             name = self.display_name(code)
             if name is None:
-                return None if self.lifetime_code(code) else sys.monitoring.DISABLE
+                return None if (self.lifetime_code(code) or self.witness is not None and self.witness.watches(code)) else sys.monitoring.DISABLE
             if len(self.names) >= self.plan["runtime"]["max_functions"] or len(name.encode()) > 1024:
                 if self.runtime.traces is not None:
                     self.runtime.reject_observation("function_capacity", self.parent_key(sys._getframe(1)),
@@ -97,8 +99,11 @@ class Monitor:
             name = entry[1]
         frame = sys._getframe(1)
         key = id(frame)
-        self.runtime.enter(key, name, self.parent_key(frame),
-                           self.parent_context())
+        witness_root = witness_event is not None and witness_event.kind == 'wrapper_enter'
+        self.runtime.enter(key, name, None if witness_root else self.parent_key(frame),
+                           None if witness_root else self.parent_context())
+        if self.witness is not None:
+            self.witness.admitted(frame, witness_event)
         if self.context is not None:
             with self.runtime.lock:
                 pending = self.runtime.pending.get(key)
@@ -152,6 +157,9 @@ class Monitor:
                 parent = pending.trace if pending is not None else self.parent_context()
                 self.runtime.lifetimes.returned(frame, code, value, parent)
         if id(code) not in self.names:
+            if self.witness is not None and self.witness.watches(code):
+                self.witness.exited(sys._getframe(1), 'return')
+                return None
             # A selected frame may have started while monitoring was off.
             # Disabling its return location would also silence later admitted
             # invocations of that same code after live enable.
@@ -160,6 +168,8 @@ class Monitor:
         if self.context is not None:
             self.context.suspend(key)
         self.runtime.exit(key, False)
+        if self.witness is not None:
+            self.witness.exited(sys._getframe(1), 'return')
 
     def unwound(self, code, _, exception):
         if self.lifetime_code(code):
@@ -169,6 +179,8 @@ class Monitor:
             if self.context is not None:
                 self.context.suspend(key)
             self.runtime.exit(key, True, isinstance(exception, (GeneratorExit, asyncio.CancelledError)))
+        if self.witness is not None:
+            self.witness.exited(sys._getframe(1), 'exception')
 
     def yielded(self, code, _, value):
         if self.context is not None:
@@ -256,3 +268,5 @@ class Monitor:
         monitoring.free_tool_id(self.tool)
         self.tool = None
         self.runtime.monitor = None
+        if self.witness is not None:
+            self.witness.close()

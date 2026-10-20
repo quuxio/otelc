@@ -217,7 +217,14 @@ class Frame:
 
 
 class Runtime:
-    def __init__(self, plan: dict, delegate=None, trace_delegate=None):
+    def __init__(self, plan: dict, delegate=None, trace_delegate=None, *, witness_state=None):
+        self.witness_state = witness_state
+        if witness_state is not None:
+            from .witness_state import WitnessState
+            if (type(witness_state) is not WitnessState or not plan.get('traces', {}).get('enabled')
+                    or plan.get('lifetimes', {}).get('enabled')
+                    or any(plan.get('propagation', {}).values())):
+                raise ValueError('private synchronous witness requires isolated function tracing')
         self.http = None
         self.closed = False
         self.monitor = None
@@ -249,7 +256,13 @@ class Runtime:
         resource = Resource(identity)
         if plan.get("traces", {}).get("enabled", False):
             from .traces import TraceStore
-            self.traces = TraceStore(self, resource, trace_delegate)
+            trace_resource = resource
+            if witness_state is not None:
+                trace_resource = resource.merge(Resource({
+                    'otelc.runtime.instance': witness_state.runtime_id,
+                    'otelc.build.id': witness_state.bindings.build_id,
+                    'otelc.selection.id': witness_state.bindings.selection_id}))
+            self.traces = TraceStore(self, trace_resource, trace_delegate)
         if delegate is None:
             session = MetricsSession(export_headers(), self)
             delegate = OTLPMetricExporter(endpoint=plan["metrics_endpoint"], headers=session.signal_headers,
@@ -417,6 +430,17 @@ class Runtime:
                 except OSError:
                     pass
 
+    def witness_health(self, *, export_finished=False):
+        """Snapshot actual pending work and losses under the runtime lock."""
+        from .witness_state import Health
+        with self.lock:
+            traces = self.traces
+            return Health(inflight=len(self.pending),
+                          pending=len(traces.leases) if traces else 0,
+                          losses=sum(self.loss.values()) + self.export_loss
+                          + (sum(traces.losses.values()) if traces else 0),
+                          export_finished=export_finished)
+
     def close(self):
         if self.closed:
             return self.report
@@ -443,6 +467,12 @@ class Runtime:
             report["traces"] = self.traces.report()
         if self.lifetimes is not None:
             report['lifetimes'] = self.lifetimes.report()
+        if self.witness_state is not None:
+            health = self.witness_health(export_finished=report['export_finished'])
+            # Queued trees must have drained too; an idle reader alone is not proof.
+            if self.traces.ready:
+                self.witness_state.invalidate('export_failed')
+            self.witness_state.finish(health)
         if path := os.environ.get("OTELC_REPORT_PATH"):
             Path(path).write_text(json.dumps(report, indent=2) + "\n")
         self.report = report

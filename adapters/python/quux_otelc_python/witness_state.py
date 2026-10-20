@@ -140,6 +140,11 @@ class WitnessState:
             self.events.clear()
             return result
 
+    def invalidate(self, reason: str = 'incomplete') -> None:
+        """Record a permanent runtime refusal through the same bounded stream."""
+        with self.lock:
+            self._invalidate(reason)
+
     def rendezvous(self, probe: Probe, context: object) -> bool:
         with self.lock:
             if not self.available or probe is not self.bindings.rendezvous:
