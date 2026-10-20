@@ -126,10 +126,12 @@ class CoverageTests(unittest.TestCase):
     def test_language_coverage_cannot_be_hidden_in_native_aggregate(self):
         good = "SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/crates/process/src/lib.rs\nDA:1,1\n"
         rust_coverage.enforce_rust_adapter_coverage(good)
+        missing_probes = good.replace("probes/src/lib.rs\nDA:1,1", "probes/src/lib.rs\nDA:1,0")
         with self.assertRaisesRegex(ValueError, "rust-probes"):
-            rust_coverage.enforce_rust_adapter_coverage(good.replace("probes/src/lib.rs\nDA:1,1", "probes/src/lib.rs\nDA:1,0"))
+            rust_coverage.enforce_rust_adapter_coverage(missing_probes)
+        missing_process = good.replace("process/src/lib.rs\nDA:1,1", "process/src/lib.rs\nDA:1,0")
         with self.assertRaisesRegex(ValueError, "process"):
-            rust_coverage.enforce_rust_adapter_coverage(good.replace("process/src/lib.rs\nDA:1,1", "process/src/lib.rs\nDA:1,0"))
+            rust_coverage.enforce_rust_adapter_coverage(missing_process)
         with self.assertRaisesRegex(ValueError, "no instrumented"):
             rust_coverage.enforce_rust_adapter_coverage("SF:/tmp/native.rs\nDA:1,1\n")
         rust_coverage.enforce_node_observer_coverage("SF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\n")
@@ -141,17 +143,22 @@ class CoverageTests(unittest.TestCase):
     def test_trace_and_build_artifact_files_have_their_own_coverage_floors(self):
         good = "SF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/compiler_abi.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_inventory.rs\nDA:1,1\n"
         rust_coverage.enforce_rust_file_coverage(good)
+        no_hits = good.replace("DA:1,1", "DA:1,0")
         with self.assertRaisesRegex(ValueError, "trace context"):
-            rust_coverage.enforce_rust_file_coverage(good.replace("DA:1,1", "DA:1,0"))
+            rust_coverage.enforce_rust_file_coverage(no_hits)
+        missing_store = good.replace("/crates/export/src/traces.rs\nDA:1,1", "/crates/export/src/traces.rs\nDA:1,0")
         with self.assertRaisesRegex(ValueError, "trace store"):
-            rust_coverage.enforce_rust_file_coverage(good.replace("/crates/export/src/traces.rs\nDA:1,1", "/crates/export/src/traces.rs\nDA:1,0"))
+            rust_coverage.enforce_rust_file_coverage(missing_store)
+        missing_bridge = good.replace("/crates/runtime/src/traces.rs\nDA:1,1", "/crates/runtime/src/traces.rs\nDA:1,0")
         with self.assertRaisesRegex(ValueError, "Native trace bridge"):
-            rust_coverage.enforce_rust_file_coverage(good.replace("/crates/runtime/src/traces.rs\nDA:1,1", "/crates/runtime/src/traces.rs\nDA:1,0"))
+            rust_coverage.enforce_rust_file_coverage(missing_bridge)
+        missing_artifacts = good.replace("/crates/rust-adapter/src/artifact.rs\nDA:1,1", "/crates/rust-adapter/src/artifact.rs\nDA:1,0")
         with self.assertRaisesRegex(ValueError, "Rust build artifacts"):
-            rust_coverage.enforce_rust_file_coverage(good.replace("/crates/rust-adapter/src/artifact.rs\nDA:1,1", "/crates/rust-adapter/src/artifact.rs\nDA:1,0"))
+            rust_coverage.enforce_rust_file_coverage(missing_artifacts)
         for path, label in (("/crates/rust-probes/src/compiler_abi.rs", "Rust compiler ABI"),
                             ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory")):
+            missing_component = good.replace(path + "\nDA:1,1", path + "\nDA:1,0")
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, label):
-                rust_coverage.enforce_rust_file_coverage(good.replace(path + "\nDA:1,1", path + "\nDA:1,0"))
+                rust_coverage.enforce_rust_file_coverage(missing_component)
         with self.assertRaisesRegex(ValueError, "no instrumented"):
             rust_coverage.enforce_rust_file_coverage("SF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\n")
