@@ -28,7 +28,7 @@ export class TraceStore {
   }
   lose(reason) { this.losses[reason] = (this.losses[reason] ?? 0) + 1; }
   beginLifetime(name, token, creation, started) {
-    if (creation && !creation.sampled) return null;
+    // A creation link is not a parent: sample this standalone root independently.
     if (this.retained >= MAX_RECORDS) { this.lose('span_capacity'); return null; }
     const epoch = BigInt(Date.now()) * 1000000n;
     const span = this.tracer.startSpan(name + ' lifetime', { startTime: hrTime(epoch),

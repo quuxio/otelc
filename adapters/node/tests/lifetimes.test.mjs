@@ -139,6 +139,24 @@ test('sampling and queue limits never change lifetime counts, and shutdown censo
   }, p => { p.function_matchers.include = []; p.traces.root_sample_ratio = ratio; p.export.max_queued_batches = 1; });
 });
 
+test('lifetime root sampling is independent of a rejected creator observation', async () => usingLifetimes(async (runtime, spans) => {
+  const Item = compile('module.exports=class Item{};', runtime);
+  runtime.exit(runtime.enter('occupied'), false);
+  const rejected = runtime.enter('rejected');
+  assert.equal(rejected, 0);
+  const previous = runtime.attach(rejected);
+  const value = new Item;
+  runtime.detach(previous);
+  const [token] = runtime.lifetimes.instances.keys();
+  runtime.lifetimes.collected(token); await runtime.close();
+  assert.ok(value); assert.equal(runtime.lifetimes.completed, 1);
+  const lifetime = spans.find(span => span.name === 'life.Item lifetime');
+  assert.ok(lifetime, 'a separate lifetime root inherited function-observation rejection');
+  assert.ok(!lifetime.parentSpanId); assert.equal(lifetime.links.length, 0);
+  assert.equal(runtime.report().traces.losses.function_capacity, 1);
+  assert.deepEqual(runtime.report().lifetimes.losses, {});
+}, p => { p.function_matchers.include = []; p.runtime.max_functions = 1; }));
+
 test('documented unedited and annotated examples preserve bytes and expose type selection', async () => {
   const server = await receiver(), directory = fs.mkdtempSync(path.join(os.tmpdir(), 'otelc-js-example-'));
   const root = fileURLToPath(new URL('../../../', import.meta.url));
