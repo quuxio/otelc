@@ -14,6 +14,8 @@ Canonical outgoing state is limited to 512 bytes. When truncation is needed, ent
 
 Wire state is retained independently of SDK validators: the pinned Rust SDK rejects a valid maximum-length tenant/system key that Python accepts. A wire-to-SDK conversion must not silently discard that state. `from_sdk` supports the opposite direction, copying a valid SDK identity and normalising its outgoing state. Rust contexts have private fields; Python contexts enforce valid identity, known flags and canonical state at construction.
 
+The Python SDK boundary uses identity-based type checks and bounded builtin storage from the pinned SDK's `TraceState`. It does not invoke an instance's `to_header`, application metaclass comparisons or overloaded state-string operations. Unqualified state storage is omitted while a valid parent survives; valid standard SDK state retains the same wire representation. Changes to the pinned SDK's storage layout need requalification.
+
 ## Checks and remaining integration
 
 Run the shared vectors and SDK-boundary checks from the repository root:
