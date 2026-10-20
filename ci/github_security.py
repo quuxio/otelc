@@ -12,6 +12,9 @@ from urllib.parse import urlsplit
 
 REPOSITORY = "quuxio/otelc"
 PREFIX = f"repos/{REPOSITORY}"
+GITHUB_HOST = "github.com"
+ALERTS_ENDPOINT = PREFIX + "/vulnerability-alerts"
+UPDATES_ENDPOINT = PREFIX + "/automated-security-fixes"
 
 
 class SecurityError(RuntimeError):
@@ -27,7 +30,7 @@ class Response:
 
 def next_page(header):
     link = re.search(r"(?im)^link:\s*(.+)$", header)
-    match = re.search(r'<([^>]+)>;\s*rel="next"', link[1]) if link else None
+    match = re.search(r'<([^<>]+)>;[ \t]*rel="next"', link[1]) if link else None
     if not match:
         if link and 'rel="next"' in link[1]:
             raise SecurityError("GitHub returned an invalid next-page link; no complete alert count available")
@@ -45,10 +48,10 @@ class GitHub:
             raise SecurityError("Install the GitHub CLI and authenticate quuxio first")
         allowed = ("HOME", "PATH", "TMPDIR", "SYSTEMROOT", "APPDATA", "LOCALAPPDATA", "GH_CONFIG_DIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY")
         self.environment = {key: os.environ[key] for key in allowed if key in os.environ}
-        self.environment["GH_HOST"] = "github.com"
+        self.environment["GH_HOST"] = GITHUB_HOST
         self.environment["GH_PROMPT_DISABLED"] = "1"
         try:
-            result = subprocess.run([self.executable, "auth", "token", "--hostname", "github.com", "--user", "quuxio"], env=self.environment.copy(), capture_output=True, text=True, timeout=30, check=False)
+            result = subprocess.run([self.executable, "auth", "token", "--hostname", GITHUB_HOST, "--user", "quuxio"], env=self.environment.copy(), capture_output=True, text=True, timeout=30, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise SecurityError("Cannot obtain the saved quuxio credential") from error
         if result.returncode or not result.stdout.strip():
@@ -57,13 +60,13 @@ class GitHub:
         self.environment["GH_TOKEN"] = self.token
 
     def request(self, method, endpoint):
-        if method not in ("GET", "PUT") or (method == "PUT" and endpoint not in (PREFIX + "/vulnerability-alerts", PREFIX + "/automated-security-fixes")):
+        if method not in ("GET", "PUT") or (method == "PUT" and endpoint not in (ALERTS_ENDPOINT, UPDATES_ENDPOINT)):
             raise SecurityError("Refusing an unsupported GitHub security operation")
         # Keep credentials on github.com and operations on this fixed repository.
         if endpoint != "user" and not (endpoint == PREFIX or endpoint.startswith(PREFIX + "/")):
             raise SecurityError("Refusing a GitHub operation outside quuxio/otelc")
         try:
-            result = subprocess.run([self.executable, "api", "--hostname", "github.com", "--include", "--method", method, endpoint], env=self.environment, capture_output=True, text=True, timeout=30, check=False)
+            result = subprocess.run([self.executable, "api", "--hostname", GITHUB_HOST, "--include", "--method", method, endpoint], env=self.environment, capture_output=True, text=True, timeout=30, check=False)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise SecurityError("GitHub request did not complete within its deadline") from error
         header, separator, body = result.stdout.partition("\n\n")
@@ -101,10 +104,10 @@ def identity_and_repository(client):
 
 
 def settings(client):
-    status = client.request("GET", PREFIX + "/vulnerability-alerts").status
+    status = client.request("GET", ALERTS_ENDPOINT).status
     if status not in (204, 404):
         raise SecurityError(f"Cannot verify Dependabot alerts: GitHub returned HTTP {status}")
-    updates = client.expect("GET", PREFIX + "/automated-security-fixes")
+    updates = client.expect("GET", UPDATES_ENDPOINT)
     if not isinstance(updates, dict) or not isinstance(updates.get("enabled"), bool) or not isinstance(updates.get("paused"), bool):
         raise SecurityError("GitHub returned invalid security-update settings")
     return {"alerts_enabled": status == 204, "security_updates_enabled": updates["enabled"], "security_updates_paused": updates["paused"]}
@@ -150,9 +153,9 @@ def run(client, enable=False):
     current = settings(client)
     if enable:
         if not current["alerts_enabled"]:
-            client.expect("PUT", PREFIX + "/vulnerability-alerts", 204)
+            client.expect("PUT", ALERTS_ENDPOINT, 204)
         if not current["security_updates_enabled"]:
-            client.expect("PUT", PREFIX + "/automated-security-fixes", 204)
+            client.expect("PUT", UPDATES_ENDPOINT, 204)
         current = settings(client)
     if not current["alerts_enabled"] or not current["security_updates_enabled"] or current["security_updates_paused"]:
         raise SecurityError("Dependabot alerts/security updates are disabled or paused; use --enable for disabled settings and inspect GitHub settings for paused updates")

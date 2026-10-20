@@ -42,8 +42,9 @@ class LiveBenchmarkTests(unittest.TestCase):
                     self.assertEqual(live.batch(process, 4)["elapsed_ns"], expected)
                     self.assertEqual(process.stdin.getvalue(), "batch 4\n")
         with patch.object(live.select, "select", return_value=([], [], [])):
+            process = Process()
             with self.assertRaises(ValueError):
-                live.read_line(Process())
+                live.read_line(process)
 
     def test_control_checks_process_identity(self):
         with patch.object(live.subprocess, "check_output", return_value='{"pid":4,"metrics_enabled":false}'):

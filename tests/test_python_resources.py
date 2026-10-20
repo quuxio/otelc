@@ -136,14 +136,16 @@ class PythonResourceTests(PythonSpanHarness, unittest.TestCase):
         for entries in invalid:
             policy = resource_plan()
             policy['lifetimes']['resources'] = entries
+            capture = Capture()
             with self.subTest(entries=entries), patch('quux_otelc_python.telemetry.MeterProvider') as sdk:
                 with self.assertRaises(ValueError):
-                    Runtime(policy, Capture())
+                    Runtime(policy, capture)
                 sdk.assert_not_called()
         policy = collection_plan()
         policy['lifetimes']['resources'] = resource_plan()['lifetimes']['resources']
+        capture = Capture()
         with self.assertRaisesRegex(ValueError, 'resource boundary'):
-            Runtime(policy, Capture())
+            Runtime(policy, capture)
 
     def test_successful_close_completes_before_collection_with_creation_link(self):
         runtime, _, capture, app, monitor = self.monitored(SOURCE, resource_plan())

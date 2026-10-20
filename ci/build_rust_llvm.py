@@ -22,7 +22,7 @@ def qualified_rustc(program: str) -> Path:
     if not located:
         raise ValueError("Set OTELC_RUSTC to the qualified nightly rustc")
     version = output([located, "-vV"])
-    fields = dict(line.split(": ", 1) for line in version.splitlines() if ": " in line)
+    fields = {key: value for key, separator, value in (line.partition(": ") for line in version.splitlines()) if separator}
     if (not version.startswith("rustc 1.101.0-nightly ")
             or fields.get("commit-hash") != RUST_COMMIT
             or fields.get("host") != "aarch64-apple-darwin"
