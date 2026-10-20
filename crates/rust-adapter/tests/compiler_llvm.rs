@@ -93,7 +93,10 @@ fn build(root: &Path, plan: &Path) -> Value {
         let bytes = fs::read(root.join("bundle").join(name)).unwrap();
         assert_eq!(
             metadata["compiler_hook"][fingerprint],
-            format!("{:x}", Sha256::digest(&bytes))
+            Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         );
         serde_json::from_slice::<Value>(&bytes).unwrap()
     };
@@ -122,7 +125,10 @@ fn build(root: &Path, plan: &Path) -> Value {
         assert_eq!(function["source_sha256"], inventory["sources"][file]);
         assert_eq!(
             function["source_sha256"],
-            format!("{:x}", Sha256::digest(fs::read(file).unwrap()))
+            Sha256::digest(fs::read(file).unwrap())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         );
         assert!(inventory["functions"]
             .as_array()

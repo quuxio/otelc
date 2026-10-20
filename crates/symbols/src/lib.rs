@@ -322,7 +322,10 @@ fn object_inventory(path: &Path) -> Result<ObjectInventory> {
         }
     }
     Ok(ObjectInventory {
-        digest: format!("{:x}", Sha256::digest(&bytes)),
+        digest: Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
         functions,
         annotated,
         hooks,

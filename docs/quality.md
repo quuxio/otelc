@@ -10,7 +10,7 @@ The SonarQube analysis covers Python CI helpers, their tests, and GitHub workflo
 
 Requirements: Rust 1.98.1, LLVM 22/Clang, Python 3.12+, Node.js 24.11+, Make, and Git. Full product coverage additionally requires the separately built [pinned Rust LLVM profile](rust-compiler.md#build-the-pinned-profile). `sonar-scanner` is needed only for local scanning. `make setup` creates a local virtual environment and installs coverage from hash-verified binary wheels, then installs `markdownlint-cli` 0.49.1 and its dependencies from the committed npm lockfile with package scripts disabled.
 
-The npm overrides pin patched `js-yaml`, KaTeX, and `smol-toml` releases while retaining the current Markdown CLI. Check for dependency advisories with `npm audit --prefix ci/markdownlint` when updating the lockfile.
+The npm overrides pin patched `js-yaml`, KaTeX, and `smol-toml` releases while retaining the current Markdown CLI. Check for dependency advisories with `npm audit --prefix ci/markdownlint` when updating the lockfile. Rust OpenTelemetry API, SDK and protobuf releases must be upgraded together because protobuf transformations use concrete SDK types. Dependency changes affecting path-shared Rust crates must refresh both the workspace and standalone compiler frontend lockfiles. SHA-256 metadata retains its existing lowercase 64-character encoding across hash-library updates.
 
 ```sh
 make setup

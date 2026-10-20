@@ -61,7 +61,12 @@ fn inventory(
             continue;
         }
         let source = fs::read_to_string(&path)?;
-        if format!("{:x}", Sha256::digest(source.as_bytes())) != original_digest {
+        if Sha256::digest(source.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+            != original_digest
+        {
             bail!("Rust source changed while reading original declarations");
         }
         let identity = relative
