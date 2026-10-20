@@ -102,6 +102,7 @@ python-check:
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/task_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/worker_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/lifetimes.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/resources.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/deadlines.py' --fail-under=80
 	$(PYTHON) -m coverage xml --data-file=build/python.coverage -o build/python-coverage.xml
 

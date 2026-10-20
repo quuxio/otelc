@@ -55,6 +55,8 @@ Examples use `http://127.0.0.1:4318` or `http://localhost:4318` as the base endp
 
 The dashboard shows completed function calls, exceptional function exits, completed object lifetimes, lost observations, function counts, duration p95, object lifetime p95 and losses by reason. Object metrics appear when the app uses the lifetime guard and its class is admitted in `[objects]`. Exception metrics require the LLVM backend; a catch inside a function does not make that function an exceptional exit.
 
+The lower dashboard rows show automatic Python collection and explicitly bound resource lifetimes separately, including completed/live counts, duration p95 and failed releases. See the [collection](python-collection.md) and [resource](python-resources.md) examples. These are distinct from the explicit C++ guard panels.
+
 Metric names are translated for Prometheus:
 
 | Prometheus name | Meaning |
@@ -65,6 +67,10 @@ Metric names are translated for Prometheus:
 | `otelc_function_duration_seconds_bucket` | Inclusive function duration histogram |
 | `otelc_object_lifetimes_total` | Completed admitted lifetime guards |
 | `otelc_object_lifetime_duration_seconds_bucket` | Duration from guard start to finish |
+| `otelc_lifetime_completed_total` | Completed automatic collection/resource observations, labelled by boundary/type |
+| `otelc_lifetime_live` | Current live or censored lifetime observations |
+| `otelc_lifetime_duration_seconds_bucket` | Completed collection/resource duration histogram |
+| `otelc_lifetime_failed_releases_total` | Failed explicit resource release calls |
 | `otelc_runtime_dropped_observations_total` | Runtime losses, labelled by `reason` |
 | `otelc_export_dropped_batches_total` | Export batches lost or rejected |
 
