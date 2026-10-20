@@ -87,3 +87,5 @@ The earlier three-function CLI example stored three spans and one complete tree 
 The `--rust-llvm` language benchmark builds the plain lane from the recorded compiler/flags and replays one instrumented bundle through live metrics-off/on phases. Local function and synchronous-closure runs preserve source/checksums and report exact measured-call totals with zero loss. These runs exercised the mechanism during concurrent validation and are not quiet-host performance qualification.
 
 Before merge, complete the integrated compiler-profile CI/LLVM coverage gate, independent consumer qualification and final integration review. Foreign exception unwinding, panic-abort telemetry and thread-local destructor shutdown are not qualified. Every new product component must meet its own 80% floor. This implementation remains a draft until those gates pass.
+
+Compiler-owned source-location replacement work has a separate [development guide](rust-mir-development.md). Its stable MIR helper is not yet the public `compiler` adapter.

@@ -1,0 +1,21 @@
+[package]
+name = "otelc-rust-mir"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+quux-otelc-config = { path = "../../../crates/config" }
+quux-otelc-rust = { path = "../../../crates/rust-probes" }
+quux-otelc-rust-adapter = { path = "../../../crates/rust-adapter" }
+
+[dev-dependencies]
+tempfile = "3"
+prost = "0.14"
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }

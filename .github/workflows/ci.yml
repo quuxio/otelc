@@ -69,7 +69,7 @@ jobs:
           make go-tools go-build
       - name: Install Rust and matching coverage tools
         run: |
-          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview --component rustc-dev
           rustup default 1.98.1
           rustup toolchain install nightly-2026-09-28 --profile minimal --component rustc-dev --component clippy
           brew install llvm@22 llvm@23
