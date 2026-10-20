@@ -95,7 +95,8 @@ def main(args: list[str]) -> int:
             if plan.get("propagation", {}).get("tasks", False):
                 signals += " with standard asyncio task context and ThreadPoolExecutor context"
             if plan.get("lifetimes", {}).get("enabled", False):
-                signals += " and ordinary own-initializer weak-referenceable class collection lifetimes"
+                boundary = plan['lifetimes']['boundary']
+                signals += f" and ordinary own-initializer weak-referenceable class {boundary} lifetimes"
         print(f"Python {sys.version.split()[0]}: CPython monitoring and OTLP/HTTP {signals} available")
         return 0
     if args[1] == "--inspect":

@@ -51,7 +51,13 @@ config_section!(Lifetimes {
     enabled: bool = false,
     boundary: String = "object".into(),
     include: Vec<String> = vec![],
-    exclude: Vec<String> = vec![]
+    exclude: Vec<String> = vec![],
+    resources: Vec<ResourceBinding> = vec![]
+});
+config_section!(ResourceBinding {
+    type_name: String = String::new(),
+    release: String = String::new(),
+    completion: String = "normal_return".into()
 });
 config_section!(SharedRuntime {
     max_functions: usize = 4096,
@@ -252,6 +258,32 @@ impl CommonConfig {
             bail!("lifetimes.boundary must be object, resource or collection");
         }
         Selection::new(&self.lifetimes.include, &self.lifetimes.exclude, false)?;
+        if !self.lifetimes.resources.is_empty() && self.lifetimes.boundary != "resource" {
+            bail!("resource bindings require lifetimes.boundary=resource");
+        }
+        if self.lifetimes.resources.len() > 128 {
+            bail!("at most 128 resource bindings are allowed");
+        }
+        let mut resource_types = std::collections::BTreeSet::new();
+        for binding in &self.lifetimes.resources {
+            if binding.type_name.is_empty()
+                || binding.type_name.trim() != binding.type_name
+                || binding.type_name.len() > 1024
+                || binding.type_name.contains(['*', '?', '[', ']'])
+                || !resource_types.insert(&binding.type_name)
+                || binding.release.is_empty()
+                || binding.release.len() > 128
+                || !binding
+                    .release
+                    .bytes()
+                    .all(|value| value.is_ascii_alphanumeric() || value == b'_')
+                || binding.release.as_bytes()[0].is_ascii_digit()
+                || matches!(binding.release.as_str(), "__init__" | "__new__" | "__del__")
+                || binding.completion != "normal_return"
+            {
+                bail!("invalid resource binding; use an exact unique type, an existing release method and normal_return completion");
+            }
+        }
         for value in [
             self.traces.max_active_traces,
             self.traces.max_spans_per_trace,
@@ -348,9 +380,11 @@ impl CommonConfig {
                 unavailable.push("Python monitoring does not inject annotations".into());
             }
             if self.lifetimes.enabled
-                && (self.lifetimes.boundary != "collection" || !self.traces.enabled)
+                && (!matches!(self.lifetimes.boundary.as_str(), "collection" | "resource")
+                    || !self.traces.enabled
+                    || self.lifetimes.boundary == "resource" && self.lifetimes.resources.is_empty())
             {
-                unavailable.push("Python lifetimes require the collection boundary and tracing; object/resource lifetimes are not implemented".into());
+                unavailable.push("Python lifetimes require tracing and either the collection boundary or resource boundary with explicit release bindings; object destruction is not implemented".into());
             }
         } else if matches!(language, Language::JavaScript | Language::TypeScript) {
             let required = if language == Language::TypeScript {
