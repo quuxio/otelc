@@ -20,8 +20,10 @@ class PythonCarrierTests(unittest.TestCase):
                 if expected is None:
                     self.assertIsNone(context)
                     continue
-                self.assertEqual(f'{context.trace_id:032x}', expected['trace_id'])
-                self.assertEqual(f'{context.span_id:016x}', expected['parent_id'])
+                actual_trace_id = f'{context.trace_id:032x}'
+                actual_parent_id = f'{context.span_id:016x}'
+                self.assertEqual(actual_trace_id, expected['trace_id'])
+                self.assertEqual(actual_parent_id, expected['parent_id'])
                 self.assertEqual(int(context.trace_flags), expected['flags'])
                 outgoing = {'traceparent': f"00-{expected['trace_id']}-{expected['parent_id']}-{expected['flags']:02x}"}
                 if expected['tracestate'] is not None:
