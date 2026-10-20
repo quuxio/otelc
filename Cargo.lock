@@ -800,7 +800,9 @@ name = "quux-otelc-rust-adapter"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "opentelemetry-proto",
  "proc-macro2",
+ "prost",
  "quote",
  "quux-otelc-config",
  "quux-otelc-process",

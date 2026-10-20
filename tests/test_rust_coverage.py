@@ -32,7 +32,7 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(rust_coverage.line_coverage(report), 50)
 
     def test_build_precedes_native_tests_and_reports(self):
-        with patch.object(rust_coverage, "coverage_environment", return_value={"MARKER": "value", "CARGO_TARGET_DIR": "/does-not-exist/otelc-test", "OTELC_COVERAGE_BIN_DIR": "/does-not-exist/otelc-test/maps"}):
+        with patch("ci.rust_llvm_coverage.run", return_value="LLVM 23 report"), patch.object(rust_coverage, "coverage_environment", return_value={"MARKER": "value", "CARGO_TARGET_DIR": "/does-not-exist/otelc-test", "OTELC_COVERAGE_BIN_DIR": "/does-not-exist/otelc-test/maps"}):
             with patch.object(rust_coverage.subprocess, "run") as run:
                 with patch.object(rust_coverage, "write_reports") as report:
                     rust_coverage.main()
@@ -40,6 +40,21 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[4].args[0][:2], ["cargo", "test"])
         self.assertEqual(run.call_args_list[5].args[0][:2], ["node", "--test"])
         self.assertEqual(report.call_args.args[0]["MARKER"], "value")
+        self.assertEqual(report.call_args.args[1], ["LLVM 23 report"])
+
+    def test_combined_coverage_rejects_source_changes_between_toolchains(self):
+        with patch("ci.rust_llvm_coverage.run", return_value="report"), patch("ci.rust_llvm_coverage.source_hashes", side_effect=[{"input": "before"}, {"input": "after"}]):
+            with patch.object(rust_coverage, "coverage_environment", return_value={"CARGO_TARGET_DIR": "/does-not-exist/otelc-test", "OTELC_COVERAGE_BIN_DIR": "/does-not-exist/otelc-test/maps"}), patch.object(rust_coverage.subprocess, "run"), patch.object(rust_coverage, "write_reports") as report:
+                with self.assertRaisesRegex(ValueError, "sources changed"):
+                    rust_coverage.main()
+        report.assert_not_called()
+
+    def test_different_llvm_versions_combine_only_exported_source_lines(self):
+        stable = "SF:/tmp/adapter.rs\nDA:1,1\nDA:2,0\n"
+        compiler = "SF:/tmp/adapter.rs\nDA:1,0\nDA:2,3\n"
+        merged = rust_coverage.merge_line_reports([stable, compiler])
+        self.assertEqual(rust_coverage.line_coverage(merged), 100)
+        self.assertEqual(merged.count("SF:"), 1)
 
     def test_failure_stops_reports(self):
         with patch.object(rust_coverage, "coverage_environment", return_value={"CARGO_TARGET_DIR": "/does-not-exist/otelc-test", "OTELC_COVERAGE_BIN_DIR": "/does-not-exist/otelc-test/maps"}):
@@ -54,13 +69,25 @@ class CoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
             (target / "debug/deps").mkdir(parents=True)
+            sdk_map = target / "debug/deps/rust-sdk-test"
+            sdk_map.write_text("SDK test coverage map")
+            sdk_map.chmod(0o700)
             (target / "native-binaries").mkdir()
             (target / "native-binaries/app").write_text("map")
             (target / "test.profraw").write_bytes(b"profile")
             environment = {"CARGO_TARGET_DIR": directory, "OTELC_COVERAGE_BIN_DIR": str(target / "native-binaries")}
-            for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/crates/process/src/lib.rs\nDA:1,1\nSF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\nSF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\n", True)):
+            for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/crates/process/src/lib.rs\nDA:1,1\nSF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\nSF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/compiler_abi.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_inventory.rs\nDA:1,1\n", True)):
                 with patch.object(rust_coverage.subprocess, "run"), patch.object(Path, "write_text"):
-                    with patch.object(rust_coverage.subprocess, "check_output", return_value=report) as export:
+                    def export_map(command, **_):
+                        # LLVM can select a zero-hit library map when exported C
+                        # symbols collide across objects. Only the isolated SDK
+                        # test map carries the matching compiler-hook profile.
+                        objects = [command[index + 1] for index, value in enumerate(command) if value == "--object"]
+                        if objects == [str(sdk_map)]:
+                            return report
+                        return report.replace("/compiler_abi.rs\nDA:1,1", "/compiler_abi.rs\nDA:1,0")
+
+                    with patch.object(rust_coverage.subprocess, "check_output", side_effect=export_map) as export:
                         if passes:
                             rust_coverage.write_reports(environment)
                         else:
@@ -112,7 +139,7 @@ class CoverageTests(unittest.TestCase):
             rust_coverage.enforce_node_observer_coverage(good)
 
     def test_trace_and_build_artifact_files_have_their_own_coverage_floors(self):
-        good = "SF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\n"
+        good = "SF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/compiler_abi.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_inventory.rs\nDA:1,1\n"
         rust_coverage.enforce_rust_file_coverage(good)
         with self.assertRaisesRegex(ValueError, "trace context"):
             rust_coverage.enforce_rust_file_coverage(good.replace("DA:1,1", "DA:1,0"))
@@ -122,5 +149,9 @@ class CoverageTests(unittest.TestCase):
             rust_coverage.enforce_rust_file_coverage(good.replace("/crates/runtime/src/traces.rs\nDA:1,1", "/crates/runtime/src/traces.rs\nDA:1,0"))
         with self.assertRaisesRegex(ValueError, "Rust build artifacts"):
             rust_coverage.enforce_rust_file_coverage(good.replace("/crates/rust-adapter/src/artifact.rs\nDA:1,1", "/crates/rust-adapter/src/artifact.rs\nDA:1,0"))
+        for path, label in (("/crates/rust-probes/src/compiler_abi.rs", "Rust compiler ABI"),
+                            ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory")):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, label):
+                rust_coverage.enforce_rust_file_coverage(good.replace(path + "\nDA:1,1", path + "\nDA:1,0"))
         with self.assertRaisesRegex(ValueError, "no instrumented"):
             rust_coverage.enforce_rust_file_coverage("SF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\n")

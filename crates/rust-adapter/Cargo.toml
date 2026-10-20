@@ -19,3 +19,6 @@ proc-macro2 = { version = "=1.0.107", features = ["span-locations"] }
 quote = "=1.0.47"
 tempfile = "3"
 sha2 = "0.10"
+[dev-dependencies]
+prost.workspace = true
+opentelemetry-proto.workspace = true
