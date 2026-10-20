@@ -11,4 +11,4 @@ serde_json.workspace = true
 object.workspace = true
 cpp_demangle.workspace = true
 quux-otelc-config = { path = "../config" }
-sha2 = "0.10"
+sha2 = "0.11"
