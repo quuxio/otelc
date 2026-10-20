@@ -160,7 +160,8 @@ def enforce_rust_file_coverage(report):
 
 def main():
     """Build the instrumented archive before native tests, then enforce coverage."""
-    from ci.rust_llvm_coverage import run as compiler_coverage, source_hashes
+    from ci.rust_llvm_coverage import run as compiler_coverage
+    from ci.rust_mir_coverage import run as mir_coverage, source_hashes
     environment = coverage_environment()
     before = source_hashes(Path.cwd())
     for profile in Path(environment["CARGO_TARGET_DIR"]).rglob("*.profraw"):
@@ -180,9 +181,10 @@ def main():
     ):
         subprocess.run(command, env=environment, check=True)
     compiler_report = compiler_coverage()
+    mir_report = mir_coverage(stable=environment)
     if source_hashes(Path.cwd()) != before:
         raise ValueError("Rust/native sources changed during coverage qualification")
-    write_reports(environment, [compiler_report])
+    write_reports(environment, [compiler_report, mir_report])
 
 
 if __name__ == "__main__":

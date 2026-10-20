@@ -3,6 +3,8 @@
 #[rustfmt::skip]
 #[path = "../../../../crates/rust-adapter/tests/llvm/receiver.rs"]
 mod receiver;
+#[path = "support/capture.rs"]
+mod capture;
 use quux_otelc_config::common::{CommonConfig, Language};
 use quux_otelc_rust_adapter::{compiler_frontend::Request, compiler_inventory::source_definitions};
 use receiver::Receiver;
@@ -23,6 +25,7 @@ struct Fixture {
     plan: PathBuf,
     request: PathBuf,
     sources: BTreeMap<PathBuf, String>,
+    driver: PathBuf,
 }
 fn sha(path: &Path) -> String {
     format!("{:x}", Sha256::digest(fs::read(path).unwrap()))
@@ -71,8 +74,13 @@ impl Fixture {
             sources.insert(path.clone(), sha(&path));
         }
         let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let configured = std::env::var_os("OTELC_RUST_MIR_PROFILE");
+        let descriptor = configured
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| checkout.join("target/debug/otelc-rust-compiler.json"));
         let profile: Value = serde_json::from_slice(
-            &fs::read(checkout.join("target/debug/otelc-rust-compiler.json"))
+            &fs::read(descriptor)
                 .expect("run ci/build_rust_mir.py after building the ordinary stable SDK"),
         )
         .unwrap();
@@ -86,6 +94,13 @@ impl Fixture {
                 profile[format!("{name}_sha256")]
             );
         }
+        let driver = if configured.is_some() {
+            let path = PathBuf::from(profile["driver"].as_str().unwrap());
+            assert_eq!(sha(&path), profile["driver_sha256"]);
+            path
+        } else {
+            PathBuf::from(env!("CARGO_BIN_EXE_otelc-rust-mir"))
+        };
         let receiver = Receiver::new();
         let mut common = CommonConfig::from_text(&format!("schema_version=2\nlanguages=['rust']\n[sources]\ninclude=['**']\n[functions]\ninclude=['*.selected_*','app.*.alloc']\n[traces]\nenabled=true\nroot_sample_ratio=1.0\n[export]\nendpoint='{}'\ninterval_ms=60000\ntimeout_ms=1000\n", receiver.endpoint), false).unwrap();
         common.annotations.read_existing = true;
@@ -146,6 +161,7 @@ impl Fixture {
             plan,
             request,
             sources,
+            driver,
         }
     }
     fn root(&self) -> PathBuf {
@@ -181,7 +197,7 @@ impl Fixture {
     }
     fn compile(&self, instrumented: bool) -> (Output, PathBuf) {
         let program = if instrumented {
-            env!("CARGO_BIN_EXE_otelc-rust-mir")
+            self.driver.to_str().unwrap()
         } else {
             self.profile["rustc"].as_str().unwrap()
         };
@@ -211,6 +227,12 @@ impl Fixture {
         (bounded(command), binary)
     }
     fn pair(&self, expected: u64) -> Vec<opentelemetry_proto::tonic::trace::v1::Span> {
+        let capture = capture::Capture::new(
+            self.temporary.path(),
+            &self.sources,
+            &self.plan,
+            &self.request,
+        );
         let mut runs = vec![];
         for measured in [false, true] {
             let (built, binary) = self.compile(measured);
@@ -220,7 +242,14 @@ impl Fixture {
                 "OTELC_REPORT_PATH",
                 self.temporary.path().join("report.json"),
             );
-            runs.push(success(bounded(command)));
+            if let Some(capture) = &capture {
+                capture.configure(&mut command, measured);
+            }
+            let output = bounded(command);
+            if let Some(capture) = &capture {
+                capture.record(measured, &binary, &output);
+            }
+            runs.push(success(output));
         }
         assert_eq!(runs[0].stdout, runs[1].stdout);
         assert_eq!(runs[0].stderr, runs[1].stderr);
@@ -244,6 +273,9 @@ impl Fixture {
         assert_eq!(report["future_observers"]["pending"], 0);
         let spans = self.receiver.spans();
         assert_eq!(spans.len() as u64, expected);
+        if let Some(capture) = capture {
+            capture.complete(&report, expected);
+        }
         spans
     }
 }
@@ -325,7 +357,7 @@ fn stable_features_mismatched_roots_changed_sources_and_bootstrap_fail_before_co
     let (output, binary) = fixture.compile(true);
     assert!(String::from_utf8_lossy(&output.stderr).contains("original Rust source differs"));
     assert!(!binary.exists());
-    let mut command = fixture.command(env!("CARGO_BIN_EXE_otelc-rust-mir"));
+    let mut command = fixture.command(fixture.driver.to_str().unwrap());
     command.arg("app.rs").env("RUSTC_BOOTSTRAP", "app");
     let output = bounded(command);
     assert!(!output.status.success());
