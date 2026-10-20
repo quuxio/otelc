@@ -2,6 +2,7 @@
 import { transformSync, parseSync } from '@babel/core';
 import * as t from '@babel/types';
 import { Selection } from './policy.mjs';
+import { instrumentLifetime } from './lifetime-transform.mjs';
 import { fileURLToPath } from 'node:url';
 
 const probes = fileURLToPath(new URL('./probes.cjs', import.meta.url));
@@ -106,6 +107,7 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
   if (source.includes(MARKER)) throw new Error('source is already instrumented');
   const selection = new Selection(plan.function_matchers);
   const inventory = [];
+  const types = [];
   let helper;
   let format;
   let instrumented = false;
@@ -123,6 +125,12 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
         if (path.scope.hasOwnBinding('require')) throw path.buildCodeFrameError('CommonJS top-level require shadowing is unsupported');
         path.unshiftContainer('body', t.variableDeclaration('const', [t.variableDeclarator(helper, t.callExpression(t.identifier('require'), [t.stringLiteral(probes)]))]));
       }
+    } }, Class: { exit(path) {
+      if (!plan.lifetimes?.enabled) return;
+      const name = displayName(path, sourceName);
+      const selected = instrumentLifetime(path, helper, name, plan, plan.annotations.read_existing ? annotation(path) : null);
+      types.push({ name, selected, line: path.node.loc.start.line });
+      if (selected) instrumented = true;
     } }, Function: { exit(path) {
       if (!path.node.body) return;
       const identityComments = [...(path.node.leadingComments ?? []), ...((path.parentPath.isExportNamedDeclaration() || path.parentPath.isExportDefaultDeclaration()) ? path.parentPath.node.leadingComments ?? [] : [])];
@@ -213,5 +221,5 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
     visit(ast.program);
     runtime.registerAsyncSites(sites);
   }
-  return { code: result.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(result.map)).toString('base64'), functions: inventory, format };
+  return { code: result.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(result.map)).toString('base64'), functions: inventory, types, format };
 }

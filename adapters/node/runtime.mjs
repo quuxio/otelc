@@ -7,10 +7,12 @@ import { ValueType } from '@opentelemetry/api';
 import { Exporter } from './exporter.mjs';
 import { PromiseObserver } from './promise-observer.mjs';
 import { TraceStore, SUPPRESSED } from './traces.mjs';
+import { Lifetimes, validateLifetimes } from './lifetimes.mjs';
 
 export const RUNTIME = Symbol.for('quux.otelc.runtime');
 export class Runtime {
   constructor(plan) {
+    validateLifetimes(plan);
     this.plan = plan;
     this.enabled = plan.metrics.enabled;
     this.functions = new Map();
@@ -38,10 +40,12 @@ export class Runtime {
       resource,
       readers: [this.reader], views: [
         ...['otelc.function.calls', 'otelc.function.unwinds'].map(instrumentName => ({ instrumentName, aggregationCardinalityLimit: capacity })),
-        { instrumentName: 'otelc.function.duration', aggregationCardinalityLimit: capacity, aggregation: { type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM, options: { boundaries: plan.metrics.histogram_boundaries_seconds } } }
+        ...['otelc.lifetime.admitted', 'otelc.lifetime.completed', 'otelc.lifetime.live'].map(instrumentName => ({ instrumentName, aggregationCardinalityLimit: capacity })),
+        ...['otelc.function.duration', 'otelc.lifetime.duration'].map(instrumentName => ({ instrumentName, aggregationCardinalityLimit: capacity, aggregation: { type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM, options: { boundaries: plan.metrics.histogram_boundaries_seconds } } }))
       ]
     });
     const meter = this.provider.getMeter('quux.otelc', '0.1.0');
+    this.lifetimes = plan.lifetimes?.enabled ? new Lifetimes(this, meter) : null;
     this.calls = meter.createCounter('otelc.function.calls', { unit: '{call}', valueType: ValueType.INT });
     this.unwinds = meter.createCounter('otelc.function.unwinds', { unit: '{observation}', valueType: ValueType.INT });
     this.duration = meter.createHistogram('otelc.function.duration', { unit: 's' });
@@ -142,6 +146,7 @@ export class Runtime {
     this.promiseObserver?.flush();
     const result = { schema_version: 1, language: this.plan.language, pid: process.pid, export_finished: this.exportFinished, function_calls: [...this.functions.values()].reduce((sum, value) => sum + value.count, 0), functions: Object.fromEntries([...this.functions].map(([name, value]) => [name, { count: value.count, unwinds: value.unwinds }])), losses: { ...this.losses, incomplete: this.losses.incomplete + this.incomplete() }, export_loss: this.exportLoss };
     if (this.traces) result.traces = this.traces.report();
+    if (this.lifetimes) result.lifetimes = this.lifetimes.report();
     if (process.env.OTELC_REPORT_PATH) fs.writeFileSync(process.env.OTELC_REPORT_PATH, JSON.stringify(result, null, 2) + '\n');
     return result;
   }
@@ -149,6 +154,7 @@ export class Runtime {
   async close() {
     if (this.closed) return this.report();
     this.promiseObserver?.close();
+    this.lifetimes?.close();
     this.closed = true;
     this.shutdownDeadline = process.hrtime.bigint() + BigInt(this.plan.runtime.shutdown_timeout_ms) * 1000000n;
     this.losses.incomplete += this.incomplete();
