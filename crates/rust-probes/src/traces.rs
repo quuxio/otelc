@@ -1,6 +1,11 @@
 //! Rust synchronous and per-poll context scopes.
 pub(crate) use quux_otelc_export::traces::{Context, Store};
-use std::{cell::Cell, marker::PhantomData, rc::Rc};
+use std::{
+    cell::Cell,
+    marker::PhantomData,
+    rc::Rc,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 thread_local! {
     static CURRENT: Cell<Option<Context>> = const { Cell::new(None) };
@@ -26,21 +31,37 @@ impl Drop for Scope {
         CURRENT.with(|cell| cell.set(self.previous));
     }
 }
-pin_project_lite::pin_project! {
-    pub(crate) struct InContext<F> {
-        #[pin]
-        pub future: Option<F>,
-        pub context: Option<Context>,
-    }
-    impl<F> PinnedDrop for InContext<F> {
-        fn drop(this: Pin<&mut Self>) {
-            let mut this = this.project();
-            let _scope = Scope::attach(*this.context);
-            this.future.set(None);
+// Control flow identifies an escaping body panic even if the caller was
+// already unwinding. No global panic hook or thread panic-state heuristic.
+struct UnwindFlag<'a> {
+    flag: &'a AtomicBool,
+    completed: bool,
+}
+impl Drop for UnwindFlag<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.flag.store(true, Ordering::Relaxed);
         }
     }
 }
-impl<F: std::future::Future> std::future::Future for InContext<F> {
+pin_project_lite::pin_project! {
+    pub(crate) struct InContext<'a, F> {
+        #[pin]
+        pub future: Option<F>,
+        pub context: Option<Context>,
+        pub unwound: &'a AtomicBool,
+    }
+    impl<F> PinnedDrop for InContext<'_, F> {
+        fn drop(this: Pin<&mut Self>) {
+            let mut this = this.project();
+            let _scope = Scope::attach(*this.context);
+            let mut outcome = UnwindFlag { flag: this.unwound, completed: false };
+            this.future.set(None);
+            outcome.completed = true;
+        }
+    }
+}
+impl<F: std::future::Future> std::future::Future for InContext<'_, F> {
     type Output = F::Output;
     fn poll(
         self: std::pin::Pin<&mut Self>,
@@ -48,10 +69,17 @@ impl<F: std::future::Future> std::future::Future for InContext<F> {
     ) -> std::task::Poll<Self::Output> {
         let this = self.project();
         let _scope = Scope::attach(*this.context);
-        this.future
+        let mut outcome = UnwindFlag {
+            flag: this.unwound,
+            completed: false,
+        };
+        let result = this
+            .future
             .as_pin_mut()
             .expect("future present until drop")
-            .poll(cx)
+            .poll(cx);
+        outcome.completed = true;
+        result
     }
 }
 
