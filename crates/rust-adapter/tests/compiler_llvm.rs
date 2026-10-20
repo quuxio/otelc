@@ -79,6 +79,10 @@ fn success(output: Output) -> Output {
     );
     output
 }
+fn inspection(root: &Path, plan: &Path) -> Value {
+    serde_json::from_slice(&success(run(root, plan, &["--inspect", "app.rs", "--json"])).stdout)
+        .unwrap()
+}
 fn build(root: &Path, plan: &Path) -> Value {
     success(run(
         root,
@@ -185,6 +189,52 @@ fn health(root: &Path, calls: u64) -> Value {
         .all(|value| value == 0));
     assert!(report["traces"]["losses"].as_object().unwrap().is_empty());
     report
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn inspection_uses_actual_compiler_owners_without_running_main() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(
+        root,
+        &receiver,
+        vec!["app.answer".into(), "app.generated".into()],
+    );
+    let source = "#[cfg(any())] async fn disabled(){}\nmacro_rules! declare{()=>{fn generated(value:u64)->u64{value+1}}} declare!();\nconst fn answer(value:u64)->u64{value+1}\nfn unused<T>(value:T)->T{value}\nfn main(){std::fs::write(\"ran\",\"yes\").unwrap();let value=std::env::args().count() as u64;println!(\"{}:{}\",generated(value),answer(value));}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let inspected = inspection(root, &plan);
+    let functions = inspected["functions"].as_array().unwrap();
+    for name in ["app.generated", "app.answer"] {
+        let row = functions
+            .iter()
+            .find(|row| row["name"] == name)
+            .expect("compiler-owned declaration missing from inspection");
+        assert_eq!(row["selected"], true);
+        assert_eq!(row["emitted"], true);
+        assert_eq!(row["unsupported"], "");
+    }
+    assert!(!functions.iter().any(|row| row["name"] == "app.disabled"));
+    let unused = functions
+        .iter()
+        .find(|row| row["name"] == "app.unused")
+        .unwrap();
+    assert_eq!(unused["emitted"], false);
+    assert_eq!(unused["compiled_symbol"], "");
+    assert!(!root.join("ran").exists());
+    assert!(!root.join("report.json").exists());
+    build(root, &plan);
+    let inventory: Value =
+        serde_json::from_slice(&fs::read(root.join("bundle/inventory.json")).unwrap()).unwrap();
+    assert_eq!(inspected["functions"], inventory["functions"]);
+    assert_eq!(inspected["backend"], "llvm");
+    assert_eq!(inspected["phase"], "compiled");
+    assert_eq!(inspected["schema_version"], 3);
+    assert_eq!(inspected["language"], "rust");
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+    assert!(!root.join("ran").exists());
+    assert!(receiver.spans().is_empty());
 }
 
 #[test]
@@ -322,6 +372,12 @@ fn included_declarations_keep_their_original_source_selection() {
     .unwrap();
     let source = "include!(\"included.rs\");\nfn main(){println!(\"{:?}\",selected());}\n";
     fs::write(root.join("app.rs"), source).unwrap();
+    let inspected = inspection(root, &plan);
+    assert!(inspected["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["name"] == "included.selected" && row["selected"] == true));
     let metadata = build(root, &plan);
     success(compare(root, &plan, &metadata));
     health(root, 1);
@@ -337,6 +393,10 @@ fn macro_generated_async_functions_are_refused_before_main_executes() {
     let receiver = Receiver::new();
     let plan = policy_matching(root, &receiver, vec!["app.generated".into()]);
     fs::write(root.join("app.rs"), "macro_rules! declare{()=>{async fn generated()->u64{7}}} declare!(); fn main(){let _future=generated();std::fs::write(\"ran\",\"yes\").unwrap();}\n").unwrap();
+    let inspected = run(root, &plan, &["--inspect", "app.rs", "--json"]);
+    assert!(!inspected.status.success());
+    assert!(String::from_utf8_lossy(&inspected.stderr).contains("future-completion"));
+    assert!(!root.join("ran").exists());
     let output = run(root, &plan, &["app.rs"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("future-completion"));
@@ -599,6 +659,14 @@ fn existing_annotations_select_original_declarations_and_exclusions_win() {
     // Existing annotations are comments in ordinary source, not required edits.
     let source = "// otelc.instrument\nfn tagged()->u32{column!()}\n// otelc.exclude\nfn excluded()->u32{column!()}\nfn selected()->(u32,u32){(tagged(),excluded())}\nfn main(){println!(\"{:?}\",selected());}\n";
     fs::write(root.join("app.rs"), source).unwrap();
+    let inspected = inspection(root, &plan);
+    for (name, selected) in [("app.tagged", true), ("app.excluded", false)] {
+        assert!(inspected["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["name"] == name && row["selected"] == selected));
+    }
     let metadata = build(root, &plan);
     success(compare(root, &plan, &metadata));
     health(root, 2);

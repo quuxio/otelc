@@ -44,9 +44,13 @@ make stack-up
 ./target/debug/quux-otelc --config examples/rust-compiler.toml rust --run build/rust-compiler
 
 ./target/debug/quux-otelc --config examples/rust-compiler-expanded.toml rust \
+  --inspect examples/apps/rust_compiler_expanded.rs --json
+./target/debug/quux-otelc --config examples/rust-compiler-expanded.toml rust \
   --build examples/apps/rust_compiler_expanded.rs --output-dir build/rust-compiler-expanded
 ./target/debug/quux-otelc --config examples/rust-compiler-expanded.toml rust --run build/rust-compiler-expanded
 ```
+
+With `backend="llvm"`, inspection performs the same qualified compiler analysis, code generation and linking as a build inside a private temporary directory. It prints that compiler-owned schema-3 inventory with `language="rust"`, `backend="llvm"` and `phase="compiled"`, then removes the temporary products. It never runs application initialisers or `main` and does not export telemetry. A working pinned compiler profile and a compilable standalone application are required; unsupported selected async bodies fail just as they do during a build. Expanded declarations, included items, runtime `const fn` bodies, annotations, `cfg` filtering and emitted generic symbols therefore agree with the build inventory. Uninstantiated declarations remain `emitted=false`. The default generated-source backend retains its source-only inspection, which does not expand macros or prove emission.
 
 Build-only does not execute the application. The output directory must not already exist. `--run` needs the matching adapter and bundle; it needs neither compiler, original source nor matching SDK installation. Runtime policy can change; build-time selectors, backend and annotation settings must still match.
 
