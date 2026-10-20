@@ -4,9 +4,11 @@
 mod receiver;
 use std::{
     fs,
+    io::{BufRead, BufReader, Read},
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -153,12 +155,33 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let (ready_sender, ready_output) = mpsc::sync_channel(1);
+    let output_reader = signal.map(|_| {
+        let stdout = child.stdout.take().unwrap();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut bytes = Vec::new();
+            reader.read_until(b'\n', &mut bytes).unwrap();
+            let _ = ready_sender.send(bytes.clone());
+            reader.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+    });
     let mut deadline = Instant::now() + Duration::from_secs(120);
     if let Some(signal) = signal {
+        let mut output_ready = false;
         let pid = loop {
+            if let Ok(line) = ready_output.try_recv() {
+                assert_eq!(line, b"ready\n", "unexpected readiness output");
+                output_ready = true;
+            }
             if let Ok(value) = fs::read_to_string(&ready) {
                 if let Ok(pid) = value.parse::<u32>() {
-                    break pid;
+                    // The PID file can precede stdout. In particular SIGKILL
+                    // must not race the application-visible readiness write.
+                    if output_ready {
+                        break pid;
+                    }
                 }
             }
             assert!(
@@ -177,7 +200,10 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
     }
     loop {
         if child.try_wait().unwrap().is_some() {
-            let output = child.wait_with_output().unwrap();
+            let mut output = child.wait_with_output().unwrap();
+            if let Some(reader) = output_reader {
+                output.stdout = reader.join().unwrap();
+            }
             let leftovers: Vec<_> = fs::read_dir(scratch.path())
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
@@ -197,6 +223,19 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
             panic!("launcher did not terminate");
         }
         thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn signal_waits_for_ready_output_after_the_pid_is_published() {
+    let directory = tempfile::tempdir().unwrap();
+    let (arguments, _) = prepare("python", directory.path());
+    fs::write(directory.path().join("termination.py"), "import os,time\nwith open('ready.pid','w') as file: file.write(str(os.getpid()))\ntime.sleep(0.25)\nprint('ready',flush=True)\ntime.sleep(60)\n").unwrap();
+    for signal in [15, 9] {
+        let output = launch(&arguments, directory.path(), -1, Some(signal));
+        assert_eq!(output.status.signal(), Some(signal));
+        assert_eq!(output.stdout, b"ready\n");
+        assert!(output.stderr.is_empty());
     }
 }
 
