@@ -54,10 +54,20 @@ Benchmarks do not change the instrumentation configuration of other applications
 
 `make benchmark-live LIVE_BENCHMARK_ARGS='--iterations 50000 --runs 8'` compares a plain process with metrics-off/on phases of the same instrumented process. It uses the unchanged `examples/apps/live-latency.cpp`, identical compiler/flags, warm-up and alternating on/off phase order. Body timing excludes control requests, startup and shutdown. The report at `build/benchmarks/live/report.json` retains every sample, PID, source hash, compiler/flags, checksum and shutdown/loss evidence. It reports added metrics latency separately from the remaining disabled-probe overhead and total instrumentation overhead. See the [developer 101](developer-101.md#measure-the-added-latency).
 
-For the [experimental Rust compiler backend](rust-compiler.md), first build its pinned profile, then run:
+The live native and language benchmarks remove the previous `runtime.json` and `report.json` before each run. A failed run cannot reuse those previous results. Language benchmarks also require the shutdown report PID to match the control socket's application PID, which can differ from a build/launch wrapper's PID. Private control sockets use short temporary paths under `/tmp`, so long result-directory paths do not exceed the Unix socket path limit. Use a separate output directory for each concurrent run and for results you want to preserve.
+
+All Rust language benchmarks retain the instrumented executable, build manifest, compiler evidence and raw build channels in a unique `rust-build-*/bundle` directory under the chosen output directory. The plain comparison uses the exact compiler and `baseline_flags` from that manifest. `report.json` records the directory and metadata under `rust_build`; replay validates the bundle's fingerprints before launching the app. The default stable compiler profile supports the synchronous, async and closure benchmark fixtures:
+
+```sh
+make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS='--iterations 10000 --runs 8'
+make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS='--rust-async --iterations 10000 --runs 8 --output build/benchmarks/rust-async'
+make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS='--rust-closures --iterations 10000 --runs 8 --output build/benchmarks/rust-closures'
+```
+
+For the [experimental Rust LLVM backend](rust-compiler.md), first build its pinned profile, then run:
 
 ```sh
 make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS='--rust-llvm --iterations 10000 --runs 8'
 ```
 
-This mode builds a retained instrumented bundle before compiling the baseline with the exact compiler and `baseline_flags` from its manifest. Both lanes therefore disable the same MIR inlining passes. One instrumented process is replayed through metrics-off/on phases without rebuilding or restarting. Reports retain the bundle metadata, source hash, control PID, every sample and exact call/loss checks; raw build channels remain beside the bundle. `--rust-async` is rejected for this profile. These workload timings do not qualify production overhead, and metrics-off still includes compiled probes and SDK startup.
+Both LLVM lanes disable the same MIR inlining passes. Every Rust mode replays one instrumented process through metrics-off/on phases without rebuilding or restarting. Reports retain the source hash, control PID, every sample and exact call/loss checks. `--rust-async` is rejected for the LLVM profile. These workload timings do not qualify production overhead, and metrics-off still includes compiled probes and SDK startup.
