@@ -371,6 +371,10 @@ fn similarly_named_application_allocator_traits_remain_instrumented() {
         .replace("unsafe impl GlobalAlloc for Allocator", "unsafe impl RealAllocator for Allocator")
         .replace("fn main() {", "mod ordinary { pub trait GlobalAlloc { fn alloc(&self) -> usize; } pub struct Value; impl GlobalAlloc for Value { fn alloc(&self) -> usize { 7 } } pub fn selected_fake() -> usize { GlobalAlloc::alloc(&Value) } } fn main() {")
         .replace("println!(\"{}\", selected_work());", "println!(\"{} {}\", selected_work(), ordinary::selected_fake());");
+    // Crate spelling and a matching module path must not impersonate core's trait.
+    let source = format!("#![crate_name=\"core\"]\n{source}")
+        .replace("mod ordinary {", "mod alloc {")
+        .replace("ordinary::selected_fake()", "alloc::selected_fake()");
     let fixture = Fixture::new(&source, &[]);
     let spans = fixture.pair(3);
     assert!(spans.iter().any(|span| span.name.ends_with(".alloc")));

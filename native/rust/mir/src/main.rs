@@ -58,7 +58,12 @@ fn allocator_method(tcx: TyCtxt<'_>, id: LocalDefId) -> Result<bool> {
     let Some(trait_id) = tcx.trait_of_assoc(trait_item) else {
         return Ok(false);
     };
-    if tcx.crate_name(trait_id.krate).as_str() != "core" {
+    let core = tcx
+        .lang_items()
+        .sized_trait()
+        .context("qualified core Sized trait is missing")?
+        .krate;
+    if trait_id.krate != core {
         return Ok(false);
     }
     // Resolve the standard library's actual exported trait. An application
