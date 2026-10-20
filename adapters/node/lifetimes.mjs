@@ -5,12 +5,12 @@ const Registry = globalThis.FinalizationRegistry;
 export function validateLifetimes(plan) {
   if (!plan.lifetimes?.enabled) return;
   try {
-    if (plan.language !== 'javascript' || plan.lifetimes.enabled !== true || plan.lifetimes.boundary !== 'collection' || !plan.traces?.enabled
+    if (!['javascript', 'typescript'].includes(plan.language) || plan.lifetimes.enabled !== true || plan.lifetimes.boundary !== 'collection' || !plan.traces?.enabled
         || !Array.isArray(plan.lifetimes.resources) || plan.lifetimes.resources.length
         || !Number.isSafeInteger(plan.runtime.max_live_lifetimes) || plan.runtime.max_live_lifetimes < 1 || plan.runtime.max_live_lifetimes > 65536
         || !Number.isSafeInteger(plan.runtime.max_functions) || plan.runtime.max_functions < 1 || plan.runtime.max_functions > 65536 || typeof Registry !== 'function') throw new Error();
     new Selection(plan.lifetime_matchers);
-  } catch { throw new Error('JavaScript lifetimes require tracing, collection and bounded resolved settings'); }
+  } catch { throw new Error('JavaScript/TypeScript lifetimes require tracing, collection and bounded resolved settings'); }
 }
 
 export class Lifetimes {
