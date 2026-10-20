@@ -57,8 +57,9 @@ class PythonWitnessWireTests(unittest.TestCase):
         self.assertEqual(duplicate.exception.code, 'duplicate_field')
         arm = base64.b64decode(self.cases[1]['frame_base64'])
         for number in (b'NaN', b'Infinity', b'-Infinity', b'1.0', b'1e0'):
+            malformed = arm.replace(b'"ready_seq":1', b'"ready_seq":' + number)
             with self.subTest(number=number), self.assertRaises(ProtocolError):
-                decode_record(arm.replace(b'"ready_seq":1', b'"ready_seq":' + number))
+                decode_record(malformed)
         with self.assertRaises(ProtocolError) as recursive:
             decode_record(b'[' * 3000 + b']' * 3000 + b'\n')
         self.assertEqual(str(recursive.exception), 'malformed_record')
@@ -69,8 +70,9 @@ class PythonWitnessWireTests(unittest.TestCase):
         for health in ([], {}, dict(end['health'], inflight=True),
                        dict(end['health'], losses=-1), dict(end['health'], export_finished=1),
                        dict(end['health'], exception_message='private')):
+            malformed = dict(end, health=health)
             with self.subTest(health=health), self.assertRaises(ProtocolError):
-                encode_record(dict(end, health=health))
+                encode_record(malformed)
         for value in (None, [], 1, {'kind': 'response', 'op': 'unknown', 'ok': False},
                       dict(end, outcome='arbitrary private text'), dict(end, request_id='1' * 32)):
             with self.subTest(value=value), self.assertRaises(ProtocolError):
@@ -85,4 +87,4 @@ class PythonWitnessWireTests(unittest.TestCase):
         changed = copy.deepcopy(first)
         changed['wrapper_probe_id'] = '0' * 64
         self.assertEqual(decode_request(encode_record(changed)), changed)
-        self.assertEqual(decode_record(base64.b64decode(self.cases[14]['frame_base64']))['complete'], True)
+        self.assertTrue(decode_record(base64.b64decode(self.cases[14]['frame_base64']))['complete'])
