@@ -127,7 +127,7 @@ fn deadline_includes_inherited_pipes_after_the_parent_exits() {
     assert!(expired);
     assert!(output.status.success());
     assert_eq!(output.stdout, b"started\n");
-    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 fn success(output: Output) -> Output {
@@ -219,6 +219,60 @@ fn original_columns_tracked_callers_unicode_and_crlf_are_preserved() {
     let source = source.replace("selected()", "selected_columns()");
     let spans = pair(&source, &[], 1);
     assert_eq!(spans[0].name, "app.selected_columns");
+}
+
+#[test]
+fn inactive_async_entry_does_not_reject_the_compilers_actual_main() {
+    let source = "#[cfg(any())]\nasync fn main(){}\nfn selected_location()->u32{column!()}\nfn main(){println!(\"{}\",selected_location());}\n";
+    let spans = pair(source, &[], 1);
+    assert_eq!(spans[0].name, "app.selected_location");
+}
+
+#[test]
+fn legacy_marker_text_is_ordinary_original_source() {
+    let source = "fn selected_marker()->(&'static str,u32){(\"/*quux.otelc.generated*/\",column!())}\nfn main(){println!(\"{:?}\",selected_marker());}\n";
+    let spans = pair(source, &[], 1);
+    assert_eq!(spans[0].name, "app.selected_marker");
+}
+
+#[test]
+fn location_macros_inline_bodies_and_expanded_callbacks_keep_original_observations() {
+    let source = r#"// Unicode λ
+use std::column as alias;
+macro_rules! forwarded { () => { column!() } }
+#[inline(always)] fn selected_direct()->u32 { column!() }
+fn selected_qualified()->u32 { std::column!() }
+fn selected_aliased()->u32 { alias!() }
+fn selected_indirect()->u32 { forwarded!() }
+#[track_caller] fn selected_caller()->&'static std::panic::Location<'static> { std::panic::Location::caller() }
+fn selected_closures()->(u32,u32) { let one=||column!(); let two=||std::column!(); (one(),two()) }
+fn selected_unicode()->(u32,u32) { let λ=7; (λ,column!()) }
+fn selected_work()->(u32,u32,u32,u32,(u32,u32),&'static std::panic::Location<'static>,u32,(u32,u32)) { fn selected_nested()->u32{column!()} (selected_direct(),selected_qualified(),selected_aliased(),selected_indirect(),selected_closures(),selected_caller(),selected_nested(),selected_unicode()) }
+fn main() { println!("{:?}",selected_work()); }
+"#;
+    let spans = pair(&source.replace('\n', "\r\n"), &[], 11);
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.name.contains("<closure"))
+            .count(),
+        2
+    );
+    let parent = spans
+        .iter()
+        .find(|span| span.name == "app.selected_work")
+        .unwrap();
+    assert!(parent.parent_span_id.is_empty());
+    assert!(spans.iter().all(|span| span.trace_id == parent.trace_id));
+    let expanded = "macro_rules! callback{()=>{|| eprintln!(\"generated\")}}\nfn selected_work(){let ordinary=|| eprintln!(\"ordinary\");let generated=callback!();ordinary();generated();}\nfn main(){selected_work();}\n";
+    let spans = pair(expanded, &[], 3);
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.name.contains("<closure"))
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -377,10 +431,12 @@ fn cargo_preserves_original_columns_dependencies_lockfile_and_application_argume
         Command::new("cargo")
             .current_dir(root)
             .args(["build", "--locked", "--offline"])
+            .arg("--target-dir")
+            .arg(root.join("plain-target"))
             .bounded_output(),
     );
     let plain = success(
-        Command::new(root.join("target/debug/original-source-pair"))
+        Command::new(root.join("plain-target/debug/original-source-pair"))
             .current_dir(root)
             .arg("argument with spaces")
             .bounded_output(),

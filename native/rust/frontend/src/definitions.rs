@@ -4,7 +4,7 @@ use quux_otelc_config::Selection;
 use quux_otelc_rust_adapter::{
     compiler_frontend::{Request, position},
     compiler_inventory::Definition,
-    transform::CompilerSite,
+    declarations::CompilerSite,
 };
 use rustc_hir::def::DefKind;
 use rustc_middle::ty::TyCtxt;

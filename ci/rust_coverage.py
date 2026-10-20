@@ -146,6 +146,7 @@ def enforce_rust_file_coverage(report):
                         ("/crates/rust-probes/src/recording.rs", "Rust SDK recording suppression"),
                         ("/crates/rust-adapter/src/compiler_mir.rs", "Rust original-source compiler adapter"),
                         ("/crates/rust-adapter/src/compiler_mir_profile.rs", "Rust stable compiler profile"),
+                        ("/crates/rust-adapter/src/declarations.rs", "Rust original declaration parser"),
                         ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory")):
         selected = []
         include = False

@@ -1,22 +1,19 @@
+//! Read original declarations and annotations; compiler hooks own eligibility and insertion.
 use anyhow::{bail, Context, Result};
-use proc_macro2::{Span, TokenStream, TokenTree};
+use proc_macro2::Span;
 use quote::ToTokens;
 use quux_otelc_config::Selection;
 use quux_otelc_rust::policy::Plan;
 use serde::Serialize;
-use std::collections::HashSet;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
 };
-const MARKER: &str = "quux.otelc.generated";
-#[derive(Debug, Serialize)]
-pub struct Function {
+#[derive(Debug)]
+pub(crate) struct Function {
     pub name: String,
-    pub line: usize,
     pub selected: bool,
     pub unsupported: Option<&'static str>,
-    #[serde(skip)]
     pub(crate) compiler_site: CompilerSite,
 }
 #[derive(Clone, Debug, serde::Deserialize, Serialize)]
@@ -69,29 +66,14 @@ impl CompilerSite {
         }
     }
 }
-#[derive(Clone, Copy, PartialEq)]
-enum Mode {
-    Rewrite,
-    Inspect,
-    CompilerInventory,
-}
-impl Mode {
-    fn inspecting(self) -> bool {
-        self != Self::Rewrite
-    }
-}
 struct Parser<'a> {
     source: &'a str,
     scope: Vec<String>,
     functions: Vec<Function>,
-    edits: Vec<(usize, String)>,
     selection: Selection,
     selected_source: bool,
     plan: &'a Plan,
     startup: bool,
-    mode: Mode,
-    guard: String,
-    shutdown: String,
     error: Option<anyhow::Error>,
 }
 fn offset(source: &str, span: Span) -> usize {
@@ -207,8 +189,7 @@ impl Parser<'_> {
             None
         };
         self.functions.push(Function {
-            name: name.clone(),
-            line: position.line,
+            name,
             selected,
             unsupported,
             compiler_site: CompilerSite::new(
@@ -220,36 +201,6 @@ impl Parser<'_> {
                 node.asyncness.is_some(),
             ),
         });
-        if selected {
-            if let Some(reason) = unsupported {
-                if !self.mode.inspecting() {
-                    self.error = Some(anyhow::anyhow!("{name}: {reason}"));
-                }
-            } else {
-                let annotation = if self.plan.annotations.inject_generated {
-                    "/*otelc.instrument*/"
-                } else {
-                    ""
-                };
-                let probe = format!(
-                    "/*{MARKER}*/{annotation}let {}=::quux_otelc_rust::enter({name:?});",
-                    self.guard
-                );
-                if let syn::Expr::Block(body) = &*node.body {
-                    self.edits.push((
-                        offset(self.source, body.block.brace_token.span.open()) + 1,
-                        probe,
-                    ));
-                } else {
-                    self.edits
-                        .push((offset(self.source, node.body.span()), format!("{{{probe}")));
-                    self.edits.push((
-                        position_offset(self.source, node.body.span().end()),
-                        "}".into(),
-                    ));
-                }
-            }
-        }
         self.scope.push(label);
         visit::visit_expr_closure(self, node);
         self.scope.pop();
@@ -295,8 +246,7 @@ impl Parser<'_> {
             None
         };
         self.functions.push(Function {
-            name: name.clone(),
-            line: sig.fn_token.span.start().line,
+            name,
             selected,
             unsupported,
             compiler_site: CompilerSite::new(
@@ -308,128 +258,6 @@ impl Parser<'_> {
                 sig.asyncness.is_some(),
             ),
         });
-        let mut code = String::new();
-        if self.startup && root && sig.ident == "main" {
-            // Executor attribute macros control async entry-point shutdown;
-            // their expansion is outside this source adapter's current contract.
-            if sig.asyncness.is_some() {
-                self.error = Some(anyhow::anyhow!(
-                    "Rust async main requires executor entry-point qualification"
-                ));
-                return;
-            }
-            if let Some(reason) = unsupported {
-                self.error = Some(anyhow::anyhow!("Rust entry point: {reason}"));
-                return;
-            }
-            code.push_str(&format!(
-                "let {}=::quux_otelc_rust::launch();",
-                self.shutdown
-            ));
-        }
-        if selected {
-            if let Some(reason) = unsupported {
-                if !self.mode.inspecting() {
-                    self.error = Some(anyhow::anyhow!("{name}: {reason}"));
-                }
-                return;
-            }
-            if self.plan.annotations.inject_generated {
-                code.push_str("/*otelc.instrument*/");
-            }
-            if sig.asyncness.is_some() {
-                // Keep the original async signature and parameter ownership.
-                // Only the body is nested; the native await polls it directly,
-                // retaining Pending, wakeups, Send bounds and panic payloads.
-                code.push_str(&format!(
-                    "::quux_otelc_rust::observe_future({name:?},async move{{"
-                ));
-                // Rust async-fn parameters drop in reverse declaration order.
-                // Shadow all named parameters in that order inside the body;
-                // otherwise async-block capture-field order changes cleanup.
-                // The receiver is first and drops after these body bindings.
-                for input in &sig.inputs {
-                    if let syn::FnArg::Typed(input) = input {
-                        if let syn::Pat::Ident(binding) = &*input.pat {
-                            let name = &binding.ident;
-                            if binding.mutability.is_some() {
-                                code.push_str(&format!("let _=&mut {name};let mut {name}={name};"));
-                            } else {
-                                code.push_str(&format!("let {name}={name};"));
-                            }
-                        }
-                    }
-                }
-                // Insert the outer closing wrapper first. Later inner edits at
-                // the same byte offset then precede it in the generated text.
-                self.edits.push((
-                    offset(self.source, body.brace_token.span.close()),
-                    "}).await".into(),
-                ));
-                if let syn::ReturnType::Type(_, output) = &sig.output {
-                    let mut opaque = Opaque(false);
-                    opaque.visit_type(output);
-                    if !opaque.0 {
-                        let mut coercions = Coercions {
-                            source: self.source,
-                            output: output.to_token_stream().to_string(),
-                            edits: &mut self.edits,
-                        };
-                        coercions.visit_block(body);
-                        if let Some(syn::Stmt::Expr(expression, None)) = body.stmts.last() {
-                            if !matches!(expression, syn::Expr::Return(_)) {
-                                coercions.expression(expression);
-                            }
-                        }
-                    }
-                }
-            } else {
-                code.push_str(&format!(
-                    "let {}=::quux_otelc_rust::enter({name:?});",
-                    self.guard
-                ));
-            }
-        }
-        if !code.is_empty() {
-            self.edits.push((
-                offset(self.source, body.brace_token.span.open()) + 1,
-                format!("/*{MARKER}*/{code}"),
-            ));
-        }
-    }
-}
-struct Opaque(bool);
-impl<'ast> Visit<'ast> for Opaque {
-    fn visit_type_impl_trait(&mut self, _: &'ast syn::TypeImplTrait) {
-        self.0 = true;
-    }
-}
-struct Coercions<'a> {
-    source: &'a str,
-    output: String,
-    edits: &'a mut Vec<(usize, String)>,
-}
-impl Coercions<'_> {
-    fn expression(&mut self, expression: &syn::Expr) {
-        self.edits.push((
-            offset(self.source, expression.span()),
-            format!("::std::convert::identity::<{}>(", self.output),
-        ));
-        self.edits.push((
-            position_offset(self.source, expression.span().end()),
-            ")".into(),
-        ));
-    }
-}
-impl<'ast> Visit<'ast> for Coercions<'_> {
-    fn visit_item(&mut self, _: &'ast syn::Item) {}
-    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
-    fn visit_expr_async(&mut self, _: &'ast syn::ExprAsync) {}
-    fn visit_expr_return(&mut self, node: &'ast syn::ExprReturn) {
-        if let Some(expression) = &node.expr {
-            self.expression(expression);
-            self.visit_expr(expression);
-        }
     }
 }
 impl<'ast> Visit<'ast> for Parser<'_> {
@@ -489,120 +317,29 @@ impl<'ast> Visit<'ast> for Parser<'_> {
         visit::visit_trait_item_fn(self, node);
         self.scope.pop();
     }
-    fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if self.selected_source
-            && node.path.is_ident("include")
-            && self.mode != Mode::CompilerInventory
-        {
-            self.error = Some(anyhow::anyhow!(
-                "Rust include! source fragments require separate qualification"
-            ));
-        }
-        visit::visit_macro(self, node);
-    }
-}
-fn identifiers(tokens: TokenStream, used: &mut HashSet<String>) {
-    for token in tokens {
-        match token {
-            TokenTree::Ident(value) => {
-                used.insert(value.to_string().trim_start_matches("r#").into());
-            }
-            TokenTree::Group(group) => identifiers(group.stream(), used),
-            _ => {}
-        }
-    }
-}
-pub fn transform(
-    source: &str,
-    identity: &str,
-    plan: &Plan,
-    selected_source: bool,
-    startup: bool,
-    inspect: bool,
-) -> Result<(String, Vec<Function>)> {
-    transform_mode(
-        source,
-        identity,
-        plan,
-        selected_source,
-        startup,
-        if inspect {
-            Mode::Inspect
-        } else {
-            Mode::Rewrite
-        },
-    )
 }
 
-pub(crate) fn compiler_definitions(
+pub(crate) fn parse(
     source: &str,
     identity: &str,
     plan: &Plan,
     selected_source: bool,
     startup: bool,
-) -> Result<(String, Vec<Function>)> {
-    transform_mode(
-        source,
-        identity,
-        plan,
-        selected_source,
-        startup,
-        Mode::CompilerInventory,
-    )
-}
-
-fn transform_mode(
-    source: &str,
-    identity: &str,
-    plan: &Plan,
-    selected_source: bool,
-    startup: bool,
-    mode: Mode,
-) -> Result<(String, Vec<Function>)> {
-    if source.contains(&format!("/*{MARKER}*/")) {
-        bail!("Rust input is already generated");
-    }
+) -> Result<Vec<Function>> {
     let parsed = syn::parse_file(source).context("parse original Rust source")?;
-    let mut used = HashSet::new();
-    identifiers(
-        source
-            .parse()
-            .map_err(|error| anyhow::anyhow!("parse Rust tokens: {error}"))?,
-        &mut used,
-    );
-    let unique = |prefix: &str| {
-        let mut name = prefix.to_owned();
-        while used.contains(&name) {
-            name.push('_');
-        }
-        name
-    };
     let mut parser = Parser {
         source,
         scope: vec![identity.into()],
         functions: vec![],
-        edits: vec![],
         selection: Selection::new(&plan.functions.include, &plan.functions.exclude, false)?,
         selected_source,
         plan,
         startup,
-        mode,
-        guard: unique("__quux_otelc_guard"),
-        shutdown: unique("__quux_otelc_shutdown"),
         error: None,
     };
     parser.visit_file(&parsed);
     if let Some(error) = parser.error {
         return Err(error);
     }
-    let mut generated = source.to_owned();
-    parser
-        .edits
-        .sort_by_key(|(position, _)| std::cmp::Reverse(*position));
-    if !mode.inspecting() {
-        for (position, code) in parser.edits {
-            generated.insert_str(position, &code);
-        }
-    }
-    Ok((generated, parser.functions))
+    Ok(parser.functions)
 }

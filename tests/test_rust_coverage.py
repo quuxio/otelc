@@ -89,6 +89,7 @@ class CoverageTests(unittest.TestCase):
                 if passes:
                     report += "SF:/tmp/crates/rust-probes/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/recording.rs\nDA:1,1\n"
                     report += "SF:/tmp/crates/rust-adapter/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_mir_profile.rs\nDA:1,1\n"
+                    report += "SF:/tmp/crates/rust-adapter/src/declarations.rs\nDA:1,1\n"
                 with patch.object(rust_coverage.subprocess, "run"), patch.object(Path, "write_text"):
                     def export_map(command, **_):
                         # LLVM can select a zero-hit library map when exported C
@@ -156,6 +157,7 @@ class CoverageTests(unittest.TestCase):
         good = "SF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/compiler_abi.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_inventory.rs\nDA:1,1\n"
         good += "SF:/tmp/crates/rust-probes/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/recording.rs\nDA:1,1\n"
         good += "SF:/tmp/crates/rust-adapter/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_mir_profile.rs\nDA:1,1\n"
+        good += "SF:/tmp/crates/rust-adapter/src/declarations.rs\nDA:1,1\n"
         rust_coverage.enforce_rust_file_coverage(good)
         no_hits = good.replace("DA:1,1", "DA:1,0")
         with self.assertRaisesRegex(ValueError, "trace context"):
@@ -174,6 +176,7 @@ class CoverageTests(unittest.TestCase):
                             ("/crates/rust-probes/src/compiler_mir.rs", "Rust compiler future observers"),
                             ("/crates/rust-adapter/src/compiler_mir.rs", "Rust original-source compiler adapter"),
                             ("/crates/rust-adapter/src/compiler_mir_profile.rs", "Rust stable compiler profile"),
+                            ("/crates/rust-adapter/src/declarations.rs", "Rust original declaration parser"),
                             ("/crates/rust-probes/src/recording.rs", "Rust SDK recording suppression")):
             missing_component = good.replace(path + "\nDA:1,1", path + "\nDA:1,0")
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, label):
