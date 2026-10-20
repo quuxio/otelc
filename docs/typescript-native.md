@@ -1,6 +1,6 @@
 # TypeScript 7 native compiler
 
-Use the common schema-2 policy to opt into Microsoft’s TypeScript 7.0.2 executable compiler. Application and dependency source files remain unchanged. The Node runtime still provides function metrics, sampled spans and live metrics controls; this backend does not add a browser host or automatic lifetimes.
+Use the common schema-2 policy to opt into Microsoft’s TypeScript 7.0.2 executable compiler. Application and dependency source files remain unchanged. The Node runtime still provides function metrics, sampled spans and live metrics controls; ordinary base-class [collection lifetimes](typescript-collection.md) are available through the same common policy. Browser hosts and destruction/resource-release lifetimes remain unavailable.
 
 ```toml
 schema_version = 2

@@ -2,7 +2,7 @@
 import { transformSync, parseSync } from '@babel/core';
 import * as t from '@babel/types';
 import { Selection } from './policy.mjs';
-import { instrumentLifetime } from './lifetime-transform.mjs';
+import { instrumentLifetime, TYPE_IDENTITY } from './lifetime-transform.mjs';
 import { fileURLToPath } from 'node:url';
 
 const probes = fileURLToPath(new URL('./probes.cjs', import.meta.url));
@@ -108,6 +108,7 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
   const selection = new Selection(plan.function_matchers);
   const inventory = [];
   const types = [];
+  const classIdentities = new WeakMap();
   let helper;
   let format;
   let instrumented = false;
@@ -125,11 +126,26 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
         if (path.scope.hasOwnBinding('require')) throw path.buildCodeFrameError('CommonJS top-level require shadowing is unsupported');
         path.unshiftContainer('body', t.variableDeclaration('const', [t.variableDeclarator(helper, t.callExpression(t.identifier('require'), [t.stringLiteral(probes)]))]));
       }
-    } }, Class: { exit(path) {
+    } }, Class: { enter(path) {
+      if (!prepared || !plan.lifetimes?.enabled) return;
+      const constructor = path.node.body.body.find(member => t.isClassMethod(member, { kind: 'constructor' }));
+      if (!constructor) return;
+      const body = constructor.body;
+      const directive = body.directives.find(value => value.value.value.startsWith(TYPE_IDENTITY));
+      const statement = body.body.find(value => t.isExpressionStatement(value) && t.isStringLiteral(value.expression) && value.expression.value.startsWith(TYPE_IDENTITY));
+      const marker = directive?.value.value ?? statement?.expression.value;
+      if (!marker) return;
+      classIdentities.set(path.node, JSON.parse(Buffer.from(marker.slice(TYPE_IDENTITY.length), 'base64').toString()));
+      body.directives = body.directives.filter(value => value !== directive);
+      body.body = body.body.filter(value => value !== statement);
+    }, exit(path) {
       if (!plan.lifetimes?.enabled) return;
-      const name = displayName(path, sourceName);
-      const selected = instrumentLifetime(path, helper, name, plan, plan.annotations.read_existing ? annotation(path) : null);
-      types.push({ name, selected, line: path.node.loc.start.line });
+      const metadata = classIdentities.get(path.node);
+      if (prepared && !metadata) return;
+      const name = metadata?.name ?? displayName(path, sourceName);
+      const tag = plan.annotations.read_existing ? metadata ? metadata.annotation : annotation(path) : null;
+      const selected = instrumentLifetime(path, helper, name, plan, tag);
+      types.push({ name, selected, line: metadata?.line ?? path.node.loc.start.line });
       if (selected) instrumented = true;
     } }, Function: { exit(path) {
       if (!path.node.body) return;

@@ -395,14 +395,10 @@ impl CommonConfig {
             if backend != required && !(language == Language::TypeScript && backend == "native") {
                 unavailable.push(format!("{language} requires the {required} backend"));
             }
-            if self.lifetimes.enabled && language == Language::JavaScript {
+            if self.lifetimes.enabled {
                 if self.lifetimes.boundary != "collection" || !self.traces.enabled {
-                    unavailable.push("JavaScript lifetimes require tracing and the collection boundary; resource release and object destruction are not implemented".into());
+                    unavailable.push(format!("{language} lifetimes require tracing and the collection boundary; resource release and object destruction are not implemented"));
                 }
-            } else if self.lifetimes.enabled {
-                unavailable.push(format!(
-                    "automatic {language} lifetimes are not implemented"
-                ));
             }
         } else if language == Language::Java {
             if backend != "agent" {
