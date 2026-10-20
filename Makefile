@@ -116,8 +116,9 @@ node-check: node-build
 	cargo build -p quux-otelc-cli --locked
 	npm test --prefix adapters/node
 	cd adapters/node && node --test --experimental-test-coverage --test-coverage-include='**/adapters/node/typescript-native.mjs' --test-coverage-include='**/adapters/node/typescript-identities.mjs' --test-coverage-lines=80 tests/typescript-native.test.mjs
-	cd adapters/node && node --test --experimental-test-coverage --test-coverage-include='**/adapters/node/traces.mjs' --test-coverage-lines=80 tests/spans.test.mjs
+	cd adapters/node && node --test --experimental-test-coverage --test-coverage-include='**/adapters/node/traces.mjs' --test-coverage-lines=80 tests/spans.test.mjs tests/lifetimes.test.mjs
 	cd adapters/node && node --test --experimental-test-coverage --test-coverage-include='**/adapters/node/trace-exporter.mjs' --test-coverage-lines=80 tests/spans.test.mjs
+	cd adapters/node && node --test --experimental-test-coverage --test-coverage-include='**/adapters/node/lifetimes.mjs' --test-coverage-include='**/adapters/node/lifetime-transform.mjs' --test-coverage-lines=80 tests/lifetimes.test.mjs
 
 java-build:
 	cd adapters/java && mvn -B -DskipTests package
