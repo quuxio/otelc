@@ -1,4 +1,5 @@
 //! Explicit build artefacts separate compiler channels from application execution.
+use crate::compiler_profile::{HookEvidence, Toolchain};
 use anyhow::{bail, Context, Result};
 use quux_otelc_rust::policy::Plan;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,8 @@ struct Compiler {
 struct Build {
     schema_version: u32,
     language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend: Option<String>,
     executable_sha256: String,
     plan_sha256: String,
     adapter_sha256: String,
@@ -33,6 +36,8 @@ struct Build {
     source_root: PathBuf,
     baseline_flags: Vec<String>,
     compiler: Compiler,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compiler_hook: Option<HookEvidence>,
 }
 
 fn hash(path: &Path) -> Result<String> {
@@ -90,8 +95,7 @@ pub(crate) fn build(
     source: &Path,
     directory: &Path,
     root: &Path,
-    sdk: &Path,
-    rustc: &str,
+    tools: &Toolchain,
     adapter: &Path,
 ) -> Result<()> {
     if directory.try_exists()? {
@@ -103,31 +107,38 @@ pub(crate) fn build(
     let plan: Plan = serde_json::from_slice(&plan_bytes)?;
     plan.validate()?;
     let scratch = tempfile::tempdir()?;
-    let compiled =
-        crate::compiler::compile_recorded(&plan, source, root, scratch.path(), sdk, rustc)?;
+    let compiled = crate::compiler::compile_recorded(&plan, source, root, scratch.path(), tools)?;
     if hash(&source_path)? != source_sha256 {
         bail!("Rust source changed during the build");
     }
-    let version = Command::new(rustc).arg("--version").output()?;
+    let version = Command::new(&tools.rustc)
+        .arg(if tools.llvm.is_some() {
+            "-vV"
+        } else {
+            "--version"
+        })
+        .output()?;
     if !version.status.success() {
         bail!("cannot retain Rust compiler version");
     }
     let mut metadata = Build {
-        schema_version: 1,
+        schema_version: if tools.llvm.is_some() { 2 } else { 1 },
         language: "rust".into(),
+        backend: tools.llvm.as_ref().map(|_| "llvm".into()),
         executable_sha256: hash(&compiled.binary)?,
         plan_sha256: String::new(),
         adapter_sha256: hash(adapter)?,
-        sdk_sha256: hash(sdk)?,
+        sdk_sha256: hash(&tools.sdk)?,
         source: source_path,
         source_sha256,
         source_root: root.to_owned(),
-        baseline_flags: crate::compiler::BASELINE_FLAGS.map(str::to_owned).to_vec(),
+        baseline_flags: compiled.baseline_flags,
         compiler: Compiler {
-            program: rustc.to_owned(),
+            program: tools.rustc.clone(),
             argv: compiled.argv,
             version: String::from_utf8(version.stdout)?.trim().to_owned(),
         },
+        compiler_hook: compiled.hook,
     };
     // Exclusive creation refuses collisions. The manifest is the last file, so
     // interrupted/incomplete bundles fail validation rather than launching.
@@ -138,6 +149,15 @@ pub(crate) fn build(
     };
     fs::copy(compiled.binary, directory.join("application"))?;
     write(&directory.join("plan.json"), &plan_bytes)?;
+    if let Some(inventory) = compiled.inventory {
+        write(&directory.join("inventory.json"), &read(&inventory)?)?;
+    }
+    if let Some(profile) = compiled.profile {
+        write(&directory.join("profile.json"), &profile)?;
+    }
+    if let Some(resolved) = compiled.resolved {
+        write(&directory.join("resolved.json"), &read(&resolved)?)?;
+    }
     metadata.plan_sha256 = hash(&directory.join("plan.json"))?;
     write(
         &directory.join("build.json"),
@@ -157,8 +177,28 @@ pub(crate) fn launch(
         .canonicalize()
         .context("locate Rust artifact bundle")?;
     let metadata: Build = serde_json::from_slice(&read(&directory.join("build.json"))?)?;
-    if metadata.schema_version != 1 || metadata.language != "rust" {
+    if !matches!(metadata.schema_version, 1 | 2) || metadata.language != "rust" {
         bail!("unsupported Rust artifact format");
+    }
+    if let Some(hook) = &metadata.compiler_hook {
+        let inventory = read(&directory.join("inventory.json"))?;
+        if format!("{:x}", Sha256::digest(&inventory)) != hook.inventory_sha256 {
+            bail!("Rust compiler inventory fingerprint mismatch");
+        }
+        if format!(
+            "{:x}",
+            Sha256::digest(read(&directory.join("resolved.json"))?)
+        ) != hook.resolved_sha256
+        {
+            bail!("Rust resolved compiler provenance fingerprint mismatch");
+        }
+        if format!(
+            "{:x}",
+            Sha256::digest(read(&directory.join("profile.json"))?)
+        ) != hook.profile_sha256
+        {
+            bail!("Rust compiler profile fingerprint mismatch");
+        }
     }
     let binary = directory.join("application");
     if !fs::symlink_metadata(&binary)?.is_file() || hash(&binary)? != metadata.executable_sha256 {
@@ -173,6 +213,14 @@ pub(crate) fn launch(
         bail!("Rust artifact policy fingerprint mismatch");
     }
     let stored: serde_json::Value = serde_json::from_slice(&stored_bytes)?;
+    let llvm = stored["backend"] == "llvm";
+    if llvm != metadata.compiler_hook.is_some()
+        || llvm != (metadata.backend.as_deref() == Some("llvm"))
+        || (llvm && metadata.schema_version != 2)
+        || (!llvm && (metadata.schema_version != 1 || metadata.backend.is_some()))
+    {
+        bail!("Rust compiler artifact profile evidence is incomplete");
+    }
     let current: serde_json::Value = serde_json::from_slice(&read(plan_path)?)?;
     for key in [
         "schema_version",

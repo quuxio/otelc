@@ -3,12 +3,14 @@ use quux_otelc_config::{
     common::{Annotations, SharedRuntime, TraceExport},
     Export, Functions, Metrics, Resource, Traces,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Plan {
     pub language: String,
+    #[serde(default = "default_backend")]
+    pub backend: String,
     pub execution_available: bool,
     pub sources: Functions,
     pub functions: Functions,
@@ -23,6 +25,9 @@ pub struct Plan {
     pub resource: Resource,
     pub metrics_endpoint: String,
 }
+fn default_backend() -> String {
+    "compiler".into()
+}
 impl Plan {
     pub fn load(path: &Path) -> Result<Self> {
         let plan: Self = serde_json::from_slice(&std::fs::read(path)?)?;
@@ -31,7 +36,10 @@ impl Plan {
     }
     pub fn validate(&self) -> Result<()> {
         let plan = self;
-        if plan.language != "rust" || !plan.execution_available {
+        if plan.language != "rust"
+            || !plan.execution_available
+            || !matches!(plan.backend.as_str(), "compiler" | "llvm")
+        {
             bail!("Rust adapter requires an executable Rust policy");
         }
         if plan.runtime.max_functions == 0

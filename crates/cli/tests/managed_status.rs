@@ -4,9 +4,11 @@
 mod receiver;
 use std::{
     fs,
+    io::{BufRead, BufReader, Read},
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -131,6 +133,14 @@ fn prepare(language: &str, directory: &Path) -> (Vec<String>, Vec<String>) {
     }
 }
 
+fn captured_output(child: Child, reader: Option<thread::JoinHandle<Vec<u8>>>) -> Output {
+    let mut output = child.wait_with_output().unwrap();
+    if let Some(reader) = reader {
+        output.stdout = reader.join().unwrap();
+    }
+    output
+}
+
 fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>) -> Output {
     let ready = directory.join("ready.pid");
     let _ = fs::remove_file(&ready);
@@ -153,22 +163,53 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let (ready_sender, ready_output) = mpsc::sync_channel(1);
+    let output_reader = signal.map(|_| {
+        let stdout = child.stdout.take().unwrap();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut bytes = Vec::new();
+            reader.read_until(b'\n', &mut bytes).unwrap();
+            let _ = ready_sender.send(bytes.clone());
+            reader.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+    });
     let mut deadline = Instant::now() + Duration::from_secs(120);
     if let Some(signal) = signal {
+        let mut output_ready = false;
         let pid = loop {
+            if let Ok(line) = ready_output.try_recv() {
+                if line != b"ready\n" {
+                    let _ = child.kill();
+                    panic!(
+                        "unexpected readiness output: {:?}",
+                        captured_output(child, output_reader)
+                    );
+                }
+                output_ready = true;
+            }
             if let Ok(value) = fs::read_to_string(&ready) {
                 if let Ok(pid) = value.parse::<u32>() {
-                    break pid;
+                    // The PID file can precede stdout. In particular SIGKILL
+                    // must not race the application-visible readiness write.
+                    if output_ready {
+                        break pid;
+                    }
                 }
             }
-            assert!(
-                child.try_wait().unwrap().is_none(),
-                "target exited before readiness: {:?}",
-                child.wait_with_output().unwrap()
-            );
+            if child.try_wait().unwrap().is_some() {
+                panic!(
+                    "target exited before readiness: {:?}",
+                    captured_output(child, output_reader)
+                );
+            }
             if Instant::now() >= deadline {
                 let _ = child.kill();
-                panic!("target did not become ready");
+                panic!(
+                    "target did not become ready: {:?}",
+                    captured_output(child, output_reader)
+                );
             }
             thread::sleep(Duration::from_millis(5));
         };
@@ -177,7 +218,7 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
     }
     loop {
         if child.try_wait().unwrap().is_some() {
-            let output = child.wait_with_output().unwrap();
+            let output = captured_output(child, output_reader);
             let leftovers: Vec<_> = fs::read_dir(scratch.path())
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name())
@@ -194,9 +235,37 @@ fn launch(arguments: &[String], directory: &Path, code: i32, signal: Option<i32>
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            panic!("launcher did not terminate");
+            panic!(
+                "launcher did not terminate: {:?}",
+                captured_output(child, output_reader)
+            );
         }
         thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn early_exit_keeps_complete_stdout_and_stderr_in_the_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let (arguments, _) = prepare("python", directory.path());
+    fs::write(directory.path().join("termination.py"), "import sys\nprint('ready',flush=True)\nprint('diagnostic-tail',flush=True)\nprint('diagnostic-stderr',file=sys.stderr,flush=True)\nraise SystemExit(7)\n").unwrap();
+    let failure = std::panic::catch_unwind(|| launch(&arguments, directory.path(), -1, Some(15)))
+        .expect_err("fixture should exit before publishing its PID");
+    let message = failure.downcast_ref::<String>().unwrap();
+    assert!(message.contains("diagnostic-tail"), "{message}");
+    assert!(message.contains("diagnostic-stderr"), "{message}");
+}
+
+#[test]
+fn signal_waits_for_ready_output_after_the_pid_is_published() {
+    let directory = tempfile::tempdir().unwrap();
+    let (arguments, _) = prepare("python", directory.path());
+    fs::write(directory.path().join("termination.py"), "import os,time\nwith open('ready.pid','w') as file: file.write(str(os.getpid()))\ntime.sleep(0.25)\nprint('ready',flush=True)\ntime.sleep(60)\n").unwrap();
+    for signal in [15, 9] {
+        let output = launch(&arguments, directory.path(), -1, Some(signal));
+        assert_eq!(output.status.signal(), Some(signal));
+        assert_eq!(output.stdout, b"ready\n");
+        assert!(output.stderr.is_empty());
     }
 }
 

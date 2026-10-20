@@ -57,12 +57,17 @@ type Plan struct {
 }
 
 func Load(path string) (Plan, error) {
-	var p Plan
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return p, err
+		return Plan{}, err
 	}
-	if err = json.Unmarshal(data, &p); err != nil {
+	return Decode(data)
+}
+
+// Decode checks the language and basic runtime limits in a resolved policy.
+func Decode(data []byte) (Plan, error) {
+	var p Plan
+	if err := json.Unmarshal(data, &p); err != nil {
 		return p, err
 	}
 	if p.Language != "go" || !p.Available {

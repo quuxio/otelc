@@ -1,3 +1,4 @@
+use crate::compiler_profile::{HookEvidence, Toolchain};
 use anyhow::{bail, Context, Result};
 use quux_otelc_config::Selection;
 use quux_otelc_rust::policy::Plan;
@@ -182,17 +183,21 @@ pub(crate) const BASELINE_FLAGS: [&str; 3] = ["--edition=2024", "-O", "-g"];
 pub(crate) struct Compilation {
     pub binary: PathBuf,
     pub argv: Vec<String>,
+    pub baseline_flags: Vec<String>,
+    pub hook: Option<HookEvidence>,
+    pub inventory: Option<PathBuf>,
+    pub profile: Option<Vec<u8>>,
+    pub resolved: Option<PathBuf>,
 }
 
-pub fn compile(
+pub(crate) fn compile(
     plan: &Plan,
     filename: &Path,
     root: &Path,
     scratch: &Path,
-    sdk: &Path,
-    rustc: &str,
+    tools: &Toolchain,
 ) -> Result<PathBuf> {
-    Ok(compile_recorded(plan, filename, root, scratch, sdk, rustc)?.binary)
+    Ok(compile_recorded(plan, filename, root, scratch, tools)?.binary)
 }
 
 pub(crate) fn compile_recorded(
@@ -200,9 +205,11 @@ pub(crate) fn compile_recorded(
     filename: &Path,
     root: &Path,
     scratch: &Path,
-    sdk: &Path,
-    rustc: &str,
+    tools: &Toolchain,
 ) -> Result<Compilation> {
+    if tools.llvm.is_some() {
+        return crate::compiler_llvm::compile_recorded(plan, filename, root, scratch, tools);
+    }
     let original_argument = filename.to_path_buf();
     let filename = filename.canonicalize()?;
     let generated = scratch.join("source");
@@ -213,8 +220,8 @@ pub(crate) fn compile_recorded(
     let mut args = vec![source.as_os_str().to_owned()];
     args.extend(BASELINE_FLAGS.map(OsString::from));
     args.extend(["-o".into(), binary.as_os_str().to_owned()]);
-    sdk_arguments(&mut args, sdk, &source, &original_argument)?;
-    let status = Command::new(rustc)
+    sdk_arguments(&mut args, &tools.sdk, &source, &original_argument)?;
+    let status = Command::new(&tools.rustc)
         .args(&args)
         .status()
         .context("compile generated Rust input")?;
@@ -229,7 +236,15 @@ pub(crate) fn compile_recorded(
                 .context("Rust build arguments require UTF-8 paths")
         })
         .collect::<Result<_>>()?;
-    Ok(Compilation { binary, argv })
+    Ok(Compilation {
+        binary,
+        argv,
+        baseline_flags: tools.baseline_flags(),
+        hook: None,
+        inventory: None,
+        profile: None,
+        resolved: None,
+    })
 }
 pub fn wrapper(args: Vec<OsString>) -> Result<i32> {
     let compiler = args
@@ -287,17 +302,14 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
         return crate::artifact::launch(plan_path, Path::new(directory), &args[2..], adapter);
     }
     let root = std::env::current_dir()?.canonicalize()?;
-    let sdk = adapter
-        .parent()
-        .context("Rust adapter directory")?
-        .join("libquux_otelc_rust.rlib");
-    if !sdk.is_file() {
-        bail!("Rust SDK rlib is missing; run make build");
-    }
-    let rustc = std::env::var("OTELC_RUSTC").unwrap_or_else(|_| "rustc".into());
+    let tools = Toolchain::load(&plan.backend, adapter)?;
     if args == ["--doctor"] {
-        doctor(&rustc)?;
-        println!("Rust 1.98.1: generated body guards, Cargo wrapper and SDK metrics available");
+        tools.doctor()?;
+        if tools.llvm.is_some() {
+            println!("Rust qualified nightly/LLVM 23: original-source synchronous compiler hooks; async and Cargo execution unqualified");
+        } else {
+            println!("Rust 1.98.1: generated body guards, Cargo wrapper and SDK metrics available");
+        }
         return Ok(0);
     }
     if args.first().is_some_and(|value| value == "--inspect") {
@@ -330,14 +342,13 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
         if args.len() != 4 || args[2] != "--output-dir" || !args[1].ends_with(".rs") {
             bail!("Rust build-only requires --build SOURCE.rs --output-dir DIRECTORY; Cargo build-only is not yet qualified");
         }
-        doctor(&rustc)?;
+        tools.doctor()?;
         crate::artifact::build(
             plan_path,
             Path::new(&args[1]),
             Path::new(&args[3]),
             &root,
-            &sdk,
-            &rustc,
+            &tools,
             adapter,
         )?;
         return Ok(0);
@@ -345,21 +356,17 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
     let target = args
         .first()
         .context("rust requires SOURCE.rs or Cargo.toml [ARGS...]")?;
-    doctor(&rustc)?;
+    tools.doctor()?;
     let scratch = tempfile::tempdir()?;
     let (binary, application_args) = if target.ends_with(".rs") {
         (
-            compile(
-                &plan,
-                Path::new(target),
-                &root,
-                scratch.path(),
-                &sdk,
-                &rustc,
-            )?,
+            compile(&plan, Path::new(target), &root, scratch.path(), &tools)?,
             args[1..].to_vec(),
         )
     } else if target.ends_with("Cargo.toml") {
+        if tools.llvm.is_some() {
+            bail!("Rust LLVM Cargo integration requires separate qualification; use a standalone source file");
+        }
         let manifest = PathBuf::from(target).canonicalize()?;
         if !manifest
             .parent()
@@ -387,7 +394,7 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
             .env("OTELC_RUST_ROOT", &root)
             .env("OTELC_RUST_GENERATED", &generated)
             .env("OTELC_RUST_PLAN", plan_path)
-            .env("OTELC_RUST_SDK", &sdk)
+            .env("OTELC_RUST_SDK", &tools.sdk)
             .stderr(Stdio::inherit());
         let mut index = 1;
         if args.get(index).is_some_and(|value| value == "--bin") {
