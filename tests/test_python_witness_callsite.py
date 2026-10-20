@@ -87,6 +87,67 @@ class PythonWitnessCallsiteTests(unittest.TestCase):
         self.assertIs(namespace['envelope'].__code__, caller)
         self.assertIs(namespace['wrapper'].__code__, callee)
 
+    def test_factory_calls_and_another_wrapper_generation_need_both_site_and_owner(self):
+        source = '''import signal
+def target(value):
+    return value + 1
+def factory():
+    target(-1)
+    return 41
+def wrapper():
+    return target(factory())
+def callback(_signal, _frame):
+    return wrapper()
+def envelope():
+    signal.raise_signal(signal.SIGUSR1)
+    return wrapper()
+'''
+        namespace = {}
+        exec(compile(source, str(ROOT / 'witness_factory.py'), 'exec'), namespace)
+        registry = CodeRegistry()
+        codes = {name: namespace[name].__code__ for name in ('envelope', 'wrapper', 'target')}
+        for code in codes.values():
+            registry.register(code)
+
+        def site(caller, callee):
+            offset = [instruction.offset for instruction in dis.get_instructions(codes[caller])
+                      if instruction.opname == 'CALL'][-1]
+            return bind_site(registry, codes[caller], codes[callee], offset)
+
+        wrapper_site, target_site = site('envelope', 'wrapper'), site('wrapper', 'target')
+        owner = None
+        wrappers, targets = [], []
+
+        def entered(code, _offset):
+            nonlocal owner
+            if code is codes['wrapper']:
+                frame = sys._getframe(1)
+                matches = wrapper_site.matches(frame)
+                wrappers.append(matches)
+                if matches:
+                    owner = id(frame)
+            elif code is codes['target']:
+                frame = sys._getframe(1)
+                static_site = target_site.matches(frame)
+                targets.append((static_site, static_site and id(frame.f_back) == owner))
+
+        tool = next(number for number in (3, 4, 2, 5) if sys.monitoring.get_tool(number) is None)
+        previous = signal.signal(signal.SIGUSR1, namespace['callback'])
+        sys.monitoring.use_tool_id(tool, 'otelc-private-factory-test')
+        try:
+            sys.monitoring.register_callback(tool, sys.monitoring.events.PY_START, entered)
+            sys.monitoring.set_events(tool, sys.monitoring.events.PY_START)
+            self.assertEqual(namespace['envelope'](), 42)
+        finally:
+            sys.monitoring.set_events(tool, 0)
+            sys.monitoring.register_callback(tool, sys.monitoring.events.PY_START, None)
+            sys.monitoring.free_tool_id(tool)
+            signal.signal(signal.SIGUSR1, previous)
+        self.assertEqual(wrappers, [False, True])
+        self.assertEqual([static for static, _ in targets], [False, True, False, True])
+        self.assertEqual([qualified for _, qualified in targets], [False, False, False, True])
+        self.assertTrue(all(namespace[name].__code__ is code for name, code in codes.items()))
+
     def test_equal_caller_or_callee_clones_cannot_satisfy_the_site(self):
         for name in ('envelope', 'wrapper'):
             with self.subTest(name=name):
