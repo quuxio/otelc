@@ -148,6 +148,96 @@ func TestGoBundleTamperingIsRefusedBeforeApplicationExecution(t *testing.T) {
 			checkRefused(t, "fingerprint mismatch")
 		})
 	}
+	beforeBytes, err := os.ReadFile(filepath.Join(bundle, "modules-original.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterBytes, err := os.ReadFile(filepath.Join(bundle, "modules-instrumented.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*moduleSnapshot, *moduleSnapshot)
+	}{
+		{"empty graphs", func(before, after *moduleSnapshot) { before.Modules = nil; after.Modules = nil }},
+		{"missing original main", func(before, after *moduleSnapshot) {
+			for key, value := range before.Modules {
+				if value.Main {
+					delete(before.Modules, key)
+				}
+			}
+		}},
+		{"duplicate main", func(before, after *moduleSnapshot) {
+			for _, value := range before.Modules {
+				if value.Main {
+					value.Path = "forged/second-main"
+					before.Modules[value.Path] = value
+					break
+				}
+			}
+		}},
+		{"key mismatch", func(before, after *moduleSnapshot) {
+			for key, value := range before.Modules {
+				if value.Main {
+					value.Path = "forged/main"
+					before.Modules[key] = value
+					after.Modules[key] = value
+				}
+			}
+		}},
+		{"language mismatch", func(before, after *moduleSnapshot) { before.Settings.Go = "1.27.2"; after.Settings.Go = "1.27.2" }},
+		{"missing SDK", func(before, after *moduleSnapshot) { delete(after.Modules, "io.quux.otelc/go") }},
+		{"SDK manifest", func(before, after *moduleSnapshot) {
+			sdk := after.Modules["io.quux.otelc/go"]
+			sdk.ModHash = strings.Repeat("0", 64)
+			sdk.Replace.ModHash = sdk.ModHash
+			after.Modules[sdk.Path] = sdk
+		}},
+		{"SDK version", func(before, after *moduleSnapshot) {
+			sdk := after.Modules["io.quux.otelc/go"]
+			sdk.Version = "v999.0.0"
+			after.Modules[sdk.Path] = sdk
+		}},
+	} {
+		t.Run("module evidence "+test.name, func(t *testing.T) {
+			var before, after moduleSnapshot
+			if err := json.Unmarshal(beforeBytes, &before); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(afterBytes, &after); err != nil {
+				t.Fatal(err)
+			}
+			test.change(&before, &after)
+			var manifest bundleManifest
+			if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			for name, snapshot := range map[string]moduleSnapshot{"modules-original.json": before, "modules-instrumented.json": after} {
+				data, err := json.Marshal(snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				write(t, name, data, 0600)
+				manifest.Files[name], err = fileHash(filepath.Join(bundle, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			data, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(t, "build.json", data, 0600)
+			t.Cleanup(func() {
+				write(t, "modules-original.json", beforeBytes, 0600)
+				write(t, "modules-instrumented.json", afterBytes, 0600)
+				write(t, "build.json", manifestBytes, 0600)
+				os.Remove(sentinel)
+			})
+			checkRefused(t, "module evidence")
+		})
+	}
 	t.Run("metadata symlink", func(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(bundle, "plan.json"))
 		if err != nil {

@@ -86,6 +86,44 @@ func validateRecipe(directory string, recipe buildRecipe) error {
 			return err
 		}
 	}
+	return validateModuleEvidence(before, after, recipe)
+}
+
+func validateModuleEvidence(before, after moduleSnapshot, recipe buildRecipe) error {
+	for _, snapshot := range []moduleSnapshot{before, after} {
+		mainCount := 0
+		for path, module := range snapshot.Modules {
+			if path == "" || module.Path != path {
+				return fmt.Errorf("invalid Go module evidence: module path/key mismatch")
+			}
+			if module.Main {
+				mainCount++
+				if languageVersion(module.GoVersion) != languageVersion(snapshot.Settings.Go) {
+					return fmt.Errorf("invalid Go module evidence: main language/settings mismatch")
+				}
+			}
+		}
+		if mainCount != 1 {
+			return fmt.Errorf("incomplete Go module evidence: exactly one main module is required")
+		}
+	}
+	sdk, exists := after.Modules["io.quux.otelc/go"]
+	if !exists || sdk.Main || sdk.Replace == nil || sdk.Replace.Path != recipe.SDKRoot || sdk.Replace.Dir != recipe.SDKRoot || sdk.Replace.Version != "" {
+		return fmt.Errorf("invalid Go module evidence: SDK replacement identity mismatch")
+	}
+	expected := recipe.Inputs[filepath.Join(recipe.SDKRoot, "go.mod")].SHA256
+	if sdk.ModHash != expected || sdk.Replace.ModHash != expected {
+		return fmt.Errorf("invalid Go module evidence: SDK manifest identity mismatch")
+	}
+	matched := 0
+	for _, module := range recipe.Instrumented.Deps {
+		if module.Path == sdk.Path && module.Version == sdk.Version && module.Replace != nil && module.Replace.Path == sdk.Replace.Path {
+			matched++
+		}
+	}
+	if matched != 1 {
+		return fmt.Errorf("invalid Go module evidence: SDK embedded dependency mismatch")
+	}
 	return preserveModules(before, after)
 }
 
