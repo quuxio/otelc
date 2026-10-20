@@ -3,10 +3,10 @@ use quux_otelc_config::{
     common::{Annotations, SharedRuntime, TraceExport},
     Export, Functions, Metrics, Resource, Traces,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Plan {
     pub language: String,
     #[serde(default = "default_backend")]

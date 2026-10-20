@@ -12,12 +12,16 @@ from .rust_coverage import line_coverage, merge_line_reports
 COMPONENTS = ("crates/rust-adapter/src/compiler_inputs.rs",
               "crates/rust-adapter/src/compiler_profile.rs",
               "crates/rust-adapter/src/compiler_llvm.rs",
+              "crates/rust-adapter/src/compiler_frontend.rs",
+              "native/rust/frontend/src/main.rs",
               "native/rust/OtelcRustPass.cpp")
 
 
 def source_hashes(root: Path) -> dict[str, str]:
     """Reject stale or concurrently changed source maps before combining reports."""
-    files = [root / "Cargo.toml", root / "Cargo.lock"]
+    files = [root / name for name in ("Cargo.toml", "Cargo.lock",
+             "native/rust/frontend/Cargo.toml", "native/rust/frontend/Cargo.lock",
+             "ci/build_rust_llvm.py", "ci/rust_llvm_coverage.py", "ci/rust_coverage.py")]
     for directory in ("crates", "native", "include"):
         files.extend(path for path in (root / directory).rglob("*")
                      if path.is_file() and path.suffix in (".rs", ".cpp", ".h", ".hpp")
@@ -58,7 +62,7 @@ def export_report(target: Path, tools: Path, values: dict[str, str], plugin: Pat
                     *map(str, profiles), "-o", str(merged)], check=True, env=values)
     objects = [path for path in (target / "debug/deps").iterdir()
                if path.is_file() and not path.suffix and os.access(path, os.X_OK)]
-    objects.extend([target / "debug/otelc-rust-adapter", plugin,
+    objects.extend([target / "debug/otelc-rust-adapter", target / "debug/otelc-rust-frontend", plugin,
                     *sorted((target / "retained").glob("*"))])
     command = [str(tools / "llvm-cov"), "export", "--format=lcov",
                "--instr-profile=" + str(merged),
@@ -92,6 +96,7 @@ def run(root: Path | None = None) -> str:
         before = source_hashes(root)
         values, config = environment(root, target)
         tools = builder.llvm_tools(config)
+        builder.check_frontend(root, Path(values['RUSTC']), values)
         for profile in target.rglob("*.profraw"):
             profile.unlink()
         for binary in (target / "retained").glob("*"):
@@ -101,10 +106,19 @@ def run(root: Path | None = None) -> str:
                         "quux-otelc-rust-adapter", "--locked"], cwd=root, env=values, check=True)
         destination = target / "debug"
         plugin = builder.compile_pass(root, destination, config, values, coverage=True)
+        # The compiler-private workspace can instantiate dependency helpers with
+        # different feature/codegen contexts. Give its coverage symbols a distinct
+        # crate identity before combining raw counts with adapter/SDK profiles.
+        # Retain otherwise stripped SDK ABI counters: their zero-count mappings
+        # must not be mistaken for the differently compiled application's ABI.
+        frontend_values = dict(values, RUSTFLAGS=values["RUSTFLAGS"]
+                               + " -C metadata=otelc_frontend_coverage -C link-dead-code")
+        frontend = builder.compile_frontend(root, destination, Path(values["RUSTC"]), frontend_values,
+                                            target / "frontend")
         builder.write_profile(root, destination, Path(values["RUSTC"]),
-                              destination / "libquux_otelc_rust.rlib", plugin)
+                              destination / "libquux_otelc_rust.rlib", plugin, frontend)
         subprocess.run(["cargo", "test", "-p", "quux-otelc-rust-adapter", "--lib",
-                        "--test", "compiler_inventory", "--test", "compiler_llvm", "--locked",
+                        "--test", "compiler_inventory", "--test", "compiler_frontend", "--test", "compiler_llvm", "--locked",
                         "--", "--include-ignored", "--test-threads=1"],
                        cwd=root, env=values, check=True)
         report = export_report(target, tools, values, plugin)

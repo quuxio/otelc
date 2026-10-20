@@ -64,11 +64,52 @@ def compile_pass(root: Path, destination: Path, config: str,
     return plugin
 
 
+def frontend_environment(rustc: Path, environment: dict[str, str]) -> dict[str, str]:
+    """Resolve compiler-private libraries without changing the active toolchain."""
+    values = dict(environment, RUSTC=str(rustc))
+    flags = shlex.split(values.pop("RUSTFLAGS", ""))
+    library = rustc.parent.parent / "lib"
+    flags.extend(["-C", "rpath", "-L", "native=" + str(library),
+                  "-C", "link-arg=-Wl,-rpath," + str(library)])
+    values["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
+    values['CARGO'] = shutil.which('cargo') or 'cargo'
+    return values
+
+
+def check_frontend(root: Path, rustc: Path, environment: dict[str, str]) -> None:
+    """Lint the separate compiler-private workspace with its matching Clippy."""
+    manifest = root / 'native/rust/frontend/Cargo.toml'
+    values = frontend_environment(rustc, environment)
+    subprocess.run(['cargo', 'fmt', '--manifest-path', str(manifest), '--', '--check'],
+                   cwd=root, env=values, check=True)
+    subprocess.run([str(rustc.parent / 'cargo-clippy'), 'clippy', '--manifest-path', str(manifest),
+                    '--locked', '--target-dir', str(root / 'target/rust-frontend'), '--', '-D', 'warnings'],
+                   cwd=root, env=values, check=True)
+
+
+def compile_frontend(root: Path, destination: Path, rustc: Path,
+                     environment: dict[str, str], target: Path | None = None) -> Path:
+    """Build compiler-private code only with its qualified nightly and dev SDK."""
+    target = target or root / "target/rust-frontend"
+    values = dict(environment, RUSTC=str(rustc))
+    library = rustc.parent.parent / "lib"
+    # Linker settings belong to this binary, not every shared dependency.
+    subprocess.run(["cargo", "rustc", "--manifest-path", str(root / "native/rust/frontend/Cargo.toml"),
+                    "--locked", "--target-dir", str(target), "--bin", "otelc-rust-frontend",
+                    "--", "-C", "rpath", "-L", "native=" + str(library),
+                    "-C", "link-arg=-Wl,-rpath," + str(library)],
+                   cwd=root, env=values, check=True)
+    frontend = destination / "otelc-rust-frontend"
+    shutil.copy2(target / "debug/otelc-rust-frontend", frontend)
+    return frontend
+
+
 def write_profile(root: Path, destination: Path, rustc: Path,
-                  sdk: Path, plugin: Path) -> dict[str, object]:
-    """Publish a matching descriptor only after both built inputs exist."""
-    profile = {"schema_version": 1, "rustc": str(rustc), "sdk": str(sdk),
+                  sdk: Path, plugin: Path, frontend: Path) -> dict[str, object]:
+    """Publish a matching descriptor only after every compiler input exists."""
+    profile = {"schema_version": 2, "rustc": str(rustc), "sdk": str(sdk),
                "sdk_sha256": fingerprint(sdk), "plugin": str(plugin),
+               "frontend": str(frontend), "frontend_sha256": fingerprint(frontend),
                "plugin_sha256": fingerprint(plugin), "llvm_version": "23.1.3",
                "protected_source_roots": [str(root / "crates" / name)
                                           for name in ("config", "export", "rust-probes")]}
@@ -90,9 +131,10 @@ def build(root: Path, destination: Path, environment: dict[str, str]) -> dict[st
                     "--target-dir", str(sdk_target)], cwd=root,
                    env={**environment, "RUSTC": str(rustc)}, check=True)
     plugin = compile_pass(root, destination, config, environment)
+    frontend = compile_frontend(root, destination, rustc, environment)
     sdk = sdk_target / "debug/libquux_otelc_rust.rlib"
     # Publish metadata last; a failed build cannot silently pair new and old inputs.
-    return write_profile(root, destination, rustc, sdk, plugin)
+    return write_profile(root, destination, rustc, sdk, plugin, frontend)
 
 
 def main() -> None:

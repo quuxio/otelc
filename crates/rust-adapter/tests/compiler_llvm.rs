@@ -104,7 +104,7 @@ fn build(root: &Path, plan: &Path) -> Value {
         metadata["compiler_hook"]["plugin_sha256"]
     );
     let inventory = record("inventory.json", "inventory_sha256");
-    assert_eq!(inventory["schema_version"], 2);
+    assert_eq!(inventory["schema_version"], 3);
     let resolved = record("resolved.json", "resolved_sha256");
     assert_eq!(resolved["schema_version"], 1);
     assert_eq!(resolved["phase"], "llvm-pipeline-start");
@@ -179,6 +179,259 @@ fn health(root: &Path, calls: u64) -> Value {
         .all(|value| value == 0));
     assert!(report["traces"]["losses"].as_object().unwrap().is_empty());
     report
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn independent_scalar_codec_macros_do_not_block_an_unrelated_selected_target() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(root, &receiver, vec!["app.echo".into()]);
+    let source = include_str!("llvm/consumer_codec.rs");
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    let flags: Vec<_> = metadata["baseline_flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|flag| flag.as_str().unwrap())
+        .collect();
+    success(
+        command(
+            Path::new(metadata["compiler"]["program"].as_str().unwrap()),
+            root,
+        )
+        .args(flags)
+        .args(["app.rs", "-o", "plain"])
+        .output()
+        .unwrap(),
+    );
+    let observation = root.join("observation.txt");
+    let plain = success(
+        command(&root.join("plain"), root)
+            .env("OTELEQ_OBSERVATION", &observation)
+            .output()
+            .unwrap(),
+    );
+    let original_observation = fs::read(&observation).unwrap();
+    let measured = success(
+        command(&adapter(), root)
+            .arg(&plan)
+            .args(["--run", "bundle"])
+            .env("OTELEQ_OBSERVATION", &observation)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(measured.stdout, plain.stdout);
+    assert_eq!(measured.stderr, plain.stderr);
+    assert_eq!(measured.stderr, b"app-stderr:echo\n");
+    assert_eq!(fs::read(observation).unwrap(), original_observation);
+    health(root, 1);
+    let spans = receiver.spans();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].name, "app.echo");
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn selected_ordinary_and_generated_expression_macro_closures_keep_their_owners() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(root, &receiver, vec!["*<closure*".into()]);
+    let source = "macro_rules! callback{()=>{|| eprintln!(\"generated\")}}\nfn work(){let ordinary=|| eprintln!(\"ordinary\");let generated=callback!();ordinary();generated();}\nfn main(){work();}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    let output = success(compare(root, &plan, &metadata));
+    assert_eq!(output.stderr, b"ordinary\ngenerated\n");
+    health(root, 2);
+    let spans = receiver.spans();
+    assert_eq!(spans.len(), 2);
+    assert!(spans
+        .iter()
+        .any(|span| span.name.contains("work.<closure>")));
+    assert!(spans.iter().any(|span| span.name == "app.work.<closure#1>"));
+    assert_ne!(spans[0].name, spans[1].name);
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn compiler_owned_symbols_cover_macro_generated_functions_and_generic_instances() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(
+        root,
+        &receiver,
+        vec!["app.generated".into(), "app.generic".into()],
+    );
+    let source = "macro_rules! declare { ($name:ident) => { fn $name(value:u64)->u64 { value+1 } } }\ndeclare!(generated);\nfn generic<T:std::ops::Add<Output=T>+Copy>(value:T)->T{value+value}\nfn main(){println!(\"{}:{}:{}\",generated(6),generic(9u128),generic(1.5f32));}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    success(compare(root, &plan, &metadata));
+    health(root, 3);
+    let spans = receiver.spans();
+    assert_eq!(spans.len(), 3);
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.name == "app.generated")
+            .count(),
+        1
+    );
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.name == "app.generic")
+            .count(),
+        2
+    );
+    let resolved: Value =
+        serde_json::from_slice(&fs::read(root.join("bundle/resolved.json")).unwrap()).unwrap();
+    let symbols: std::collections::BTreeSet<_> = resolved["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["selected"] == true)
+        .map(|row| row["compiled_symbol"].as_str().unwrap())
+        .collect();
+    assert_eq!(symbols.len(), 3);
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn included_declarations_keep_their_original_source_selection() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(root, &receiver, vec!["included.selected".into()]);
+    fs::write(
+        root.join("included.rs"),
+        "fn selected()->(u32,u32){(line!(),column!())}\n",
+    )
+    .unwrap();
+    let source = "include!(\"included.rs\");\nfn main(){println!(\"{:?}\",selected());}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    success(compare(root, &plan, &metadata));
+    health(root, 1);
+    assert_eq!(receiver.spans()[0].name, "included.selected");
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn macro_generated_async_functions_are_refused_before_main_executes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(root, &receiver, vec!["app.generated".into()]);
+    fs::write(root.join("app.rs"), "macro_rules! declare{()=>{async fn generated()->u64{7}}} declare!(); fn main(){let _future=generated();std::fs::write(\"ran\",\"yes\").unwrap();}\n").unwrap();
+    let output = run(root, &plan, &["app.rs"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("future-completion"));
+    assert!(!root.join("ran").exists());
+    assert!(receiver.spans().is_empty());
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn macro_generated_method_names_are_independent_of_input_path_spelling() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(root, &receiver, vec!["*.selected".into()]);
+    let source = "macro_rules! declare{()=>{struct Item;impl Item{fn selected(&self)->u32{column!()}}}}\ndeclare!();\nfn main(){println!(\"{}\",Item.selected());}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    success(compare(root, &plan, &metadata));
+    let first = health(root, 1);
+    let absolute = root.join("app.rs").canonicalize().unwrap();
+    success(run(
+        root,
+        &plan,
+        &[
+            "--build",
+            absolute.to_str().unwrap(),
+            "--output-dir",
+            "absolute-bundle",
+        ],
+    ));
+    success(run(root, &plan, &["--run", "absolute-bundle"]));
+    let second = health(root, 1);
+    assert_eq!(first["functions"], second["functions"]);
+    let name = first["functions"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap();
+    assert!(name.starts_with("app.<impl#"), "{name}");
+    assert!(name.ends_with(".selected"));
+    assert!(!name.contains(root.to_str().unwrap()));
+    assert_eq!(receiver.spans().len(), 2);
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn macro_generated_closures_keep_compiler_owned_names_and_original_locations() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_configured(
+        root,
+        &receiver,
+        vec!["app.main.<closure#0>".into()],
+        vec![],
+        4096,
+    );
+    let source = "macro_rules! callback{()=>{|| (line!(),column!(),7)}}\nfn main(){let run=callback!();println!(\"{:?}\",run());}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    success(compare(root, &plan, &metadata));
+    health(root, 1);
+    let spans = receiver.spans();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].name, "app.main.<closure#0>");
+    assert!(spans[0].parent_span_id.is_empty());
+    let inventory: Value =
+        serde_json::from_slice(&fs::read(root.join("bundle/inventory.json")).unwrap()).unwrap();
+    assert!(inventory["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| {
+            row["name"] == "app.main.<closure#0>"
+                && row["compiler_expansion"] == true
+                && row["emitted"] == true
+                && !row["compiled_symbol"].as_str().unwrap().is_empty()
+        }));
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn compiler_owners_ignore_cfg_disabled_async_and_separate_ctfe_from_runtime_calls() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy(root, &receiver);
+    let source = "#[cfg(any())] async fn disabled(){}\nconst fn plain(value:u64)->u64{value+1}\nmacro_rules! declare{()=>{const fn generated(value:u64)->u64{value+1}}} declare!();\nconst BEFORE:u64=plain(4)+generated(5);\nfn main(){let value=std::env::args().count() as u64;println!(\"{}:{}:{}\",BEFORE,plain(value),generated(value));}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    let output = success(compare(root, &plan, &metadata));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "11:2:2\n");
+    health(root, 2);
+    let spans = receiver.spans();
+    assert_eq!(spans.len(), 2);
+    assert!(spans.iter().any(|span| span.name == "app.plain"));
+    assert!(spans.iter().any(|span| span.name == "app.generated"));
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
 }
 
 #[test]
