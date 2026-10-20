@@ -14,3 +14,8 @@ sha2 = "0.10"
 quux-otelc-config = { path = "../../../crates/config" }
 quux-otelc-rust = { path = "../../../crates/rust-probes" }
 quux-otelc-rust-adapter = { path = "../../../crates/rust-adapter" }
+
+[dev-dependencies]
+tempfile = "3"
+prost = "0.14"
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }

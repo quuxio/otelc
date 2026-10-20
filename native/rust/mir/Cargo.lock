@@ -564,12 +564,15 @@ name = "otelc-rust-mir"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "opentelemetry-proto",
+ "prost",
  "quux-otelc-config",
  "quux-otelc-rust",
  "quux-otelc-rust-adapter",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]

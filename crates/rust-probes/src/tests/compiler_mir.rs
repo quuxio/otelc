@@ -222,10 +222,11 @@ fn sdk_operations_do_not_reenter_sync_or_future_recording() {
     let original = context(&runtime);
     poll_exit(runtime.enter_future("pending", key(16, 1)), false);
     {
-        let _sdk = crate::recording::Suppression::enter();
+        let allocator = allocation_enter();
         drop(runtime.enter_scoped("sdk_allocation"));
         poll_exit(runtime.enter_future("sdk_poll", key(32, 2)), true);
         drop_exit(runtime.drop_future(key(16, 1)));
+        allocation_exit(allocator);
     }
     assert_eq!(context(&runtime), original);
     assert_eq!(runtime.report()["future_observers"]["pending"], 1);

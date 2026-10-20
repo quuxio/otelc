@@ -138,7 +138,12 @@ impl Definitions<'_> {
             && (!definition.unsupported.is_empty() || definition.name.len() > 1024)
         {
             bail!(
-                "Rust LLVM: unsupported compiler definition {}: {}",
+                "{}: unsupported compiler definition {}: {}",
+                if runtime_futures {
+                    "Rust compiler"
+                } else {
+                    "Rust LLVM"
+                },
                 definition.name,
                 definition.unsupported
             );

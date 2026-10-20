@@ -249,3 +249,18 @@ pub fn stop() {
 #[cfg(test)]
 #[path = "tests/compiler_mir.rs"]
 mod tests;
+
+/// Stack-only exclusion for global allocator implementations and their helpers.
+/// Recording could allocate while an allocator already holds its own lock.
+#[must_use]
+pub struct AllocatorGuard {
+    _suppression: crate::recording::Suppression,
+}
+pub fn allocation_enter() -> AllocatorGuard {
+    AllocatorGuard {
+        _suppression: crate::recording::Suppression::enter(),
+    }
+}
+pub fn allocation_exit(guard: AllocatorGuard) {
+    drop(guard);
+}

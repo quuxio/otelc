@@ -51,6 +51,30 @@ fn definition_source(tcx: TyCtxt<'_>, id: LocalDefId) -> Option<(LocalDefId, boo
         None => None,
     }
 }
+fn allocator_method(tcx: TyCtxt<'_>, id: LocalDefId) -> Result<bool> {
+    let Some(trait_item) = tcx.trait_item_of(id.to_def_id()) else {
+        return Ok(false);
+    };
+    let Some(trait_id) = tcx.trait_of_assoc(trait_item) else {
+        return Ok(false);
+    };
+    if tcx.crate_name(trait_id.krate).as_str() != "core" {
+        return Ok(false);
+    }
+    // Resolve the standard library's actual exported trait. An application
+    // trait or function with the same spelling is not an allocator boundary.
+    let child = |module, name: &str| {
+        tcx.module_children(module)
+            .iter()
+            .find(|item| item.ident.name.as_str() == name)
+            .and_then(|item| item.res.opt_def_id())
+    };
+    let alloc = child(trait_id.krate.as_def_id(), "alloc")
+        .context("qualified core allocation module is missing")?;
+    let global =
+        child(alloc, "GlobalAlloc").context("qualified core GlobalAlloc trait is missing")?;
+    Ok(trait_id == global)
+}
 fn site(tcx: TyCtxt<'_>, id: LocalDefId) -> Result<u128> {
     let identity = format!("{:?}", tcx.def_path_hash(id.to_def_id()));
     let hash = Sha256::digest(identity.as_bytes());
@@ -84,6 +108,13 @@ fn observe<'tcx>(
     let Some((owner, asynchronous)) = definition_source(tcx, id) else {
         return Ok(None);
     };
+    if !asynchronous && allocator_method(tcx, owner)? {
+        // Safety also covers local allocator bodies in excluded files or an
+        // external #[path] module: they can call selected application helpers.
+        let mut body = original.clone();
+        instrument::synchronous(tcx, &mut body, None, false, true)?;
+        return Ok(Some(body));
+    }
     let request = REQUEST.get().context("Rust MIR request is missing")?;
     let definitions = Definitions {
         request,
@@ -119,6 +150,7 @@ fn observe<'tcx>(
             &mut body,
             definition.selected.then_some(definition.name.as_str()),
             definition.site.startup,
+            false,
         )?;
     }
     Ok(Some(body))
@@ -152,6 +184,18 @@ impl Callbacks for Probe {
         krate: &mut rustc_ast::Crate,
     ) -> Compilation {
         let parsed = (|| -> Result<_> {
+            let request = REQUEST.get().context("Rust MIR request is missing")?;
+            let file = compiler
+                .sess
+                .source_map()
+                .lookup_source_file(krate.spans.inner_span.lo());
+            let entry =
+                std::path::PathBuf::from(file.name.prefer_local_unconditionally().to_string())
+                    .canonicalize()
+                    .context("Rust MIR original crate root is missing")?;
+            if entry != request.entry {
+                bail!("Rust MIR compiler input differs from its requested original crate root");
+            }
             let mut parser = rustc_parse::new_parser_from_source_str(
                 &compiler.sess.psess,
                 FileName::Custom("<otelc-compiler-sdk>".into()),
@@ -203,6 +247,9 @@ impl Callbacks for Probe {
     }
 }
 fn run() -> Result<()> {
+    if std::env::var_os("RUSTC_BOOTSTRAP").is_some() {
+        bail!("Rust MIR application compilation requires RUSTC_BOOTSTRAP to be unset");
+    }
     let path = std::env::var_os("OTELC_RUST_MIR_REQUEST")
         .context("Rust MIR compiler request is missing")?;
     let request = Request::load_for_backend(Path::new(&path), "compiler")?;

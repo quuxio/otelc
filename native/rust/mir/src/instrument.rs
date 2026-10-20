@@ -71,13 +71,18 @@ pub(crate) fn synchronous<'tcx>(
     body: &mut Body<'tcx>,
     name: Option<&str>,
     startup: bool,
+    allocation: bool,
 ) -> Result<()> {
     let hooks = Hooks::load(tcx)?;
     let source = info(body);
     let unit = body
         .local_decls
         .push(LocalDecl::with_source_info(tcx.types.unit, source));
-    let enter = name.map(|_| hooks.get(tcx, "sync_enter")).transpose()?;
+    let enter = if allocation {
+        Some(hooks.get(tcx, "allocation_enter")?)
+    } else {
+        name.map(|_| hooks.get(tcx, "sync_enter")).transpose()?
+    };
     let guard = enter.map(|enter| {
         let ty = tcx
             .fn_sig(enter)
@@ -88,7 +93,11 @@ pub(crate) fn synchronous<'tcx>(
         body.local_decls
             .push(LocalDecl::with_source_info(ty, source))
     });
-    let exit = name.map(|_| hooks.get(tcx, "sync_exit")).transpose()?;
+    let exit = if allocation {
+        Some(hooks.get(tcx, "allocation_exit")?)
+    } else {
+        name.map(|_| hooks.get(tcx, "sync_exit")).transpose()?
+    };
     let start = startup.then(|| hooks.get(tcx, "start")).transpose()?;
     let stop = startup.then(|| hooks.get(tcx, "stop")).transpose()?;
     let blocks = body.basic_blocks.as_mut();
@@ -151,17 +160,18 @@ pub(crate) fn synchronous<'tcx>(
         }
     }
     let mut target = move_start(blocks);
-    if let (Some(enter), Some(guard), Some(name)) = (enter, guard, name) {
-        target = blocks.push(BasicBlockData::new(
-            Some(call(
+    if let (Some(enter), Some(guard)) = (enter, guard) {
+        let arguments = if allocation {
+            vec![]
+        } else {
+            vec![hooks::string(
                 tcx,
-                enter,
-                vec![hooks::string(tcx, name, source.span)],
-                guard,
-                target,
-                source,
-                false,
-            )),
+                name.context("Rust MIR function name is missing")?,
+                source.span,
+            )]
+        };
+        target = blocks.push(BasicBlockData::new(
+            Some(call(tcx, enter, arguments, guard, target, source, false)),
             false,
         ));
     }
