@@ -17,7 +17,7 @@ setup:
 	npm ci --ignore-scripts --prefix adapters/node
 
 lint:
-	$(MARKDOWNLINT) '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore '.scannerwork/**'
+	$(MARKDOWNLINT) '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore 'build/**' --ignore '.scannerwork/**'
 
 test:
 	mkdir -p build

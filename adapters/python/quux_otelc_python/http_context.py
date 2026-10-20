@@ -46,11 +46,37 @@ def request_fields(handler):
     return parents, states, hosts
 
 
+def request_authority(hosts, scheme):
+    """Recognise a single parser-owned Host without resolving DNS names."""
+    if len(hosts) != 1 or len(hosts[0]) > 1024:
+        return None
+    try:
+        candidate = urllib.parse.urlsplit('//' + hosts[0])
+        if (not candidate.path and not candidate.query and not candidate.fragment
+                and candidate.username is None):
+            return candidate.hostname, candidate.port or (443 if scheme == 'https' else 80)
+    except ValueError:
+        pass  # Malformed application Host fields cannot identify an OTLP sink.
+    return None
+
+
+def local_target(hostname, local):
+    """Only numeric or loopback identities qualify without an actual Host field."""
+    if hostname == 'localhost':
+        return local.is_loopback
+    try:
+        return local == ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+
+
 class HTTPContext:
     """Own bounded local HTTP trees independently of distributed trace IDs."""
 
     def __init__(self, runtime):
         from .http_client_context import HTTPClientContext
+        if runtime.plan.get('http_integration', 'stdlib') != 'stdlib':
+            raise ValueError('Python HTTP integration requires stdlib')
         self.runtime = runtime
         self.local = threading.local()
         self.active = {}
@@ -88,14 +114,7 @@ class HTTPContext:
         except (OSError, ValueError):
             return False
         scheme = 'https' if type(connection) is ssl.SSLSocket else 'http'
-        authority = None
-        if len(hosts) == 1 and len(hosts[0]) <= 1024:
-            try:
-                candidate = urllib.parse.urlsplit('//' + hosts[0])
-                if not candidate.path and not candidate.query and not candidate.fragment and candidate.username is None:
-                    authority = (candidate.hostname, candidate.port or (443 if scheme == 'https' else 80))
-            except ValueError:
-                pass  # Malformed application Host fields cannot identify an OTLP sink.
+        authority = request_authority(hosts, scheme)
         for target in self.targets:
             port = target.port or (443 if target.scheme == 'https' else 80)
             if scheme != target.scheme or address[1] != port or path != (target.path or '/'):
@@ -104,15 +123,8 @@ class HTTPContext:
                 if authority == (target.hostname, port):
                     return True
                 continue
-            if hosts:
-                continue
-            if target.hostname == 'localhost' and local.is_loopback:
+            if not hosts and local_target(target.hostname, local):
                 return True
-            try:
-                if local == ipaddress.ip_address(target.hostname):
-                    return True
-            except ValueError:
-                pass  # External DNS names are matched through the actual Host field.
         return False
 
     def enter_server(self, handler, entry):

@@ -271,6 +271,7 @@ fn defaults_and_backend_preferences_are_deterministic() {
         Adapter {
             backend: "callbacks".into(),
             native: None,
+            http: None,
         },
     );
     assert_eq!(
@@ -519,7 +520,7 @@ fn task_propagation_has_shared_policy_and_explicit_capabilities() {
     }
     config.propagation.http = true;
     assert!(
-        !config
+        config
             .resolve(Language::Python)
             .unwrap()
             .execution_available
@@ -528,6 +529,63 @@ fn task_propagation_has_shared_policy_and_explicit_capabilities() {
         "schema_version=2\nlanguages=[\"python\"]\n[propagation]\nunknown=true"
     )
     .is_err());
+}
+
+#[test]
+fn http_profile_is_common_and_only_the_qualified_python_binding_is_available() {
+    let mut config = policy();
+    config.traces.enabled = true;
+    config.propagation.http = true;
+    for language in &config.languages {
+        let resolved = config.resolve(*language).unwrap();
+        assert_eq!(resolved.execution_available, *language == Language::Python);
+        assert_eq!(
+            resolved.http_integration.as_deref(),
+            (*language == Language::Python).then_some("stdlib")
+        );
+        if *language != Language::Python {
+            assert!(resolved
+                .unavailable
+                .iter()
+                .any(|reason| reason.contains("HTTP context propagation")));
+        }
+    }
+    config.adapters.insert(
+        Language::Python,
+        Adapter {
+            http: Some("stdlib".into()),
+            ..Adapter::default()
+        },
+    );
+    assert_eq!(
+        config
+            .resolve(Language::Python)
+            .unwrap()
+            .http_integration
+            .as_deref(),
+        Some("stdlib")
+    );
+    config.propagation.http = false;
+    assert!(config
+        .resolve(Language::Python)
+        .unwrap()
+        .http_integration
+        .is_none());
+    config.adapters.get_mut(&Language::Python).unwrap().http = Some("requests".into());
+    assert!(config
+        .validate()
+        .unwrap_err()
+        .to_string()
+        .contains("unsupported HTTP integration"));
+    config.adapters.clear();
+    config.adapters.insert(
+        Language::Java,
+        Adapter {
+            http: Some("stdlib".into()),
+            ..Adapter::default()
+        },
+    );
+    assert!(config.validate().is_err());
 }
 
 #[test]

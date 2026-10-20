@@ -1,6 +1,6 @@
 # Telemetry semantics
 
-Function metrics and sampled function spans are implemented for C/C++, Rust, Python, Java, JavaScript, TypeScript and Go within their qualified boundaries. Callback-only native instrumentation supports metrics; native spans require the matched LLVM backend. Python standard asyncio task propagation is opt-in; other task integrations and distributed propagation remain open. See the [trace guide](traces.md) and [current implementation](local-implementation.md).
+Function metrics and sampled function spans are implemented for C/C++, Rust, Python, Java, JavaScript, TypeScript and Go within their qualified boundaries. Callback-only native instrumentation supports metrics; native spans require the matched LLVM backend. Qualified Python asyncio/worker and Java platform-pool task propagation are opt-in. Python also has a qualified [stdlib HTTP integration](python-http.md); other task and distributed integrations remain open. See the [trace guide](traces.md) and [current implementation](local-implementation.md).
 
 ## Metrics
 
