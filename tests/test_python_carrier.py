@@ -42,6 +42,60 @@ class PythonCarrierTests(unittest.TestCase):
         self.assertIsNone(from_sdk(SpanContext(1, 2, False, TraceFlags(256))))
         self.assertIsNone(from_sdk(SpanContext(1, 2, False, TraceFlags(1), object())))
 
+    def test_invalid_sdk_flag_metaclass_is_not_dispatched(self):
+        class FlagType(type):
+            def __eq__(cls, other):
+                raise AssertionError('application metaclass equality was invoked')
+
+            def __hash__(cls):
+                raise AssertionError('application metaclass hashing was invoked')
+
+        class Flags(metaclass=FlagType):
+            pass
+
+        self.assertIsNone(from_sdk(SpanContext(1, 2, False, Flags())))
+
+    def test_sdk_state_string_operations_are_not_dispatched(self):
+        class Key(str):
+            def __add__(self, other):
+                raise AssertionError('application state concatenation was invoked')
+
+        state = TraceState([(Key('vendor'), 'valid')])
+        context = from_sdk(SpanContext(1, 2, False, TraceFlags(1), state))
+        self.assertIsNotNone(context)
+        self.assertIsNone(context.tracestate)
+
+    def test_sdk_state_instance_methods_are_not_used_for_wire_serialization(self):
+        state = TraceState([('vendor', 'valid')])
+
+        def forbidden():
+            raise AssertionError('application state method was invoked')
+
+        state.to_header = forbidden
+        context = from_sdk(SpanContext(1, 2, False, TraceFlags(1), state))
+        self.assertEqual('vendor=valid', context.tracestate)
+
+    def test_unqualified_sdk_storage_is_omitted_without_iterating_application_containers(self):
+        class Mapping(dict):
+            def items(self):
+                raise AssertionError('application mapping was inspected')
+
+        for pairs in (None, Mapping(vendor='valid'), {object(): 'valid'},
+                      {'vendor': object()}, {'x' * 257: 'valid'}, {'vendor': 'x' * 257},
+                      {str(index): 'value' for index in range(33)}):
+            with self.subTest(kind=type(pairs).__name__):
+                state = TraceState()
+                state._dict = pairs
+                context = from_sdk(SpanContext(1, 2, False, TraceFlags(1), state))
+                self.assertIsNotNone(context)
+                self.assertIsNone(context.tracestate)
+        state = TraceState([('vendor', 'valid')])
+        for index in range(40):
+            setattr(state, f'extra{index}', index)
+        self.assertEqual('vendor=valid', from_sdk(SpanContext(1, 2, False, 1, state)).tracestate)
+        del state._dict
+        self.assertIsNone(from_sdk(SpanContext(1, 2, False, 1, state)).tracestate)
+
     def test_invalid_parent_never_reads_state_or_dispatches_string_hooks(self):
         class Opaque:
             def __len__(self):
