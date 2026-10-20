@@ -71,7 +71,7 @@ jobs:
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
           rustup default 1.98.1
-          rustup toolchain install nightly-2026-09-28 --profile minimal
+          rustup toolchain install nightly-2026-09-28 --profile minimal --component rustc-dev --component clippy
           brew install llvm@22 llvm@23
           cargo install cargo-llvm-cov --version 0.8.7 --locked
       - name: Build the pinned experimental Rust compiler profile

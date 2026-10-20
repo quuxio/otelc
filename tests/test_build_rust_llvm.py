@@ -45,7 +45,14 @@ class RustCompilerBuildTests(unittest.TestCase):
                 if arguments[0] == "cargo":
                     self.assertIn("--locked", arguments)
                     self.assertEqual(kwargs["env"]["RUSTC"], "/qualified/rustc")
-                    sdk.parent.mkdir(parents=True); sdk.write_bytes(b"nightly SDK")
+                    if "--manifest-path" in arguments:
+                        self.assertEqual(arguments[1], 'rustc')
+                        self.assertIn('native=/lib', arguments)
+                        self.assertNotIn('CARGO_ENCODED_RUSTFLAGS', kwargs['env'])
+                        frontend = Path(arguments[arguments.index('--target-dir') + 1]) / 'debug/otelc-rust-frontend'
+                        frontend.parent.mkdir(parents=True); frontend.write_bytes(b'compiler frontend')
+                    else:
+                        sdk.parent.mkdir(parents=True); sdk.write_bytes(b"nightly SDK")
                 else:
                     self.assertIn("-Iinclude with spaces", arguments)
                     self.assertIn("-Llibraries with spaces", arguments)
@@ -56,6 +63,8 @@ class RustCompilerBuildTests(unittest.TestCase):
                 profile = builder.build(root, destination, {})
             self.assertEqual(profile["sdk_sha256"], hashlib.sha256(b"nightly SDK").hexdigest())
             self.assertEqual(profile["plugin_sha256"], hashlib.sha256(b"LLVM pass").hexdigest())
+            self.assertEqual(profile['schema_version'], 2)
+            self.assertEqual(profile['frontend_sha256'], hashlib.sha256(b'compiler frontend').hexdigest())
             self.assertEqual(json.loads((destination / "otelc-rust-llvm.json").read_text()), profile)
             self.assertEqual(len(profile["protected_source_roots"]), 3)
             self.assertFalse((destination / "libquux_otelc_rust.rlib").exists())

@@ -7,7 +7,6 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use quux_otelc_config::Selection;
 use quux_otelc_rust::policy::Plan;
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -17,9 +16,7 @@ use std::{
     process::Command,
 };
 
-#[derive(Serialize)]
 struct Inventory {
-    schema_version: u32,
     functions: Vec<Definition>,
     sources: BTreeMap<PathBuf, String>,
     discovery_argv: Vec<String>,
@@ -34,14 +31,13 @@ fn inventory(
     discovery_argv: Vec<String>,
 ) -> Result<Inventory> {
     let mut inventory = Inventory {
-        schema_version: 2,
         functions: vec![],
         sources: BTreeMap::new(),
         discovery_argv,
     };
     let selection = Selection::new(&plan.sources.include, &plan.sources.exclude, true)?;
-    let mut startup = false;
     for path in inputs {
+        let path = path.canonicalize()?;
         let original_digest = hash(&path)?;
         inventory
             .sources
@@ -73,21 +69,12 @@ fn inventory(
             .to_string_lossy()
             .replace(['/', '\\'], ".");
         let functions = source_definitions(&source, &path, &identity, plan, selected, main)?;
-        for function in &functions {
-            if function.selected_or_startup() {
-                if let Some(reason) = function.unsupported_reason() {
-                    bail!("Rust LLVM: {reason}");
-                }
-            }
-            startup |= function.startup();
-        }
+        // Qualification belongs to actual compiler owners, not cfg-disabled
+        // syntax or restrictions imposed solely by generated-source probes.
         inventory.functions.extend(functions);
         if inventory.functions.len() > 65536 {
             bail!("Rust compiler function inventory exceeds 65536 declarations");
         }
-    }
-    if !startup {
-        bail!("Rust LLVM executable requires an ordinary source-defined main");
     }
     Ok(inventory)
 }
@@ -117,21 +104,40 @@ pub(crate) fn compile_recorded(
         discovery,
     )?;
     let inventory_path = scratch.join("inventory.json");
-    let bytes = serde_json::to_vec(&inventory)?;
-    if bytes.len() > 4 * 1024 * 1024 {
-        bail!("Rust compiler inventory exceeds 4 MiB");
-    }
-    fs::write(&inventory_path, bytes)?;
+    let request_path = scratch.join("frontend-request.json");
     for (path, digest) in &inventory.sources {
         if hash(path)? != *digest {
             bail!("Rust source changed while preparing the compiler inventory");
         }
     }
+    let request = crate::compiler_frontend::Request {
+        schema_version: 1,
+        root: root.into(),
+        entry,
+        policy: plan.clone(),
+        sources: inventory.sources,
+        declarations: inventory.functions,
+        protected_source_roots: profile.protected_source_roots.clone(),
+        discovery_argv: inventory.discovery_argv,
+    };
+    let bytes = serde_json::to_vec(&request)?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        bail!("Rust frontend request exceeds 8 MiB");
+    }
+    fs::write(&request_path, bytes)?;
     let binary = scratch.join("application");
     let resolved = scratch.join("resolved.json");
     let mut args: Vec<OsString> = vec![filename.as_os_str().to_owned()];
     args.extend(tools.baseline_flags().into_iter().map(OsString::from));
     args.extend([
+        "--sysroot".into(),
+        profile
+            .rustc
+            .parent()
+            .and_then(Path::parent)
+            .context("qualified Rust sysroot")?
+            .as_os_str()
+            .to_owned(),
         "-o".into(),
         binary.as_os_str().to_owned(),
         format!("-Zllvm-plugins={}", profile.plugin.display()).into(),
@@ -154,16 +160,17 @@ pub(crate) fn compile_recorded(
         )
         .into(),
     ]);
-    let status = Command::new(&tools.rustc)
+    let status = Command::new(&profile.frontend)
         .args(&args)
         .env("OTELC_RUST_LLVM_INVENTORY", &inventory_path)
+        .env("OTELC_RUST_FRONTEND_REQUEST", &request_path)
         .env("OTELC_RUST_LLVM_RESOLVED", &resolved)
         .status()
         .context("compile original Rust input with LLVM hooks")?;
     if !status.success() {
         bail!("Rust LLVM compilation failed");
     }
-    for (path, digest) in &inventory.sources {
+    for (path, digest) in &request.sources {
         if hash(path)? != *digest {
             bail!("Rust source changed during LLVM compilation");
         }
