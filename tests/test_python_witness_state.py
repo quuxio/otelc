@@ -14,6 +14,30 @@ from quux_otelc_python.witness_wire import (
 
 
 class PythonWitnessStateTests(unittest.TestCase):
+    def test_frozen_declarations_activate_once_with_matching_actual_probe_handles(self):
+        state = self.state(available=False)
+        declared = state.bindings
+        actual = Bindings(declared.build_id, declared.selection_id,
+                          Probe(declared.rendezvous.digest), Probe(declared.wrapper.digest),
+                          Probe(declared.target.digest), object())
+        self.assertTrue(state.activate(actual))
+        self.assertIs(actual, state.bindings)
+        self.assertFalse(state.rendezvous(declared.rendezvous, object()))
+        self.assertTrue(state.rendezvous(actual.rendezvous, object()))
+        self.assertFalse(state.activate(actual))
+        self.assertEqual('invalidated', state.phase)
+        for wrong in (None, Bindings('0' * 64, declared.selection_id,
+                                   actual.rendezvous, actual.wrapper, actual.target, object()),
+                      Bindings(declared.build_id, '0' * 64,
+                               actual.rendezvous, actual.wrapper, actual.target, object()),
+                      Bindings(declared.build_id, declared.selection_id,
+                               Probe('0' * 64), actual.wrapper, actual.target, object())):
+            with self.subTest(binding=type(wrong).__name__):
+                candidate = self.state(available=False)
+                self.assertFalse(candidate.activate(wrong))
+                self.assertFalse(candidate.available)
+                self.assertEqual('wrong_binding', candidate.fault)
+
     def state(self, available=True):
         bindings = Bindings('a' * 64, 'b' * 64, Probe('c' * 64), Probe('d' * 64),
                             Probe('e' * 64), object())

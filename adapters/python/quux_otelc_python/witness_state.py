@@ -145,6 +145,21 @@ class WitnessState:
         with self.lock:
             self._invalidate(reason)
 
+    def activate(self, bindings: Bindings) -> bool:
+        """Replace declared handles with actual compiler bindings before readiness."""
+        with self.lock:
+            expected = self.bindings
+            if (self.available or self.phase != 'idle' or self.fault is not None
+                    or type(bindings) is not Bindings
+                    or bindings.build_id != expected.build_id or bindings.selection_id != expected.selection_id
+                    or any(getattr(bindings, role).digest != getattr(expected, role).digest
+                           for role in ('rendezvous', 'wrapper', 'target'))):
+                self._invalidate('wrong_binding')
+                return False
+            self.bindings = bindings
+            self.available = True
+            return True
+
     def rendezvous(self, probe: Probe, context: object) -> bool:
         with self.lock:
             if not self.available or probe is not self.bindings.rendezvous:
