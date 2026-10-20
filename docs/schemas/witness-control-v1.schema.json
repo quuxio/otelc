@@ -1,0 +1,867 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quux.io/otelc/proposals/witness-control-v1",
+  "title": "Proposed invocation witness control version 1",
+  "description": "Proposal only. Structural validation is necessary but not sufficient: strict framing, integer-token, sequence, binding and state rules also apply.",
+  "$defs": {
+    "id128": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 32,
+      "pattern": "^[0-9a-f]{32}$",
+      "not": {
+        "const": "00000000000000000000000000000000"
+      }
+    },
+    "span_id": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 16,
+      "pattern": "^[0-9a-f]{16}$",
+      "not": {
+        "const": "0000000000000000"
+      }
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+      "not": {
+        "pattern": "[^a-z0-9-]"
+      }
+    },
+    "health": {
+      "type": "object",
+      "properties": {
+        "inflight": {
+          "$ref": "#/$defs/count"
+        },
+        "pending": {
+          "$ref": "#/$defs/count"
+        },
+        "losses": {
+          "$ref": "#/$defs/count"
+        },
+        "export_finished": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "inflight",
+        "pending",
+        "losses",
+        "export_finished"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities_request": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "op": {
+          "const": "capabilities"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "profile": {
+          "$ref": "#/$defs/profile"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "op",
+        "request_id",
+        "profile"
+      ],
+      "additionalProperties": false
+    },
+    "arm_request": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "op": {
+          "const": "arm"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "context_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "ready_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "wrapper_probe_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "target_probe_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "build_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "selection_id": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "op",
+        "request_id",
+        "runtime_id",
+        "context_id",
+        "scope_id",
+        "ready_seq",
+        "wrapper_probe_id",
+        "target_probe_id",
+        "build_id",
+        "selection_id"
+      ],
+      "additionalProperties": false
+    },
+    "cancel_request": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "op": {
+          "const": "cancel"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/id128"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "op",
+        "request_id",
+        "runtime_id",
+        "scope_id"
+      ],
+      "additionalProperties": false
+    },
+    "capabilities_response": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "response"
+        },
+        "op": {
+          "const": "capabilities"
+        },
+        "ok": {
+          "const": true
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "profile": {
+          "$ref": "#/$defs/profile"
+        },
+        "available": {
+          "const": true
+        },
+        "build_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "selection_id": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "op",
+        "ok",
+        "request_id",
+        "runtime_id",
+        "profile",
+        "available",
+        "build_id",
+        "selection_id"
+      ],
+      "additionalProperties": false
+    },
+    "unavailable_response": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "response"
+        },
+        "op": {
+          "const": "capabilities"
+        },
+        "ok": {
+          "const": true
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "profile": {
+          "$ref": "#/$defs/profile"
+        },
+        "available": {
+          "const": false
+        },
+        "reason": {
+          "enum": [
+            "unsupported_profile",
+            "disabled",
+            "invalid_toolchain"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "op",
+        "ok",
+        "request_id",
+        "runtime_id",
+        "profile",
+        "available",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "armed_response": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "response"
+        },
+        "op": {
+          "const": "arm"
+        },
+        "ok": {
+          "const": true
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "context_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "ready_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "wrapper_probe_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "target_probe_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "build_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "selection_id": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "op",
+        "ok",
+        "request_id",
+        "runtime_id",
+        "context_id",
+        "scope_id",
+        "ready_seq",
+        "wrapper_probe_id",
+        "target_probe_id",
+        "build_id",
+        "selection_id"
+      ],
+      "additionalProperties": false
+    },
+    "cancelled_response": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "response"
+        },
+        "op": {
+          "const": "cancel"
+        },
+        "ok": {
+          "const": true
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "consumed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "op",
+        "ok",
+        "request_id",
+        "runtime_id",
+        "scope_id",
+        "consumed"
+      ],
+      "additionalProperties": false
+    },
+    "error_response": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "response"
+        },
+        "ok": {
+          "const": false
+        },
+        "request_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "op": {
+          "enum": [
+            "capabilities",
+            "arm",
+            "cancel"
+          ]
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "error": {
+          "enum": [
+            "unsupported_profile",
+            "malformed_record",
+            "unknown_field",
+            "duplicate_field",
+            "invalid_identity",
+            "invalid_sequence",
+            "duplicate_request",
+            "request_capacity",
+            "event_capacity",
+            "wrong_runtime",
+            "wrong_context",
+            "stale_readiness",
+            "wrong_binding",
+            "invalid_phase",
+            "scope_reused",
+            "late_activity",
+            "incomplete",
+            "export_failed",
+            "cancelled"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "ok",
+        "request_id",
+        "op",
+        "runtime_id",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "ready_event": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "event": {
+          "const": "ready"
+        },
+        "event_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "context_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "ready_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "rendezvous_probe_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "build_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "selection_id": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "event",
+        "event_seq",
+        "runtime_id",
+        "context_id",
+        "ready_seq",
+        "rendezvous_probe_id",
+        "build_id",
+        "selection_id"
+      ],
+      "additionalProperties": false
+    },
+    "consumed_event": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "event": {
+          "const": "consumed"
+        },
+        "event_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "root_trace_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "root_span_id": {
+          "$ref": "#/$defs/span_id"
+        },
+        "context_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "ready_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "wrapper_probe_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "target_probe_id": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "event",
+        "event_seq",
+        "runtime_id",
+        "scope_id",
+        "root_trace_id",
+        "root_span_id",
+        "context_id",
+        "ready_seq",
+        "wrapper_probe_id",
+        "target_probe_id"
+      ],
+      "additionalProperties": false
+    },
+    "root_exit_event": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "event": {
+          "const": "root_exit"
+        },
+        "event_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "root_trace_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "root_span_id": {
+          "$ref": "#/$defs/span_id"
+        },
+        "outcome": {
+          "enum": [
+            "return",
+            "exception",
+            "cancelled",
+            "incomplete"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "event",
+        "event_seq",
+        "runtime_id",
+        "scope_id",
+        "root_trace_id",
+        "root_span_id",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "end_event": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "event": {
+          "const": "end"
+        },
+        "event_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "root_trace_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "root_span_id": {
+          "$ref": "#/$defs/span_id"
+        },
+        "outcome": {
+          "enum": [
+            "return",
+            "exception",
+            "cancelled",
+            "incomplete"
+          ]
+        },
+        "provisional": {
+          "const": true
+        },
+        "health": {
+          "$ref": "#/$defs/health"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "event",
+        "event_seq",
+        "runtime_id",
+        "scope_id",
+        "root_trace_id",
+        "root_span_id",
+        "outcome",
+        "provisional",
+        "health"
+      ],
+      "additionalProperties": false
+    },
+    "invalidated_event": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "event": {
+          "const": "invalidated"
+        },
+        "event_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "enum": [
+            "unsupported_profile",
+            "malformed_record",
+            "unknown_field",
+            "duplicate_field",
+            "invalid_identity",
+            "invalid_sequence",
+            "duplicate_request",
+            "request_capacity",
+            "event_capacity",
+            "wrong_runtime",
+            "wrong_context",
+            "stale_readiness",
+            "wrong_binding",
+            "invalid_phase",
+            "scope_reused",
+            "late_activity",
+            "incomplete",
+            "export_failed",
+            "cancelled"
+          ]
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "event",
+        "event_seq",
+        "runtime_id",
+        "scope_id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "runtime_end_event": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "event": {
+          "const": "runtime_end"
+        },
+        "event_seq": {
+          "$ref": "#/$defs/sequence"
+        },
+        "runtime_id": {
+          "$ref": "#/$defs/id128"
+        },
+        "scope_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/id128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "health": {
+          "$ref": "#/$defs/health"
+        }
+      },
+      "required": [
+        "version",
+        "kind",
+        "event",
+        "event_seq",
+        "runtime_id",
+        "scope_id",
+        "complete",
+        "health"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "complete": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "scope_id": {
+                "$ref": "#/$defs/id128"
+              },
+              "health": {
+                "type": "object",
+                "properties": {
+                  "inflight": {
+                    "const": 0
+                  },
+                  "pending": {
+                    "const": 0
+                  },
+                  "losses": {
+                    "const": 0
+                  },
+                  "export_finished": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "inflight",
+                  "pending",
+                  "losses",
+                  "export_finished"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/capabilities_request"
+    },
+    {
+      "$ref": "#/$defs/arm_request"
+    },
+    {
+      "$ref": "#/$defs/cancel_request"
+    },
+    {
+      "$ref": "#/$defs/capabilities_response"
+    },
+    {
+      "$ref": "#/$defs/unavailable_response"
+    },
+    {
+      "$ref": "#/$defs/armed_response"
+    },
+    {
+      "$ref": "#/$defs/cancelled_response"
+    },
+    {
+      "$ref": "#/$defs/error_response"
+    },
+    {
+      "$ref": "#/$defs/ready_event"
+    },
+    {
+      "$ref": "#/$defs/consumed_event"
+    },
+    {
+      "$ref": "#/$defs/root_exit_event"
+    },
+    {
+      "$ref": "#/$defs/end_event"
+    },
+    {
+      "$ref": "#/$defs/invalidated_event"
+    },
+    {
+      "$ref": "#/$defs/runtime_end_event"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# Invocation-scoped diagnostic witness: development contract
+
+`scoped_action_v1` is unavailable in every language. The private Python wire codec and [shared record schema](schemas/witness-control-v1.schema.json) validate framing and structure only. No launcher accepts this mode, no producer control probes exist yet, and these unit tests do not prove runtime context, compiler binding, freshness, sequencing, replay protection or completion. Existing oteleq name/process observations retain their declared limits.
+
+The intended contract binds an action to its actual compiler-identified rendezvous/wrapper/target, one live execution context and one fresh scope. Baseline and instrumented workers execute the same ordinary generated harness bytes and schedule without required application SDK imports. Argument factories, observers and result/error formatting stay outside the action wrapper. Display names and process nonces cannot establish attribution.
+
+## First profile and bounds
+
+The agreed first qualification profile is an ordinary synchronous Python function on one native execution thread. It requires a fresh process for each action/attempt, including replay/export/shrink trials. Ordered Node sequences retain their stateful worker and remain unavailable under this initial profile; splitting them into fresh processes would change their semantics. Async/task and other language profiles require separate implementations and independent qualification.
+
+Producer control is private, owner-only and separate from harness release, application channels and OTLP. It accepts at most 16 request frames per runtime, including capabilities queries and invalid/duplicate requests. Duplicate-request history is consequently bounded. A scope can be armed once and permanently retired; consumed/cancelled scopes cannot be rearmed. The event buffer is bounded to 64 records, and overflow prevents success. The control service never executes arbitrary process commands or accepts executable paths.
+
+One UTF-8 JSON object is followed by a single LF, with a maximum 16 KiB frame including the LF. CRLF, multiple frames, invalid UTF-8, duplicate keys, unknown fields and non-integer numeric tokens are refused. Sequence values are integer tokens in `1..9007199254740991`; boolean, float, non-finite and unsafe integer values are refused. Requests/responses carry `request_id`; unsolicited events carry `event_seq`. Unknown operations or untrustworthy request identities cannot receive an invented normal echo response: the producer must invalidate through its trusted event stream and refuse/terminate that control session.
+
+Runtime/context/scope/request identities and OTLP trace IDs are nonzero 128-bit lower-case hexadecimal strings. Actual OTLP span IDs are nonzero 64-bit strings. Compiler/probe/build/selection digests use 256-bit lower-case hexadecimal strings. The schema rejects zero identity placeholders structurally; actual identity freshness and compiler/context binding still require semantic runtime and independent consumer checks.
+
+## Required runtime lifecycle
+
+1. The actual rendezvous control probe emits ready with runtime, compiler binding, context cookie and readiness sequence. Harness readiness is separate.
+2. Arm validates those identities and the exact wrapper/target bindings before acknowledgement. The harness releases only after that acknowledgement.
+3. Exactly one matching wrapper entry on the same live context consumes the arm and reports its actual SDK trace/span IDs. Unrelated calls on another thread cannot consume it.
+4. Root exit reports the original outcome. An end event is provisional; it does not prove quiescence or completed export.
+5. The producer continues observing scoped activity. Late activity after provisional end visibly invalidates the scope and cannot restore success.
+6. Runtime end reports final inflight/pending/loss/export health after observer/export shutdown. The consumer drains until control EOF **and** application process completion, verifies sequence continuity and final clean health, and refuses missing or contradictory evidence. Export acknowledgement alone does not prove downstream storage.
+
+Decoded OTLP must join `otelc.probe.id`/`otelc.scope.id` span metadata and `otelc.runtime.instance`/`otelc.build.id`/`otelc.selection.id` resource metadata to the frozen manifest and control exchange. High-cardinality diagnostic identities do not belong in metric labels. Factories, observers, background calls and startup spans remain retained evidence but cannot satisfy the action witness.
+
+Required controls include normal/exception/recursive targets, concurrent wrong-thread calls between arm/consume, target calls from observers/factories, stale/reused/cross-runtime identities, duplicate consume, missing/mismatched end, late descendants, cancelled/incomplete work and export loss. No fallback may silently weaken requested scoped attribution. The result remains equivalence over declared tests and observations; this protocol does not establish exhaustive inputs/schedules, complete hidden-state observation or hostile-code containment.
