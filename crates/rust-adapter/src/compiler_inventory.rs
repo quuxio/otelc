@@ -12,7 +12,7 @@ pub struct Definition {
     pub unsupported: String,
     pub selected: bool,
     #[serde(flatten)]
-    pub site: crate::transform::CompilerSite,
+    pub site: crate::declarations::CompilerSite,
 }
 
 /// The caller supplies the absolute original compiler source path, never a generated copy.
@@ -27,8 +27,7 @@ pub fn source_definitions(
     if !file.is_absolute() || identity.is_empty() {
         bail!("Rust compiler inventory requires an absolute original path and identity");
     }
-    let (_, functions) =
-        crate::transform::compiler_definitions(source, identity, plan, selected_source, startup)?;
+    let functions = crate::declarations::parse(source, identity, plan, selected_source, startup)?;
     functions
         .into_iter()
         .map(|function| {

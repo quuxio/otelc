@@ -56,9 +56,31 @@ pub(crate) fn discover(
     scratch: &Path,
     tools: &Toolchain,
 ) -> Result<(Vec<PathBuf>, Vec<String>)> {
-    let depfile = scratch.join("original.d");
     let mut arguments: Vec<OsString> = vec![filename.as_os_str().to_owned()];
     arguments.extend(tools.baseline_flags().into_iter().map(OsString::from));
+    discover_arguments(&arguments, root, scratch, tools)
+}
+
+pub(crate) fn discover_arguments(
+    original: &[OsString],
+    root: &Path,
+    scratch: &Path,
+    tools: &Toolchain,
+) -> Result<(Vec<PathBuf>, Vec<String>)> {
+    let depfile = scratch.join("original.d");
+    let mut arguments = Vec::new();
+    let mut values = original.iter();
+    while let Some(value) = values.next() {
+        if value == "--emit" || value == "--out-dir" || value == "-o" {
+            values
+                .next()
+                .context("Rust compiler output option requires a value")?;
+        } else if !value.to_string_lossy().starts_with("--emit=")
+            && !value.to_string_lossy().starts_with("--out-dir=")
+        {
+            arguments.push(value.clone());
+        }
+    }
     arguments.push(format!("--emit=dep-info={}", depfile.display()).into());
     let compiled = Command::new(&tools.rustc)
         .args(&arguments)
@@ -75,7 +97,17 @@ pub(crate) fn discover(
     if bytes.len() > 4 * 1024 * 1024 {
         bail!("Rust compiler dependency information exceeds 4 MiB");
     }
-    let inputs = dependencies(std::str::from_utf8(&bytes)?, root)?;
+    let dependency_info = std::str::from_utf8(&bytes)?;
+    if std::env::var_os("OTELC_RUST_ROOT").is_some()
+        && dependency_info
+            .lines()
+            .any(|line| line.starts_with("# env-dep:OUT_DIR="))
+    {
+        // Cargo's private target directory changes this observable value.
+        // Check only the dependency key; never retain its application value.
+        bail!("Cargo OUT_DIR-dependent source requires original build-output path qualification");
+    }
+    let inputs = dependencies(dependency_info, root)?;
     // Do not retain env-dep comments: env! inputs can contain application secrets.
     let argv = arguments
         .iter()

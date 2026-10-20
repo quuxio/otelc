@@ -4,5 +4,7 @@ pub mod compiler_frontend;
 mod compiler_inputs;
 pub mod compiler_inventory;
 mod compiler_llvm;
+mod compiler_mir;
+mod compiler_mir_profile;
 mod compiler_profile;
-pub mod transform;
+pub mod declarations;

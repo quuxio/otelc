@@ -1,8 +1,8 @@
 # Rust instrumentation 101
 
-Compiler temporary workspaces must be outside the application source tree. If `TMPDIR` points inside the project, the adapter rejects the workspace before copying source; use an external temporary directory. Canonical path checks also reject aliases through symlinks, preventing recursive copying into generated input. Rust files reached through file or directory symlinks are copied into private regular inputs; generated probes cannot write back through those links. Cyclic source-directory links and dangling Rust file links are rejected.
+The default `compiler` backend inserts probes into the pinned compiler's typed MIR while reading original Rust input. Standalone files and Cargo projects use the same helper. Application and dependency source, Cargo manifests, lockfiles, original source columns and tracked caller locations remain unchanged. Linked read-only modules keep their configured project-relative identities; the helper also checks their physical source hashes and SDK exclusions.
 
-The default `compiler` backend parses original Rust syntax and inserts body guards into a private source tree. Standalone files use rustc; Cargo projects use a compiler wrapper. Application source, Cargo manifests and lockfiles stay unchanged. The linked Rust OpenTelemetry SDK supplies cumulative function counters and duration histograms. No application SDK import or required annotation is needed.
+The linked Rust OpenTelemetry SDK supplies cumulative function counters, duration histograms and spans. No application SDK import or required annotation is needed. Compiler instrumentation adds no fields or owning guard to an application's future or closure.
 
 An explicit [experimental LLVM profile](rust-compiler.md) instruments original synchronous standalone input without source insertion. It requires a separate pinned nightly SDK/pass pairing and remains under qualification. Its async and Cargo paths are unavailable; the default backend below retains its separately qualified support.
 
@@ -10,9 +10,10 @@ Function spans are available through the same selection policy; see [Rust spans]
 
 ## Build and run
 
-Use the qualified Rust 1.98.1 toolchain. The probe library and application must use the same compiler, host target and compatible panic strategy. Build from the repository root and start the [Collector, Prometheus and Grafana stack](observability-stack.md):
+Use the qualified macOS ARM64 Rust 1.98.1 toolchain, its `rustc-dev` component and LLVM 22.1.8. `make build` produces the stable compiler helper and its fingerprinted profile; bootstrap permission applies only while building that private helper, never while compiling applications. The probe library and application must use the same compiler, host target and compatible panic strategy. Build from the repository root and start the [Collector, Prometheus and Grafana stack](observability-stack.md):
 
 ```sh
+rustup component add --toolchain 1.98.1 rustc-dev
 make build
 ./target/debug/quux-otelc --config examples/rust.toml --language rust doctor
 ./target/debug/quux-otelc --config examples/rust.toml --language rust inspect examples/apps/rust_app.rs --json
@@ -36,7 +37,7 @@ mkdir -p build
 ./target/debug/quux-otelc --config examples/rust.toml rust --run build/rust-example
 ```
 
-Build-only compiles without executing the application and refuses an existing output directory. The private bundle contains `application`, the retained resolved `plan.json` and `build.json`. The manifest records SHA-256 fingerprints for the executable, policy, original entry source, SDK and adapter, plus the actual compiler program/argv/version and the baseline flags `--edition=2024 -O -g`. Use those same flags for the ordinary build when comparing runtime latency. Compiler warnings remain in the build's original channels.
+Build-only compiles without executing the application and refuses an existing output directory. The private schema-3 bundle contains `application`, the retained resolved `plan.json`, `build.json`, `profile.json`, `compiler-request.json` and the actual compiler-owned `inventory.json`. Separate `compiler_driver` evidence binds the helper, profile, request and inventory fingerprints; it does not reuse the LLVM plugin identity. The manifest records SHA-256 fingerprints for the executable, policy, original entry source, SDK and adapter, plus the actual compiler program/argv/version and the baseline flags `--edition=2024 -O -g`. Use those same flags for the ordinary build when comparing runtime latency. Compiler warnings remain in the build's original channels.
 
 `--run DIRECTORY [APP_ARGS...]` verifies the executable/policy pair and exact matching adapter before launching. It invokes no compiler and needs neither original source nor an SDK rlib. It resolves the supplied common configuration again: runtime metrics, traces, export endpoints and resource settings can change, while build-time source/function selectors, backend and annotation settings must match. A changed build-time policy requires a new bundle. Application stdout/stderr and exit status belong to the application run; fatal termination still cannot guarantee export.
 
@@ -51,7 +52,9 @@ From an existing Cargo project, supply an absolute CLI and configuration path:
   --config /path/to/project/otelc.toml rust Cargo.toml --bin server -- APP_ARGS
 ```
 
-An existing lockfile is required. Cargo keeps the original manifests, dependency resolution, build scripts and compiler flags. Only project Rust compiler inputs are substituted; registry and external dependency sources remain untouched. Build artefacts and generated inputs are temporary. Multiple binary targets require `--bin NAME`. Application arguments and exit codes pass through.
+An existing lockfile is required. The manifest must be inside the current project directory; an outside manifest is refused before Cargo builds or runs the application. Cargo keeps the original manifests, dependency resolution, build scripts and compiler flags. Project crates are compiled from their original paths with compiler-owned probes; registry and external dependency sources remain untouched. Build artefacts and compiler-request records are temporary. Cargo compilation diagnostics remain on stderr before application output. Multiple binary targets require `--bin NAME`. Application arguments and exit codes pass through.
+
+Project crates with a compiler-recorded dependency on Cargo's `OUT_DIR` are refused before application execution. The private build directory can otherwise change observable compile-time values. Original build-output identities, generated sources outside the project root and arbitrary dependency/build-script path observations require separate qualification. This refusal is an interim boundary, not completed support for those Cargo inputs. Standalone sources retain explicitly supplied environment values. Project ancestors or source directories named `target` do not disable instrumentation.
 
 Compact async bodies, including a return immediately before the closing brace, preserve their original delimiters and concrete return coercions. The [compact async fixture](../examples/apps/rust_async_compact.rs) covers primitive, borrowed, function-pointer and trait-object results, empty bodies and explicit returns.
 
@@ -96,17 +99,11 @@ fn excluded(value: i32) -> i32 { value * 3 }
 
 It prints `30` and records two calls. Unknown instrumentation comments fail. A blank line breaks ordinary comment association. Required custom procedural attributes are unnecessary.
 
-Private generated compiler input resembles:
+The source shown above is also the source read by the instrumented compiler. Probe entry, normal return and unwind operations are inserted into typed MIR, after source parsing and macro expansion. Original `file!()`, `line!()`, `column!()` and tracked caller locations are preserved. A compiler-inserted main boundary starts and closes the SDK even when main timing is excluded. Exit observations include cleanup inside the original function's MIR; later destruction of a closure object is a separate boundary.
 
-```rust
-fn annotated(value: i32) -> i32 {
-    /*otelc.instrument*/
-    let __quux_otelc_guard = ::quux_otelc_rust::enter("examples.apps.rust_annotated.annotated");
-    value * 3
-}
-```
+Inspection uses the same compilation path in a private temporary directory. Its schema-3 inventory records original declarations, compiler names, actual emitted symbols, source hashes and selection. It never executes `main` or exports telemetry. Compilation and a matching compiler profile are required. Configured insertion does not create annotated application files; existing adjacent annotations continue to guide selection.
 
-The actual insertion adds no new lines. Bindings are chosen against original identifiers, including macro token groups. The original function body and signature remain intact. Guards run at normal return and panic unwinding; guards entered while an existing panic unwinds record normal cleanup completion. Body-local destructors run before the guard. Parameter destruction after the body is outside this duration. Original `file!()` and `line!()` locations are retained through compiler path remapping; inserted code changes columns on the insertion line. A separate main-body guard closes the SDK, even when main timing is excluded. Generated metadata is optional; generated inputs are rejected on a second instrumentation pass.
+An async source owner can have separate emitted constructor and coroutine-body symbols; inlining can remove some instances. `selected` records source-policy intent. It does not mean every listed symbol is timed: constructing an unpolled future is deliberately unmeasured. Symbol counts do not establish invocation counts, probe roles or completed observations, and this inventory is not a complete drop-glue map. Use decoded runtime evidence for those observations; an invocation-scoped witness API remains unavailable.
 
 ## Live metrics and latency
 
@@ -133,22 +130,13 @@ rustc --edition=2024 -O examples/apps/rust_async_app.rs -o /tmp/plain-rust-async
 
 Both runs print the original destructor order `["local", "second", "first"]` and `async results preserved; cleanups=2`. The instrumented run records 14 calls, two cancellations and one escaping unwind. The fixture covers borrowed outputs, mutable receivers/parameters, generic non-Send values, opaque outputs, return coercions, early returns, `?`, preserved panic payloads, cancellation and movement between threads. No executor dependency or original-source change is required.
 
-Generated input for a simple async function resembles:
+Poll and drop hooks operate after the compiler has fixed the original future layout. A bounded external registry tracks admission and completion without retaining an application reference, changing the future's fields or adding an owning guard. Original future size, alignment, `needs_drop`, `Send` behaviour, parameter destruction and cancellation cleanup are exercised by the paired compiler fixtures. Capacity exhaustion rejects unknown future identities consistently, and shutdown reports remaining work as incomplete.
 
-```rust
-async fn ready(value: i32) -> i32 {
-    ::quux_otelc_rust::observe_future("examples.apps.rust_async_app.ready", async move {
-        let value = value;
-        ::std::convert::identity::<i32>(value + 1)
-    }).await
-}
-```
-
-The native await polls the original body directly without an additional scheduled task. Parameter shadowing preserves reverse parameter destruction order; concrete return coercions retain the original expected output type. This changes the compiler-generated future's layout and adds runtime state, but preserves the qualified results and cleanup behaviour. Async destructured, wildcard and `ref` parameters are rejected visibly pending compiler-level lifetime qualification. Executor attribute macros controlling async `main`, per-poll CPU timing and complete macro-expansion coverage remain unsupported. The paired async benchmark measures immediately completing futures; it is not evidence for every executor or suspended workload. Run `make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS="--rust-async --output build/benchmarks/rust-async --iterations 10000 --runs 8"` to compare the unchanged baseline with metrics off/on in one instrumented PID. It verifies source hashes, matching checksums, exact calls, complete export and zero losses.
+Executor attribute macros controlling async `main`, per-poll CPU timing and executor/task context propagation require separate qualification. The paired async benchmark measures immediately completing futures; it is not evidence for every executor or suspended workload. Run `make benchmark-language LANGUAGE=rust LANGUAGE_BENCHMARK_ARGS="--rust-async --output build/benchmarks/rust-async --iterations 10000 --runs 8"` to compare the unchanged baseline with metrics off/on in one instrumented PID.
 
 ## Synchronous closures
 
-Parsed synchronous closures use body guards without replacing the closure object or changing its parameters/capture modifier. Both expression and block bodies are supported. Identities include enclosing function/closure scopes and the original opening pipe's line/column, for example `examples.apps.rust_closure_app.main.<closure>@10:18`. Nested and same-line closures have distinct identities. Editing source positions changes these identities; use `inspect` before selecting particular callbacks.
+Synchronous closures receive compiler body probes without replacing the closure object, changing its captures or adding fields. Both expression and block bodies are supported. Identities include enclosing function/closure scopes and the original opening pipe's line/column, for example `examples.apps.rust_closure_app.main.<closure>@10:18`. Nested and same-line closures have distinct identities. Editing source positions changes these identities; use `inspect` before selecting particular callbacks.
 
 ```sh
 rustc --edition=2024 -O examples/apps/rust_closure_app.rs -o /tmp/plain-rust-closures
@@ -168,18 +156,9 @@ let selected = |value| value * 3;
 let excluded = |value| value - 1;
 ```
 
-External selection still has exclusion priority. Generated input for an expression body resembles:
+External selection still has exclusion priority. Normal return, early return and panic unwinding end the compiler body observation. Closure captures dropped when the closure object itself is destroyed are outside this duration; function timing does not establish automatic object lifetime tracing. A synchronous closure returning a future measures creation of that future, rather than its polling or completion. Async/const closures remain unqualified.
 
-```rust
-let selected = |value| {
-    let __quux_otelc_guard = ::quux_otelc_rust::enter("example.main.<closure>@3:16");
-    value * 3
-};
-```
-
-The adapter inserts no new lines. Normal return, early return and panic unwinding end the body observation. Closure captures dropped when the closure object itself is destroyed are outside this duration; this is function timing, not automatic object lifetime tracing. A synchronous closure returning a future measures creation of that future, not polling or completion. Async/const closures are inspectable and rejected when selected until their own semantics are qualified.
-
-Macro argument tokens are not expanded by this parser: a closure written directly inside `assert_eq!(...)`, another expression macro or a macro-generated item is outside this coverage. Ordinary calls to an already instrumented closure from a macro still execute its body guard. Complete macro/hygiene coverage requires compiler integration; zero loss in the selected parsed inventory does not prove that hidden macro callbacks were instrumented.
+Expanded synchronous declarations and expression-macro callbacks use compiler-owned identities. Where an expanded declaration has no original source alias, inspect the compiled inventory before choosing an exact selector. Uninstantiated generic declarations can remain `emitted=false`; their presence in the declaration inventory does not prove execution.
 
 Measure the unchanged closure workload with live controls:
 
@@ -191,8 +170,8 @@ The baseline and off/on runs use the same closure, compiler flags, source hash a
 
 ## Current boundaries
 
-This milestone supports synchronous and the qualified async named functions, methods, trait default methods, generics, nested functions, normal OS threads and panic unwinding on the qualified macOS ARM64 host. Const and naked functions are rejected when selected; async main is rejected. Parsed synchronous closures are supported; async/const closures and macro-generated functions or closures remain unsupported. Selected `include!` source fragments, test/procedural-macro/edition-2015 crates and existing compiler wrappers require separate qualification. Normal expression macros remain usable. Symlinked source modules require separate qualification. Build scripts execute unchanged and do not start instrumentation.
+The qualified profile targets synchronous and named async functions, methods, trait default methods, generics, nested functions, synchronous closures, OS threads and panic unwinding on macOS ARM64. Runtime bodies of `const fn` can be selected without instrumenting compile-time evaluation. Source aliases preserve read-only linked modules. Naked functions, async main, async/const closures, test/procedural-macro/edition-2015 crates and existing compiler wrappers require separate qualification. Build scripts execute unchanged and do not start instrumentation. Standard `GlobalAlloc` methods and selected helpers called within an allocator's dynamic scope suppress recording to prevent allocator re-entry; an unrelated application trait with the same spelling remains eligible.
 
 Rust `panic=abort`, `process::exit`, forced termination and unjoined background work cannot guarantee final observations or export. Custom targets, cross-compilation, sanitizers and altered panic strategies require matching SDK qualification. Automatic value lifetime/move/drop metrics and distributed context remain unavailable. Function spans are supported within the [qualified Rust boundaries](rust-spans.md); automatic value lifetimes remain rejected by configuration. Timing a `Drop::drop` method measures that method body, not an object's entire lifetime.
 
-The pinned SDK's custom-reader API is experimental in 0.32.1. A bounded worker pulls cumulative SDK snapshots and uses the existing OTLP/HTTP transport, with one total retry deadline, no redirects and at most 64 KiB of acknowledgement data. Malformed/partial acknowledgements and failed exports remain explicit losses. SDK aggregation and protobuf encoding stay language-native; the shared transport does not replace the SDK. Final shutdown is bounded by the common deadline; a Collector outage does not delay the application indefinitely.
+The pinned SDK's custom-reader API is experimental in 0.33.1. A bounded worker pulls cumulative SDK snapshots and uses the existing OTLP/HTTP transport, with one total retry deadline, no redirects and at most 64 KiB of acknowledgement data. Malformed/partial acknowledgements and failed exports remain explicit losses. SDK aggregation and protobuf encoding stay language-native; the shared transport does not replace the SDK. Final shutdown is bounded by the common deadline; a Collector outage does not delay the application indefinitely.

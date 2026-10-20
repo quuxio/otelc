@@ -16,6 +16,7 @@ COMPONENTS = (
     "native/rust/mir/src/main.rs",
     "native/rust/mir/src/hooks.rs",
     "native/rust/mir/src/instrument.rs",
+    "native/rust/mir/src/inventory.rs",
     "native/rust/frontend/src/definitions.rs",
     "crates/rust-probes/src/compiler_mir.rs",
     "crates/rust-probes/src/recording.rs",

@@ -4,7 +4,7 @@ use quux_otelc_config::Selection;
 use quux_otelc_rust_adapter::{
     compiler_frontend::{Request, position},
     compiler_inventory::Definition,
-    transform::CompilerSite,
+    declarations::CompilerSite,
 };
 use rustc_hir::def::DefKind;
 use rustc_middle::ty::TyCtxt;
@@ -17,6 +17,32 @@ pub(crate) struct Definitions<'a> {
     pub(crate) runtime_futures: bool,
 }
 impl Definitions<'_> {
+    fn source_file(&self, file: PathBuf) -> Result<Option<PathBuf>> {
+        let Ok(canonical) = file.canonicalize() else {
+            return Ok(None);
+        };
+        if self
+            .request
+            .protected_source_roots
+            .iter()
+            .any(|path| canonical.starts_with(path))
+        {
+            return Ok(None);
+        }
+        let logical = std::path::absolute(file)?;
+        // Distinct module aliases can refer to the same read-only physical
+        // source. Keep their original configured identities while validating
+        // the physical path against SDK exclusions and compiler source hashes.
+        let file = if self.request.policy.backend == "compiler"
+            && logical.starts_with(&self.request.root)
+            && self.request.sources.contains_key(&logical)
+        {
+            logical
+        } else {
+            canonical
+        };
+        Ok(Some(file))
+    }
     fn name(tcx: TyCtxt<'_>, id: LocalDefId) -> String {
         tcx.def_path(id.to_def_id())
             .data
@@ -48,7 +74,7 @@ impl Definitions<'_> {
                 .prefer_local_unconditionally()
                 .to_string(),
         );
-        let Ok(file) = file.canonicalize() else {
+        let Some(file) = self.source_file(file)? else {
             return Ok(None);
         };
         if !self.request.sources.contains_key(&file)
@@ -182,7 +208,7 @@ impl Definitions<'_> {
                 .prefer_local_unconditionally()
                 .to_string(),
         );
-        let Ok(file) = file.canonicalize() else {
+        let Some(file) = self.source_file(file)? else {
             return Ok(None);
         };
         if !request.sources.contains_key(&file)

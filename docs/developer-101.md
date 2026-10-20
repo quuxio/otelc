@@ -8,11 +8,12 @@ The compiler wrapper adds probes in LLVM IR and links the native runtime. The ru
 
 ## Prepare the tools and metrics viewer
 
-Run from the repository root. On this Mac the checkout is `/Users/sclarke/github/otelc`. The qualified local requirements are Rust 1.98.1, Homebrew LLVM 22, a Docker engine and Docker Compose.
+Run from the repository root. On this Mac the checkout is `/Users/sclarke/github/otelc`. The qualified local requirements are Rust 1.98.1 with its matching `rustc-dev` component, Homebrew LLVM 22, a Docker engine and Docker Compose. The ordinary build also produces the pinned original-source Rust compiler helper.
 
 ```sh
 cd /Users/sclarke/github/otelc
 brew install llvm@22
+rustup component add --toolchain 1.98.1 rustc-dev
 make setup
 make build
 colima start

@@ -1,6 +1,5 @@
 use quux_otelc_config::common::{CommonConfig, Language};
 use quux_otelc_rust::policy::Plan;
-use quux_otelc_rust_adapter::transform::transform;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -64,105 +63,6 @@ fn write_plan(root: &Path) -> PathBuf {
     path
 }
 #[test]
-fn parser_respects_original_lines_byte_filters_annotations_and_hygiene() {
-    let mut plan = policy();
-    plan.functions.include = vec!["file.configured".into()];
-    plan.functions.exclude = vec!["file.excluded".into()];
-    let source = "// Unicode: λ and CRLF\r\n// otelc.instrument\r\nfn tagged(__quux_otelc_guard: i32) -> i32 { __quux_otelc_guard }\r\nfn configured() {}\r\n// otelc.instrument\r\nfn excluded() {}\r\n// otelc.instrument\r\n\r\nfn separate() {}\r\nfn main() {}\r\n";
-    let (generated, functions) = transform(source, "file", &plan, true, true, false).unwrap();
-    assert_eq!(generated.lines().count(), source.lines().count());
-    assert!(generated.contains("let __quux_otelc_guard_="));
-    assert!(generated.contains("/*otelc.instrument*/"));
-    assert_eq!(
-        functions
-            .iter()
-            .map(|function| function.selected)
-            .collect::<Vec<_>>(),
-        [true, true, false, false, false]
-    );
-    assert_eq!(functions[0].line, 3);
-    assert!(generated.contains("::quux_otelc_rust::launch()"));
-    assert!(transform(&generated, "file", &plan, true, true, false).is_err());
-    let (excluded, _) = transform(source, "file", &plan, false, false, false).unwrap();
-    assert_eq!(excluded, source);
-    plan.annotations.read_existing = false;
-    plan.annotations.inject_generated = false;
-    let (generated, functions) = transform(source, "file", &plan, true, false, false).unwrap();
-    assert!(!functions[0].selected);
-    assert!(!generated.contains("/*otelc.instrument*/"));
-    let (inspect, _) = transform(source, "file", &plan, true, false, true).unwrap();
-    assert_eq!(inspect, source);
-}
-#[test]
-fn synchronous_closure_inventory_and_body_probes_preserve_original_signatures() {
-    let mut plan = policy();
-    plan.functions.include = vec!["*.<closure>@*".into()];
-    let source = "fn main() { let expression=|value:i32| value+1; let block=move |value:i32| {value+2}; let nested=|| || 7; }";
-    let (generated, functions) = transform(source, "file", &plan, true, false, false).unwrap();
-    let closures: Vec<_> = functions
-        .iter()
-        .filter(|function| function.name.contains("<closure>"))
-        .collect();
-    assert_eq!(closures.len(), 4);
-    assert!(closures
-        .iter()
-        .all(|function| function.selected && function.unsupported.is_none()));
-    assert_eq!(generated.matches("::quux_otelc_rust::enter(").count(), 4);
-    assert!(generated.contains("|value:i32| {"));
-    assert!(generated.contains("move |value:i32| {"));
-    assert_eq!(generated.lines().count(), source.lines().count());
-    syn::parse_file(&generated).unwrap();
-}
-#[test]
-fn closure_annotations_exclusions_and_unsupported_boundaries_are_visible() {
-    let mut plan = policy();
-    plan.functions.include = vec!["file.main.<closure>@4:*".into()];
-    let source = "fn main(){\n// otelc.instrument\nlet annotated=||7;\nlet configured=||8;\n// otelc.exclude\nlet excluded=||9;\n}";
-    let (_, functions) = transform(source, "file", &plan, true, false, false).unwrap();
-    assert_eq!(
-        functions
-            .iter()
-            .map(|function| function.selected)
-            .collect::<Vec<_>>(),
-        [false, true, true, false]
-    );
-    plan.functions.exclude.push("*.<closure>@3:*".into());
-    let (_, functions) = transform(source, "file", &plan, true, false, false).unwrap();
-    assert!(!functions[1].selected);
-    plan.functions.include = vec!["not_selected".into()];
-    plan.functions.exclude.clear();
-    let (_, documented) = transform(
-        "fn main(){\n/// otelc.instrument\nlet callback=||7;\n}",
-        "file",
-        &plan,
-        true,
-        false,
-        false,
-    )
-    .unwrap();
-    assert!(documented[1].selected);
-    plan.functions.include = vec!["*".into()];
-    for source in [
-        "fn main(){ let callback=async || 7; }",
-        "fn main(){ let callback=const || 7; }",
-    ] {
-        assert!(transform(source, "file", &plan, true, false, false).is_err());
-        let (original, functions) = transform(source, "file", &plan, true, false, true).unwrap();
-        assert_eq!(original, source);
-        assert!(functions[1].unsupported.is_some());
-        assert!(transform(source, "file", &plan, false, false, false).is_ok());
-    }
-    assert!(transform(
-        "fn main(){\n// otelc.unknown\nlet callback=||7;}",
-        "file",
-        &plan,
-        true,
-        false,
-        false
-    )
-    .is_err());
-}
-#[test]
 fn closure_runtime_preserves_traits_borrows_capture_precision_drops_and_panic_payloads() {
     let root = tempfile::tempdir().unwrap();
     let source = include_str!("../../../examples/apps/rust_closure_app.rs");
@@ -209,82 +109,6 @@ fn closure_runtime_preserves_traits_borrows_capture_precision_drops_and_panic_pa
         .values()
         .all(|count| count == 0));
 }
-#[test]
-fn named_scopes_generics_default_methods_nested_functions_and_raw_identifiers() {
-    let mut plan = policy();
-    plan.functions.include = vec!["*".into()];
-    plan.functions.exclude.clear();
-    let source = "mod book { pub fn price<T>(v:T)->T { fn nested() {} nested(); v } } struct Order; impl Order { fn r#type(&self) {} } trait Calculate { fn default_value(&self) -> i32 { 3 } fn abstract_value(&self); } impl Calculate for Order { fn abstract_value(&self) {} } impl<T> Calculate for [T; 3] { fn abstract_value(&self) {} }";
-    let (generated, functions) = transform(source, "file", &plan, true, false, false).unwrap();
-    syn::parse_file(&generated).unwrap();
-    let names: Vec<_> = functions
-        .iter()
-        .map(|function| function.name.as_str())
-        .collect();
-    assert_eq!(
-        names,
-        [
-            "file.book.price",
-            "file.book.price.nested",
-            "file.Order.r#type",
-            "file.Calculate.default_value",
-            "file.<Order as Calculate>.abstract_value",
-            "file.<[T ; 3] as Calculate>.abstract_value"
-        ]
-    );
-    plan.functions.include = vec!["file.λ?".into()];
-    let (generated, functions) =
-        transform("fn λx() {}", "file", &plan, true, false, false).unwrap();
-    assert!(functions[0].selected);
-    syn::parse_file(&generated).unwrap();
-}
-#[test]
-fn unsupported_functions_are_inspectable_and_rejected_when_selected() {
-    let mut plan = policy();
-    plan.functions.include = vec!["*".into()];
-    plan.functions.exclude.clear();
-    for source in [
-        "const fn fixed() -> i32 { 2 }",
-        "async fn patterned((x, y): (i32, i32)) -> i32 { x + y }",
-        "async fn referenced(ref value: String) -> usize { value.len() }",
-        "#[unsafe(naked)] unsafe extern \"C\" fn bare() {}",
-    ] {
-        assert!(transform(source, "file", &plan, true, false, false).is_err());
-        let (inspected, functions) = transform(source, "file", &plan, true, false, true).unwrap();
-        assert_eq!(inspected, source);
-        assert!(functions[0].unsupported.is_some());
-        assert!(transform(source, "file", &plan, false, false, false).is_ok());
-    }
-    assert!(transform("async fn main() {}", "file", &plan, false, true, false).is_err());
-    for source in [
-        "include!(\"part.rs\");",
-        "// otelc.unknown\nfn wrong() {}",
-        "fn broken(",
-    ] {
-        assert!(transform(source, "file", &plan, true, false, false).is_err());
-    }
-    assert!(transform(
-        "// otelc.unknown\nfn wrong() {}",
-        "file",
-        &plan,
-        true,
-        false,
-        true
-    )
-    .is_err());
-    let (_, functions) = transform(
-        "/// otelc.instrument\nfn doc() {}\n// otelc.exclude\nfn excluded() {}",
-        "file",
-        &plan,
-        true,
-        false,
-        false,
-    )
-    .unwrap();
-    assert!(functions[0].selected);
-    assert!(!functions[1].selected);
-}
-
 #[test]
 fn async_futures_preserve_results_borrows_panics_cancellation_and_thread_movement() {
     let root = tempfile::tempdir().unwrap();
@@ -335,23 +159,6 @@ fn async_futures_preserve_results_borrows_panics_cancellation_and_thread_movemen
         .unwrap()
         .values()
         .all(|count| count == 0));
-}
-#[test]
-fn specialised_receivers_and_nested_trait_methods_have_distinct_identities() {
-    let mut plan = policy();
-    plan.functions.include = vec!["*".into()];
-    plan.functions.exclude.clear();
-    let source = "struct Slot<T>(T); impl Slot<u32> { fn value(&self) {} } impl Slot<u64> { fn value(&self) {} } impl first::Order { fn value(&self) {} } impl second::Order { fn value(&self) {} } trait Defaulted { fn first(&self) { fn helper() {} helper(); } fn second(&self) { fn helper() {} helper(); } } fn marker_text()->&'static str { \"quux.otelc.generated\" }";
-    let (_, functions) = transform(source, "file", &plan, true, false, false).unwrap();
-    let names: std::collections::HashSet<_> = functions
-        .iter()
-        .map(|function| function.name.as_str())
-        .collect();
-    assert_eq!(names.len(), functions.len());
-    assert!(names.contains("file.Defaulted.first.helper"));
-    assert!(names.contains("file.Defaulted.second.helper"));
-    assert!(names.contains("file.Slot < u32 >.value"));
-    assert!(names.contains("file.Slot < u64 >.value"));
 }
 #[test]
 fn standalone_preserves_payload_drop_modules_assets_arguments_and_source() {
@@ -479,8 +286,6 @@ fn compact_async_tails_keep_nested_delimiters_coercions_and_empty_bodies_valid()
     let mut plan = policy();
     plan.functions.include = vec!["main.*".into()];
     plan.functions.exclude = vec!["*.main".into(), "*.drive".into(), "*.double".into()];
-    let (generated, _) = transform(source, "main", &plan, true, true, false).unwrap();
-    syn::parse_file(&generated).expect("generated compact async source must remain valid Rust");
     let root = tempfile::tempdir().unwrap();
     let input = root.path().join("main.rs");
     fs::write(&input, source).unwrap();

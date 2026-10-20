@@ -47,12 +47,12 @@ build:
 	$(PYTHON) ci/build_llvm_plugin.py
 	$(PYTHON) ci/build_node_observer.py
 	cargo build --workspace --locked
+	$(PYTHON) ci/build_rust_mir.py
 
 rust-llvm-build: build
 	$(PYTHON) ci/build_rust_llvm.py
 
 rust-mir-build: build
-	$(PYTHON) ci/build_rust_mir.py
 
 rust-mir-check: rust-mir-build
 	RUSTC_BOOTSTRAP=otelc_rust_mir cargo test --manifest-path native/rust/mir/Cargo.toml --locked --target-dir target/rust-mir-frontend --test compiler
