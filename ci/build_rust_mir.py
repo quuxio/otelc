@@ -23,11 +23,11 @@ def qualified_rustc(program: str, environment: dict[str, str]) -> Path:
     if not located:
         raise ValueError("Install Rust 1.98.1 and its rustc-dev component")
     version = output([located, "-vV"], environment)
-    fields = {
-        key: value
-        for key, value in (line.split(": ", 1) for line in version.splitlines()
-                           if ": " in line)
-    }
+    fields = {}
+    for line in version.splitlines():
+        key, separator, value = line.partition(": ")
+        if separator:
+            fields[key] = value
     if (not version.startswith("rustc 1.98.1 ")
             or fields.get("commit-hash") != RUST_COMMIT
             or fields.get("host") != "aarch64-apple-darwin"
