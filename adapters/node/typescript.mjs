@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { IDENTITY } from './transform.mjs';
 import { identity, functionName } from './typescript-identities.mjs';
 import { nativeEmit } from './typescript-native.mjs';
+import { collectLifetimeClasses, markLifetimeClass, TYPE_IDENTITY } from './typescript-lifetimes.mjs';
 
 function error(diagnostics) {
   const failures = diagnostics.filter(value => value.category === ts.DiagnosticCategory.Error);
@@ -31,7 +32,7 @@ export function compilerOptions(root = process.cwd()) {
 }
 export function transpile(source, filename, sourceName, plan, root = process.cwd(), hintedFormat) {
   if (/\.d\.(?:ts|mts|cts)$/.test(filename) || /\.tsx$/.test(filename)) throw new Error('TypeScript declarations and JSX are not executable adapter inputs');
-  if (source.includes(IDENTITY)) throw new Error('TypeScript source is already prepared for instrumentation');
+  if (source.includes(IDENTITY) || source.includes(TYPE_IDENTITY)) throw new Error('TypeScript source is already prepared for instrumentation');
   const options = compilerOptions(root);
   const format = /\.cts$/.test(filename) ? 'commonjs' : /\.mts$/.test(filename) ? 'module'
     : ['module', 'commonjs'].includes(hintedFormat) ? hintedFormat
@@ -40,6 +41,7 @@ export function transpile(source, filename, sourceName, plan, root = process.cwd
   options.module = format === 'commonjs' ? ts.ModuleKind.CommonJS : ts.ModuleKind.Preserve;
   options.verbatimModuleSyntax = format !== 'commonjs';
   if (plan.backend === 'native') return { ...nativeEmit(source, filename, sourceName, plan, options, undefined, root), format };
+  const classes = new Map(collectLifetimeClasses(source, filename, sourceName, plan).map(item => [item.start, item.metadata]));
   const transformer = context => file => {
     const prefix = sourceName.replace(/\.(?:ts|mts|cts)$/, '').replaceAll('/', '.');
     function visit(node, parents = [], names = []) {
@@ -50,7 +52,8 @@ export function transpile(source, filename, sourceName, plan, root = process.cwd
       const owner = parents.at(-1);
       const object = ts.isObjectLiteralExpression(node) ? owner && (ts.isVariableDeclaration(owner) || ts.isPropertyAssignment(owner)) && ts.isIdentifier(owner.name) ? owner.name.text : `<object>@${position.line + 1}:${position.character + 1}` : null;
       const nested = callable ? [...names, name] : container ? [...names, node.name?.text ?? '<class>'] : object ? [...names, object] : names;
-      const updated = ts.visitEachChild(node, child => visit(child, [...parents, node], nested), context);
+      let updated = ts.visitEachChild(node, child => visit(child, [...parents, node], nested), context);
+      if (ts.isClassLike(node) && classes.has(node.getStart(file))) updated = markLifetimeClass(updated, classes.get(node.getStart(file)));
       if (callable) {
         const metadata = identity(node, parents, names, file, prefix, plan);
         ts.addSyntheticLeadingComment(updated, ts.SyntaxKind.MultiLineCommentTrivia, IDENTITY + Buffer.from(JSON.stringify(metadata)).toString('base64'), true);
