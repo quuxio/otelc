@@ -88,12 +88,6 @@ impl Probe {
         {
             return Ok(None);
         }
-        let body = tcx.hir_body_owned_by(id).value.span;
-        if [span.hi(), body.lo(), body.hi()].iter().any(|position| {
-            map.lookup_char_pos(*position).file.start_pos != location.file.start_pos
-        }) {
-            return Ok(None);
-        }
         let source = fs::read_to_string(&file)?;
         if format!("{:x}", Sha256::digest(source.as_bytes())) != self.request.sources[&file]
             || !location.file.src_hash.matches(&source)
@@ -106,11 +100,28 @@ impl Probe {
                 location.file.original_relative_byte_pos(position_).0 as usize,
             )
         };
+        // An expression-bodied closure can lower directly into a standard
+        // library macro's source. Its original declaration, not that expanded
+        // expression, already identifies the parsed closure unambiguously.
+        if tcx.def_kind(id) == DefKind::Closure {
+            return self.request.original(
+                file.to_str().context("Rust frontend path must be UTF-8")?,
+                ((0, 0), (0, 0)),
+                at(span.lo())?,
+                true,
+            );
+        }
+        let body = tcx.hir_body_owned_by(id).value.span;
+        if [span.hi(), body.lo(), body.hi()].iter().any(|position| {
+            map.lookup_char_pos(*position).file.start_pos != location.file.start_pos
+        }) {
+            return Ok(None);
+        }
         self.request.original(
             file.to_str().context("Rust frontend path must be UTF-8")?,
             (at(body.lo())?, at(body.hi())?),
             at(span.lo())?,
-            tcx.def_kind(id) == DefKind::Closure,
+            false,
         )
     }
 
@@ -188,9 +199,18 @@ impl Probe {
             bail!("original Rust source differs from the compiler's loaded input");
         }
         let coordinates = |span: Span| -> Result<((usize, usize), (usize, usize))> {
+            let start = map.lookup_char_pos(span.lo());
             let end = map.lookup_char_pos(span.hi());
-            if end.file.start_pos != location.file.start_pos {
-                bail!("Rust compiler declaration spans multiple physical inputs");
+            if start.file.start_pos != location.file.start_pos
+                || end.file.start_pos != location.file.start_pos
+            {
+                bail!(
+                    "Rust compiler declaration spans multiple physical inputs: {} expanded={expanded} declaration={} start={} end={}",
+                    tcx.def_path_str(id),
+                    location.file.name.prefer_local_unconditionally(),
+                    start.file.name.prefer_local_unconditionally(),
+                    end.file.name.prefer_local_unconditionally()
+                );
             }
             Ok((
                 position(
@@ -205,11 +225,9 @@ impl Probe {
         };
         let declaration = coordinates(span)?;
         let body_span = tcx.hir_body_owned_by(id).value.span;
-        let body = coordinates(if expanded {
-            body_span.source_callsite()
-        } else {
-            body_span
-        })?;
+        // Body expansion is independent of declaration expansion: e.g. an
+        // ordinary `|| eprintln!(...)` owns a macro-expanded expression.
+        let body = coordinates(body_span.source_callsite())?;
         let closure = tcx.def_kind(id) == DefKind::Closure;
         let original = if expanded {
             None

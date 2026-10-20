@@ -183,6 +183,82 @@ fn health(root: &Path, calls: u64) -> Value {
 
 #[test]
 #[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn independent_scalar_codec_macros_do_not_block_an_unrelated_selected_target() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(root, &receiver, vec!["app.echo".into()]);
+    let source = include_str!("llvm/consumer_codec.rs");
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    let flags: Vec<_> = metadata["baseline_flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|flag| flag.as_str().unwrap())
+        .collect();
+    success(
+        command(
+            Path::new(metadata["compiler"]["program"].as_str().unwrap()),
+            root,
+        )
+        .args(flags)
+        .args(["app.rs", "-o", "plain"])
+        .output()
+        .unwrap(),
+    );
+    let observation = root.join("observation.txt");
+    let plain = success(
+        command(&root.join("plain"), root)
+            .env("OTELEQ_OBSERVATION", &observation)
+            .output()
+            .unwrap(),
+    );
+    let original_observation = fs::read(&observation).unwrap();
+    let measured = success(
+        command(&adapter(), root)
+            .arg(&plan)
+            .args(["--run", "bundle"])
+            .env("OTELEQ_OBSERVATION", &observation)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(measured.stdout, plain.stdout);
+    assert_eq!(measured.stderr, plain.stderr);
+    assert_eq!(measured.stderr, b"app-stderr:echo\n");
+    assert_eq!(fs::read(observation).unwrap(), original_observation);
+    health(root, 1);
+    let spans = receiver.spans();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].name, "app.echo");
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
+fn selected_ordinary_and_generated_expression_macro_closures_keep_their_owners() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    let receiver = Receiver::new();
+    let plan = policy_matching(root, &receiver, vec!["*<closure*".into()]);
+    let source = "macro_rules! callback{()=>{|| eprintln!(\"generated\")}}\nfn work(){let ordinary=|| eprintln!(\"ordinary\");let generated=callback!();ordinary();generated();}\nfn main(){work();}\n";
+    fs::write(root.join("app.rs"), source).unwrap();
+    let metadata = build(root, &plan);
+    let output = success(compare(root, &plan, &metadata));
+    assert_eq!(output.stderr, b"ordinary\ngenerated\n");
+    health(root, 2);
+    let spans = receiver.spans();
+    assert_eq!(spans.len(), 2);
+    assert!(spans
+        .iter()
+        .any(|span| span.name.contains("work.<closure>")));
+    assert!(spans.iter().any(|span| span.name == "app.work.<closure#1>"));
+    assert_ne!(spans[0].name, spans[1].name);
+    assert_eq!(fs::read_to_string(root.join("app.rs")).unwrap(), source);
+}
+
+#[test]
+#[ignore = "requires the qualified nightly and make rust-llvm-build"]
 fn compiler_owned_symbols_cover_macro_generated_functions_and_generic_instances() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();
