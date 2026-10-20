@@ -356,7 +356,7 @@ class CustomMeta(metaclass=Meta):
             policy['traces']['enabled'] = tracing
             policy['runtime']['max_live_lifetimes'] = maximum
             capture, trace_capture = Capture(), TraceCapture()
-            with self.assertRaisesRegex(ValueError, 'collection lifetimes require'):
+            with self.assertRaisesRegex(ValueError, 'Python lifetimes require'):
                 Runtime(policy, capture, trace_capture)
         policy = collection_plan()
         policy['function_matchers'] = {'include': [], 'exclude': []}
