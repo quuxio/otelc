@@ -10,7 +10,7 @@ def llvm_environment(environment):
     if environment.get("LLVM_COV") and environment.get("LLVM_PROFDATA"):
         return
     version = subprocess.check_output(["rustc", "-vV"], text=True, env=environment)
-    fields = dict(line.split(": ", 1) for line in version.splitlines() if ": " in line)
+    fields = {key: value for key, separator, value in (line.partition(": ") for line in version.splitlines()) if separator}
     major = int(fields["LLVM version"].split(".")[0])
     sysroot = subprocess.check_output(["rustc", "--print", "sysroot"], text=True, env=environment).strip()
     candidates = [Path(f"/opt/homebrew/opt/llvm@{major}/bin"), Path(sysroot) / "lib/rustlib" / fields["host"] / "bin"]

@@ -345,8 +345,9 @@ def escape(error):
         for group, key, value in (("traces", "root_sample_ratio", float("nan")), ("traces", "max_active_traces", 0), ("traces", "max_spans_per_trace", 65537), ("export", "max_queued_batches", 0), ("trace_export", "timeout_ms", 0), ("trace_export", "protocol", "grpc"), ("trace_export", "endpoint", "http://secret.example/private"), ("trace_export", "endpoint", "https://user:secret@example.invalid"), ("trace_export", "endpoint", "https://example.invalid?private=value")):
             policy = trace_plan()
             policy[group][key] = value
+            metrics, traces = Capture(), TraceCapture()
             with self.assertRaisesRegex(ValueError, "invalid resolved Python trace settings"):
-                Runtime(policy, Capture(), TraceCapture())
+                Runtime(policy, metrics, traces)
 
     def test_typed_trace_acknowledgements_and_empty_signal_header_override(self):
         import requests

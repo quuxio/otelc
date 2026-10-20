@@ -358,13 +358,15 @@ class PythonAdapterTests(unittest.TestCase):
             self.assertIn("error", self.control(path, b"invalid\n"))
             self.assertIn("error", self.control(path, b"x" * 18 + b"\n"))
             self.assertIn("error", self.control(path, b"unterminated"))
+            capture = Capture()
             with self.assertRaises(OSError):
-                Runtime(policy, Capture())
+                Runtime(policy, capture)
             runtime.close()
             self.assertFalse(path.exists())
             os.chmod(directory, 0o755)
+            capture = Capture()
             with self.assertRaises(ValueError):
-                Runtime(policy, Capture())
+                Runtime(policy, capture)
 
     def test_cli_launch_otlp_unchanged_annotations_and_exit_status(self):
         cli = ROOT / "target/debug/quux-otelc"

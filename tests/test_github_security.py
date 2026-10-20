@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -46,6 +47,20 @@ class Client:
 
 
 class SecurityTests(unittest.TestCase):
+    def test_malformed_pagination_header_is_bounded_and_fails_closed(self):
+        script = """import sys
+from ci.github_security import next_page, SecurityError
+try:
+    next_page(sys.stdin.read())
+except SecurityError:
+    pass
+else:
+    raise SystemExit('malformed next-page link was accepted')
+"""
+        result = subprocess.run([sys.executable, "-c", script], input='Link: ' + '<' * 100_000 + '; rel="next"',
+                                text=True, capture_output=True, timeout=3, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_disabled_settings_fail_check_then_enable_idempotently(self):
         client = Client(False, False)
         with self.assertRaisesRegex(security.SecurityError, "disabled or paused"):
@@ -70,8 +85,9 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaisesRegex(security.SecurityError, "administration"):
             security.run(client, True)
         self.assertFalse(any(method == "PUT" for method, _ in client.requests))
+        paused_client = Client(paused=True)
         with self.assertRaisesRegex(security.SecurityError, "paused"):
-            security.run(Client(paused=True), True)
+            security.run(paused_client, True)
 
     def test_alert_pagination_counts_all_severities_without_advisory_contents(self):
         client = Client()
@@ -140,11 +156,11 @@ class SecurityTests(unittest.TestCase):
             self.assertEqual(client.expect("GET", "user"), {"login": "quuxio"})
         auth, api = command.call_args_list
         self.assertIn("quuxio", auth.args[0])
-        self.assertFalse("GH_TOKEN" in auth.kwargs["env"], "auth lookup must ignore inherited tokens")
+        self.assertNotIn("GH_TOKEN", auth.kwargs["env"], "auth lookup must ignore inherited tokens")
         self.assertEqual(api.kwargs["env"]["GH_TOKEN"], "test-secret")
         self.assertEqual(api.kwargs["env"]["GH_HOST"], "github.com")
-        self.assertFalse("GH_DEBUG" in api.kwargs["env"], "API debugging must remain disabled")
-        self.assertFalse("UNRELATED_SECRET" in api.kwargs["env"], "unrelated credentials must not be inherited")
+        self.assertNotIn("GH_DEBUG", api.kwargs["env"], "API debugging must remain disabled")
+        self.assertNotIn("UNRELATED_SECRET", api.kwargs["env"], "unrelated credentials must not be inherited")
         with self.assertRaisesRegex(security.SecurityError, "outside"):
             client.request("GET", "repos/elsewhere/project")
         with self.assertRaisesRegex(security.SecurityError, "unsupported"):
