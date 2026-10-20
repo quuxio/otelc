@@ -1,8 +1,10 @@
 //! Source-free Rust body guards and language-native SDK metrics.
 mod compiler_abi;
+pub mod compiler_mir;
 mod control;
 pub mod policy;
 mod reader;
+mod recording;
 #[cfg(test)]
 mod tests;
 mod traces;
@@ -44,6 +46,12 @@ struct Frame {
     started: Instant,
     was_panicking: bool,
 }
+enum Completion {
+    Inferred,
+    Returned,
+    Unwound,
+    Cancelled,
+}
 #[derive(Default)]
 struct Data {
     functions: BTreeMap<String, Function>,
@@ -72,11 +80,13 @@ pub struct Runtime {
     duration: Histogram<f64>,
     stop: mpsc::SyncSender<mpsc::SyncSender<()>>,
     control: Mutex<Option<control::Control>>,
+    futures: Mutex<compiler_mir::Registry>,
 }
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: OnceLock<Arc<Runtime>> = OnceLock::new();
 impl Runtime {
     pub fn new(plan: policy::Plan) -> Result<Arc<Self>> {
+        let _sdk = recording::Suppression::enter();
         plan.validate()?;
         let owner = NEXT_OWNER
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -90,6 +100,7 @@ impl Runtime {
             "active_call_capacity",
             "incomplete",
             "invalid",
+            "future_capacity",
         ] {
             data.losses.insert(reason, 0);
         }
@@ -195,6 +206,7 @@ impl Runtime {
         std::thread::Builder::new()
             .name("otelc-rust-export".into())
             .spawn(move || {
+                let _sdk = recording::Suppression::enter();
                 let mut previous = None;
                 loop {
                     let request = receiver
@@ -298,6 +310,7 @@ impl Runtime {
             duration,
             stop,
             control: Mutex::new(None),
+            futures: Mutex::new(compiler_mir::Registry::default()),
         });
         if let Some(path) = runtime.plan.runtime.control_socket.as_deref() {
             match control::Control::bind(path, runtime.clone()) {
@@ -317,6 +330,17 @@ impl Runtime {
         Ok(runtime)
     }
     pub fn enter(self: &Arc<Self>, name: &str) -> Guard {
+        if recording::Suppression::active() {
+            return Guard {
+                runtime: None,
+                token: 0,
+                context: None,
+            };
+        }
+        let _sdk = recording::Suppression::enter();
+        self.enter_inner(name)
+    }
+    fn enter_inner(self: &Arc<Self>, name: &str) -> Guard {
         let mut guard = Guard {
             runtime: None,
             token: 0,
@@ -409,7 +433,8 @@ impl Runtime {
             self.state.revision.fetch_add(1, Ordering::Release);
         }
     }
-    fn finish(&self, token: u64, cancelled: bool) {
+    fn finish(&self, token: u64, completion: Completion) {
+        let _sdk = recording::Suppression::enter();
         let ended = Instant::now();
         if let Ok(mut data) = self.state.data.lock() {
             let Some(frame) = data.pending.remove(&token) else {
@@ -418,8 +443,12 @@ impl Runtime {
             let Some(function) = data.functions.get_mut(&frame.name) else {
                 return;
             };
-            let escaped = std::thread::panicking() && !frame.was_panicking;
-            let cancelled = cancelled && !escaped;
+            let escaped = match completion {
+                Completion::Inferred => std::thread::panicking() && !frame.was_panicking,
+                Completion::Unwound => true,
+                Completion::Returned | Completion::Cancelled => false,
+            };
+            let cancelled = matches!(completion, Completion::Cancelled);
             if frame.metrics {
                 function.count = function.count.saturating_add(1);
                 if escaped {
@@ -455,6 +484,9 @@ impl Runtime {
         }
     }
     pub fn report(&self) -> serde_json::Value {
+        let _sdk = recording::Suppression::enter();
+        // Poll admission acquires the registry before the ordinary frame store.
+        let futures = self.futures.lock().ok().map(|registry| registry.report());
         let mut values = BTreeMap::new();
         let mut losses = BTreeMap::new();
         let mut count = 0;
@@ -471,9 +503,10 @@ impl Runtime {
             losses = data.losses.clone();
             *losses.entry("incomplete").or_default() += data.pending.len() as u64;
         }
-        serde_json::json!({"schema_version":1,"traces":traces,"language":"rust","pid":std::process::id(),"function_calls":count,"functions":values,"losses":losses,"export_loss":self.state.export_loss.load(Ordering::Relaxed),"export_finished":self.state.finished.load(Ordering::Acquire)})
+        serde_json::json!({"schema_version":1,"traces":traces,"language":"rust","pid":std::process::id(),"function_calls":count,"functions":values,"losses":losses,"future_observers":futures,"export_loss":self.state.export_loss.load(Ordering::Relaxed),"export_finished":self.state.finished.load(Ordering::Acquire)})
     }
     pub fn close(&self) {
+        let _sdk = recording::Suppression::enter();
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -485,6 +518,11 @@ impl Runtime {
             if let Some(control) = control.take() {
                 control.close();
             }
+        }
+        // Metadata has no owning guard: shutdown censors the pending frames
+        // below, rather than inventing future completions while clearing it.
+        if let Ok(mut registry) = self.futures.lock() {
+            registry.clear();
         }
         if let Ok(mut data) = self.state.data.lock() {
             let pending = data.pending.len() as u64;
@@ -515,9 +553,9 @@ pub struct Guard {
     token: u64,
 }
 impl Guard {
-    fn finish(&mut self, cancelled: bool) {
+    fn finish(&mut self, completion: Completion) {
         if let Some(runtime) = self.runtime.take() {
-            if catch_unwind(AssertUnwindSafe(|| runtime.finish(self.token, cancelled))).is_err() {
+            if catch_unwind(AssertUnwindSafe(|| runtime.finish(self.token, completion))).is_err() {
                 if let Ok(mut data) = runtime.state.data.lock() {
                     runtime.lose(&mut data, "invalid");
                 }
@@ -527,16 +565,24 @@ impl Guard {
 }
 impl Drop for Guard {
     fn drop(&mut self) {
-        self.finish(false);
+        self.finish(Completion::Inferred);
     }
 }
-struct AsyncGuard {
+struct AsyncGuard<'a> {
     guard: Guard,
     completed: bool,
+    unwound: &'a AtomicBool,
 }
-impl Drop for AsyncGuard {
+impl Drop for AsyncGuard<'_> {
     fn drop(&mut self) {
-        self.guard.finish(!self.completed);
+        let completion = if self.unwound.load(Ordering::Relaxed) {
+            Completion::Unwound
+        } else if self.completed {
+            Completion::Returned
+        } else {
+            Completion::Cancelled
+        };
+        self.guard.finish(completion);
     }
 }
 /// Observe one async body from its first poll through completion or drop.
@@ -553,13 +599,18 @@ pub async fn observe_future<F: std::future::Future>(name: &str, future: F) -> F:
     observe_with_guard(guard, future).await
 }
 async fn observe_with_guard<F: std::future::Future>(guard: Guard, future: F) -> F::Output {
+    // Shared by the poll/drop observer and completion guard without allocating
+    // or requiring F: Sync. Declaration order keeps it alive through cleanup.
+    let unwound = AtomicBool::new(false);
     let mut guard = AsyncGuard {
         guard,
         completed: false,
+        unwound: &unwound,
     };
     let output = traces::InContext {
         future: Some(future),
         context: guard.guard.context,
+        unwound: &unwound,
     }
     .await;
     guard.completed = true;
@@ -574,6 +625,7 @@ impl Drop for Shutdown {
     }
 }
 pub fn launch() -> Shutdown {
+    let _sdk = recording::Suppression::enter();
     if ACTIVE.get().is_none() {
         if let Some(path) = std::env::var_os("OTELC_RUST_PLAN") {
             match policy::Plan::load(std::path::Path::new(&path)).and_then(Runtime::new) {
@@ -598,7 +650,7 @@ pub struct SyncGuard {
 impl Drop for SyncGuard {
     fn drop(&mut self) {
         self.scope.take();
-        self.guard.finish(false);
+        self.guard.finish(Completion::Inferred);
     }
 }
 pub fn enter(name: &str) -> SyncGuard {

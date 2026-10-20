@@ -1,5 +1,5 @@
 mod compiler_abi;
-mod spans;
+pub(crate) mod spans;
 use super::*;
 use opentelemetry_proto::tonic::metrics::v1::{metric, number_data_point};
 use std::{
@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-struct Receiver {
+pub(crate) struct Receiver {
     endpoint: String,
     requests: Arc<Mutex<Vec<ExportMetricsServiceRequest>>>,
     traces: Arc<
@@ -84,7 +84,7 @@ impl Receiver {
             worker: Some(worker),
         }
     }
-    fn good() -> Self {
+    pub(crate) fn good() -> Self {
         Self::new(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", Duration::ZERO)
     }
     fn wait(&self, number: usize) {
@@ -101,7 +101,7 @@ impl Drop for Receiver {
         self.worker.take().unwrap().join().unwrap();
     }
 }
-fn plan(receiver: &Receiver) -> policy::Plan {
+pub(crate) fn plan(receiver: &Receiver) -> policy::Plan {
     let config: quux_otelc_config::common::CommonConfig = toml::from_str("schema_version=2\nlanguages=['rust']\n[resource]\nservice_name='rust-test'\n[export]\ninterval_ms=60000\ntimeout_ms=1000\n[runtime]\nshutdown_timeout_ms=2000\n").unwrap();
     let value = serde_json::to_value(
         config

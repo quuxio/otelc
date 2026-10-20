@@ -5,7 +5,7 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-fn trace_plan(receiver: &Receiver) -> policy::Plan {
+pub(crate) fn trace_plan(receiver: &Receiver) -> policy::Plan {
     let mut plan = plan(receiver);
     plan.traces.enabled = true;
     plan.traces.root_sample_ratio = 1.0;
@@ -16,7 +16,7 @@ fn trace_plan(receiver: &Receiver) -> policy::Plan {
     });
     plan
 }
-fn spans(receiver: &Receiver) -> Vec<Span> {
+pub(crate) fn spans(receiver: &Receiver) -> Vec<Span> {
     receiver
         .traces
         .lock()
@@ -375,4 +375,129 @@ fn unsampled_trace_only_calls_have_no_pending_observations_or_shutdown_loss() {
     assert_eq!(runtime.report()["losses"]["incomplete"], 0);
     assert_eq!(runtime.report()["traces"]["sampled_out_roots"], 1);
     assert_eq!(runtime.report()["traces"]["losses"], serde_json::json!({}));
+}
+
+#[test]
+fn async_cleanup_uses_body_outcomes_instead_of_the_callers_panic_state() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        task::{Context, Poll, Waker},
+    };
+    struct CancelOnDrop(Option<Pin<Box<dyn Future<Output = ()> + Send>>>);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            drop(self.0.take());
+        }
+    }
+    struct PollOnDrop(Arc<Runtime>);
+    impl Drop for PollOnDrop {
+        fn drop(&mut self) {
+            let observed = self.0.clone();
+            let mut future = Box::pin(async move {
+                observe_with_guard(observed.enter("nested_panic"), async {
+                    std::panic::panic_any(23_u8);
+                })
+                .await;
+            });
+            let payload = catch_unwind(AssertUnwindSafe(|| {
+                let _ = future
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()));
+            }))
+            .unwrap_err();
+            assert_eq!(payload.downcast_ref::<u8>(), Some(&23));
+            drop(future);
+            assert!(traces::current(self.0.owner).is_none());
+        }
+    }
+    let receiver = Receiver::good();
+    let runtime = Runtime::new(trace_plan(&receiver)).unwrap();
+    let observed = runtime.clone();
+    let mut future = Box::pin(async move {
+        observe_with_guard(
+            observed.enter("cancel_in_cleanup"),
+            std::future::pending::<()>(),
+        )
+        .await;
+    });
+    assert_eq!(
+        future
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    );
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        let _cancel = CancelOnDrop(Some(future));
+        let _nested = PollOnDrop(runtime.clone());
+        std::panic::panic_any(17_u8);
+    }))
+    .unwrap_err();
+    assert_eq!(payload.downcast_ref::<u8>(), Some(&17));
+    assert!(traces::current(runtime.owner).is_none());
+    drop(runtime.enter_scoped("healthy"));
+    runtime.close();
+    let report = runtime.report();
+    assert_eq!(report["functions"]["cancel_in_cleanup"]["cancellations"], 1);
+    assert_eq!(report["functions"]["cancel_in_cleanup"]["unwinds"], 0);
+    assert_eq!(report["functions"]["nested_panic"]["cancellations"], 0);
+    assert_eq!(report["functions"]["nested_panic"]["unwinds"], 1);
+    assert_eq!(report["losses"]["incomplete"], 0);
+    assert_eq!(report["export_loss"], 0);
+    let decoded = spans(&receiver);
+    assert_eq!(decoded.len(), 3);
+    let failed = decoded
+        .iter()
+        .find(|span| span.name == "nested_panic")
+        .unwrap();
+    assert_eq!(failed.status.as_ref().unwrap().code, 2);
+    let healthy = decoded.iter().find(|span| span.name == "healthy").unwrap();
+    assert_ne!(failed.trace_id, healthy.trace_id);
+}
+
+#[test]
+fn async_destructor_panics_are_errors_and_send_futures_need_not_be_sync() {
+    struct PanickingDrop(std::cell::Cell<usize>);
+    impl Future for PanickingDrop {
+        type Output = ();
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+            self.0.set(self.0.get() + 1);
+            Poll::Pending
+        }
+    }
+    impl Drop for PanickingDrop {
+        fn drop(&mut self) {
+            assert_eq!(self.0.get(), 1);
+            std::panic::panic_any(31_u8);
+        }
+    }
+    let receiver = Receiver::good();
+    let runtime = Runtime::new(trace_plan(&receiver)).unwrap();
+    let observed = runtime.clone();
+    let future = async move {
+        observe_with_guard(
+            observed.enter("drop_panic"),
+            PanickingDrop(std::cell::Cell::new(0)),
+        )
+        .await;
+    };
+    // Cell makes the wrapped future !Sync; moving it across threads remains legal.
+    let mut future: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(future);
+    assert!(future
+        .as_mut()
+        .poll(&mut Context::from_waker(std::task::Waker::noop()))
+        .is_pending());
+    let payload = catch_unwind(AssertUnwindSafe(|| drop(future))).unwrap_err();
+    assert_eq!(payload.downcast_ref::<u8>(), Some(&31));
+    assert!(traces::current(runtime.owner).is_none());
+    runtime.close();
+    let report = runtime.report();
+    assert_eq!(report["function_calls"], 1);
+    assert_eq!(report["functions"]["drop_panic"]["unwinds"], 1);
+    assert_eq!(report["functions"]["drop_panic"]["cancellations"], 0);
+    assert_eq!(report["losses"]["incomplete"], 0);
+    assert_eq!(report["export_loss"], 0);
+    let decoded = spans(&receiver);
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].status.as_ref().unwrap().code, 2);
 }
