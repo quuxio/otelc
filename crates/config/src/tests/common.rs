@@ -23,7 +23,7 @@ fn python_collection_lifetimes_are_explicit_and_other_boundaries_stay_unavailabl
     for language in config
         .languages
         .iter()
-        .filter(|language| **language != Language::Python)
+        .filter(|language| !matches!(language, Language::Python | Language::JavaScript))
     {
         assert!(!config.resolve(*language).unwrap().execution_available);
     }
@@ -35,6 +35,40 @@ fn python_collection_lifetimes_are_explicit_and_other_boundaries_stay_unavailabl
             .unavailable
             .iter()
             .any(|reason| reason.contains("collection boundary")));
+    }
+}
+#[test]
+fn javascript_collection_is_explicit_and_typescript_still_requires_qualification() {
+    let mut config = policy();
+    config.lifetimes.enabled = true;
+    config.lifetimes.boundary = "collection".into();
+    assert!(
+        !config
+            .resolve(Language::JavaScript)
+            .unwrap()
+            .execution_available
+    );
+    config.traces.enabled = true;
+    assert!(
+        config
+            .resolve(Language::JavaScript)
+            .unwrap()
+            .execution_available
+    );
+    assert!(
+        !config
+            .resolve(Language::TypeScript)
+            .unwrap()
+            .execution_available
+    );
+    for boundary in ["object", "resource"] {
+        config.lifetimes.boundary = boundary.into();
+        assert!(
+            !config
+                .resolve(Language::JavaScript)
+                .unwrap()
+                .execution_available
+        );
     }
 }
 #[test]
