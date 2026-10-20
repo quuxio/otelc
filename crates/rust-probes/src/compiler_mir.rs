@@ -57,6 +57,7 @@ impl PollGuard {
 }
 impl Drop for PollGuard {
     fn drop(&mut self) {
+        let _sdk = crate::recording::Suppression::enter();
         self.scope.take();
         if matches!(self.exit, Exit::Suspended) {
             return;
@@ -113,6 +114,10 @@ impl Runtime {
         }
     }
     fn enter_future(self: &Arc<Self>, name: &str, key: Key) -> PollGuard {
+        if crate::recording::Suppression::active() {
+            return PollGuard::inactive();
+        }
+        let _sdk = crate::recording::Suppression::enter();
         if self.state.closed.load(Ordering::Acquire) {
             return PollGuard::inactive();
         }
@@ -132,7 +137,7 @@ impl Runtime {
             registry.exhausted = true;
             return self.future_scope(key, self.rejected_future("future_capacity"), false);
         }
-        let mut guard = self.enter(name);
+        let mut guard = self.enter_inner(name);
         let entry = Entry {
             token: guard.token,
             context: guard.context,
@@ -143,6 +148,10 @@ impl Runtime {
         self.future_scope(key, entry.context, true)
     }
     fn drop_future(self: &Arc<Self>, key: Key) -> PollGuard {
+        if crate::recording::Suppression::active() {
+            return PollGuard::inactive();
+        }
+        let _sdk = crate::recording::Suppression::enter();
         if self.state.closed.load(Ordering::Acquire) {
             return PollGuard::inactive();
         }

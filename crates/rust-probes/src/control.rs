@@ -42,6 +42,7 @@ impl Control {
         std::thread::Builder::new()
             .name("otelc-rust-control".into())
             .spawn(move || {
+                let _sdk = crate::recording::Suppression::enter();
                 while !runtime.state.closed.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((mut stream, _)) => {

@@ -213,3 +213,32 @@ fn invalid_inputs_and_uninstalled_public_hooks_are_inert() {
     runtime.close();
     assert_eq!(runtime.report()["function_calls"], 0);
 }
+
+#[test]
+fn sdk_operations_do_not_reenter_sync_or_future_recording() {
+    let receiver = Receiver::good();
+    let runtime = Runtime::new(trace_plan(&receiver)).unwrap();
+    let parent = runtime.enter_scoped("application");
+    let original = context(&runtime);
+    poll_exit(runtime.enter_future("pending", key(16, 1)), false);
+    {
+        let _sdk = crate::recording::Suppression::enter();
+        drop(runtime.enter_scoped("sdk_allocation"));
+        poll_exit(runtime.enter_future("sdk_poll", key(32, 2)), true);
+        drop_exit(runtime.drop_future(key(16, 1)));
+    }
+    assert_eq!(context(&runtime), original);
+    assert_eq!(runtime.report()["future_observers"]["pending"], 1);
+    poll_exit(runtime.enter_future("pending", key(16, 1)), true);
+    drop(parent);
+    runtime.close();
+    let report = runtime.report();
+    assert_eq!(report["function_calls"], 2);
+    assert_eq!(report["future_observers"]["pending"], 0);
+    assert_eq!(report["export_loss"], 0);
+    let names: Vec<_> = spans(&receiver).into_iter().map(|span| span.name).collect();
+    assert_eq!(names.len(), 2);
+    assert!(names
+        .iter()
+        .all(|name| name == "application" || name == "pending"));
+}

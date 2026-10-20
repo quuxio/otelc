@@ -143,6 +143,7 @@ def enforce_rust_file_coverage(report):
                         ("/crates/rust-adapter/src/artifact.rs", "Rust build artifacts"),
                         ("/crates/rust-probes/src/compiler_abi.rs", "Rust compiler ABI"),
                         ("/crates/rust-probes/src/compiler_mir.rs", "Rust compiler future observers"),
+                        ("/crates/rust-probes/src/recording.rs", "Rust SDK recording suppression"),
                         ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory")):
         selected = []
         include = False

@@ -4,6 +4,7 @@ pub mod compiler_mir;
 mod control;
 pub mod policy;
 mod reader;
+mod recording;
 #[cfg(test)]
 mod tests;
 mod traces;
@@ -79,6 +80,7 @@ static NEXT_OWNER: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: OnceLock<Arc<Runtime>> = OnceLock::new();
 impl Runtime {
     pub fn new(plan: policy::Plan) -> Result<Arc<Self>> {
+        let _sdk = recording::Suppression::enter();
         plan.validate()?;
         let owner = NEXT_OWNER
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -198,6 +200,7 @@ impl Runtime {
         std::thread::Builder::new()
             .name("otelc-rust-export".into())
             .spawn(move || {
+                let _sdk = recording::Suppression::enter();
                 let mut previous = None;
                 loop {
                     let request = receiver
@@ -321,6 +324,17 @@ impl Runtime {
         Ok(runtime)
     }
     pub fn enter(self: &Arc<Self>, name: &str) -> Guard {
+        if recording::Suppression::active() {
+            return Guard {
+                runtime: None,
+                token: 0,
+                context: None,
+            };
+        }
+        let _sdk = recording::Suppression::enter();
+        self.enter_inner(name)
+    }
+    fn enter_inner(self: &Arc<Self>, name: &str) -> Guard {
         let mut guard = Guard {
             runtime: None,
             token: 0,
@@ -414,6 +428,7 @@ impl Runtime {
         }
     }
     fn finish(&self, token: u64, cancelled: bool) {
+        let _sdk = recording::Suppression::enter();
         let ended = Instant::now();
         if let Ok(mut data) = self.state.data.lock() {
             let Some(frame) = data.pending.remove(&token) else {
@@ -459,6 +474,7 @@ impl Runtime {
         }
     }
     pub fn report(&self) -> serde_json::Value {
+        let _sdk = recording::Suppression::enter();
         // Poll admission acquires the registry before the ordinary frame store.
         let futures = self.futures.lock().ok().map(|registry| registry.report());
         let mut values = BTreeMap::new();
@@ -480,6 +496,7 @@ impl Runtime {
         serde_json::json!({"schema_version":1,"traces":traces,"language":"rust","pid":std::process::id(),"function_calls":count,"functions":values,"losses":losses,"future_observers":futures,"export_loss":self.state.export_loss.load(Ordering::Relaxed),"export_finished":self.state.finished.load(Ordering::Acquire)})
     }
     pub fn close(&self) {
+        let _sdk = recording::Suppression::enter();
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -585,6 +602,7 @@ impl Drop for Shutdown {
     }
 }
 pub fn launch() -> Shutdown {
+    let _sdk = recording::Suppression::enter();
     if ACTIVE.get().is_none() {
         if let Some(path) = std::env::var_os("OTELC_RUST_PLAN") {
             match policy::Plan::load(std::path::Path::new(&path)).and_then(Runtime::new) {
