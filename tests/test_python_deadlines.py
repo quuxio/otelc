@@ -145,8 +145,9 @@ class PythonDeadlineTests(unittest.TestCase):
         try:
             with Session() as session:
                 started = time.monotonic()
+                endpoint = f"https://127.0.0.1:{listener.getsockname()[1]}"
                 with self.assertRaises(requests.RequestException):
-                    session.post(f"https://127.0.0.1:{listener.getsockname()[1]}", data=b"", timeout=0.04)
+                    session.post(endpoint, data=b"", timeout=0.04)
                 self.assertLess(time.monotonic() - started, 0.3)
         finally:
             gate.set()
@@ -168,10 +169,11 @@ class PythonDeadlineTests(unittest.TestCase):
             try:
                 with Session() as session:
                     session.trust_env = False
+                    unavailable_endpoint = endpoint.replace("127.0.0.1", "otelc-deadline.invalid")
                     for _ in range(6):
                         started = time.monotonic()
                         with self.assertRaises(requests.RequestException):
-                            session.post(endpoint.replace("127.0.0.1", "otelc-deadline.invalid"), data=b"", timeout=0.04)
+                            session.post(unavailable_endpoint, data=b"", timeout=0.04)
                         self.assertLess(time.monotonic() - started, 0.3)
                 self.assertEqual(sum(thread.name.startswith("otelc-http-dns-") for thread in threading.enumerate()), 2)
             finally:
@@ -234,8 +236,9 @@ class PythonDeadlineTests(unittest.TestCase):
         try:
             for state in states:
                 supervisor.add(state)
+            overflow = Deadline(time.monotonic() + 5)
             with self.assertRaisesRegex(requests.RequestException, "capacity"):
-                supervisor.add(Deadline(time.monotonic() + 5))
+                supervisor.add(overflow)
         finally:
             for state in states:
                 state.finish()
