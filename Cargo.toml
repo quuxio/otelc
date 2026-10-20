@@ -18,7 +18,7 @@ object = { version = "0.39", features = ["read"] }
 cpp_demangle = "0.5"
 globset = "0.4"
 prost = "0.14"
-opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }
 ureq = "3.4"
 url = "2"
 percent-encoding = "2"
