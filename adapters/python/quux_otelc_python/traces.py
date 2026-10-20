@@ -24,6 +24,7 @@ from .telemetry import Session, export_headers
 class SpanContext:
     context: object = None
     sampled: bool = False
+    local_root: object = None
 
 
 SUPPRESSED = SpanContext()
@@ -143,7 +144,7 @@ class TraceStore:
 
     def reject(self, parent, reason):
         if parent is not None and parent.sampled:
-            tree = self.roots.get(parent.context.trace_id)
+            tree = self.roots.get(parent.local_root)
             if tree is not None and not tree.invalid:
                 tree.invalid = True
                 self.retained -= len(tree.nodes)
@@ -157,7 +158,7 @@ class TraceStore:
         if parent is not None:
             if not parent.sampled:
                 return SUPPRESSED
-            tree = self.roots.get(parent.context.trace_id)
+            tree = self.roots.get(parent.local_root)
             if tree is None:
                 self.losses["context_expired"] += 1
                 return SUPPRESSED
@@ -177,28 +178,29 @@ class TraceStore:
         if not identity.trace_flags.sampled:
             self.sampled_out += 1
             return SUPPRESSED
-        result = SpanContext(identity, True)
         if parent is None:
             if len(self.roots) >= self.policy["max_active_traces"] or self.retained >= 1048576:
                 return self.reject(None, "trace_capacity")
-            if identity.trace_id in self.roots:
-                return self.reject(None, "invalid")
+            # One distributed trace can contain several independent local trees.
+            # An opaque handle also prevents stale or foreign store contexts joining.
+            local_root = object()
             tree = Tree(identity.span_id, started, wall)
-            self.roots[identity.trace_id] = tree
+            self.roots[local_root] = tree
         else:
+            local_root = parent.local_root
             if identity.span_id in tree.nodes:
                 return self.reject(parent, "invalid")
             tree.active += 1
         tree.nodes[identity.span_id] = span
         tree.bytes += len(name.encode()) * 2 + 256
         self.retained += 1
-        return result
+        return SpanContext(identity, True, local_root)
 
     def acquire(self, parent):
         """Reserve a continuation before its creator can finish; caller holds the runtime lock."""
         if parent is None or not parent.sampled:
             return None
-        tree = self.roots.get(parent.context.trace_id)
+        tree = self.roots.get(parent.local_root)
         if tree is None or tree.invalid:
             return None
         if len(self.leases) >= self.runtime.plan["runtime"]["max_active_calls"]:
@@ -213,15 +215,15 @@ class TraceStore:
         parent = self.leases.pop(lease, None)
         if parent is None:
             return
-        tree = self.roots.get(parent.context.trace_id)
+        tree = self.roots.get(parent.local_root)
         if tree is not None:
             tree.active -= 1
-            self.complete(parent.context.trace_id, tree)
+            self.complete(parent.local_root, tree)
 
     def finish(self, identity, ended, unwound=False, cancelled=False):
         if identity is None or not identity.sampled:
             return
-        tree = self.roots.get(identity.context.trace_id)
+        tree = self.roots.get(identity.local_root)
         if tree is None:
             return
         if not tree.invalid:
@@ -236,12 +238,12 @@ class TraceStore:
         tree.active -= 1
         if identity.context.span_id == tree.root:
             tree.closed = True
-        self.complete(identity.context.trace_id, tree)
+        self.complete(identity.local_root, tree)
 
-    def complete(self, trace_id, tree):
+    def complete(self, local_root, tree):
         if tree.active or not tree.closed:
             return
-        self.roots.pop(trace_id)
+        self.roots.pop(local_root)
         if tree.invalid:
             return
         if len(self.ready) >= self.capacity:
