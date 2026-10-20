@@ -210,6 +210,12 @@ impl Fixture {
             "plain"
         });
         let mut command = self.command(program);
+        if instrumented {
+            command.env(
+                "OTELC_RUST_MIR_INVENTORY",
+                self.temporary.path().join("inventory.json"),
+            );
+        }
         command
             .args(["app.rs", "--edition=2024", "-O", "-g", "--extern"])
             .arg(format!(

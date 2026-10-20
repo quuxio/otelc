@@ -14,6 +14,7 @@ extern crate rustc_span;
 mod definitions;
 mod hooks;
 mod instrument;
+mod inventory;
 
 use anyhow::{Context, Result, bail};
 use definitions::Definitions;
@@ -247,6 +248,12 @@ impl Callbacks for Probe {
             if let Err(error) = definitions.definition(tcx, id) {
                 tcx.dcx().err(format!("otelc Rust compiler: {error:#}"));
             }
+        }
+        if let Some(output) = std::env::var_os("OTELC_RUST_MIR_INVENTORY")
+            && let Err(error) = inventory::publish(tcx, definitions.request, Path::new(&output))
+        {
+            tcx.dcx().err(format!("otelc Rust compiler: {error:#}"));
+            return Compilation::Stop;
         }
         Compilation::Continue
     }

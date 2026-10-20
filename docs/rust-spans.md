@@ -1,6 +1,6 @@
 # Rust function spans
 
-Rust can export sampled function spans as well as cumulative metrics using the common schema-2 policy. The source adapter inserts probes into private compiler inputs. Application and dependency source, manifests and lockfiles remain unchanged; no SDK import or annotation is required.
+Rust can export sampled function spans as well as cumulative metrics using the common schema-2 policy. The adapter inserts compiler-owned probes into typed MIR while compiling original Rust input. Application and dependency source, manifests and lockfiles remain unchanged; no SDK import or annotation is required.
 
 ## Run an unchanged application
 

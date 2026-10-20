@@ -144,6 +144,8 @@ def enforce_rust_file_coverage(report):
                         ("/crates/rust-probes/src/compiler_abi.rs", "Rust compiler ABI"),
                         ("/crates/rust-probes/src/compiler_mir.rs", "Rust compiler future observers"),
                         ("/crates/rust-probes/src/recording.rs", "Rust SDK recording suppression"),
+                        ("/crates/rust-adapter/src/compiler_mir.rs", "Rust original-source compiler adapter"),
+                        ("/crates/rust-adapter/src/compiler_mir_profile.rs", "Rust stable compiler profile"),
                         ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory")):
         selected = []
         include = False
@@ -162,6 +164,7 @@ def main():
     """Build the instrumented archive before native tests, then enforce coverage."""
     from ci.rust_llvm_coverage import run as compiler_coverage
     from ci.rust_mir_coverage import run as mir_coverage, source_hashes
+    from ci import build_rust_mir
     environment = coverage_environment()
     before = source_hashes(Path.cwd())
     for profile in Path(environment["CARGO_TARGET_DIR"]).rglob("*.profraw"):
@@ -174,8 +177,15 @@ def main():
     subprocess.run(["python3", "ci/build_llvm_plugin.py"], env=environment, check=True)
     subprocess.run(["python3", "ci/build_node_observer.py"], env=environment, check=True)
     environment["OTELC_NODE_OBSERVER"] = str(Path(environment["CARGO_TARGET_DIR"]) / "debug/otelc_node_observer.node")
+    subprocess.run(["cargo", "build", "--workspace", "--locked"], env=environment, check=True)
+    # Bind the public adapter to this run's instrumented SDK. The compiler
+    # helper itself is built normally; its separate gate instruments its map.
+    helper_environment = {key: value for key, value in environment.items()
+                          if key not in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
+                                         "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER")}
+    build_rust_mir.build(Path.cwd(), Path(environment["CARGO_TARGET_DIR"]) / "debug",
+                        helper_environment)
     for command in (
-        ["cargo", "build", "--workspace", "--locked"],
         ["cargo", "test", "--workspace", "--locked", "--", "--test-threads=1"],
         ["node", "--test", "adapters/node/tests/promise.test.mjs"],
     ):

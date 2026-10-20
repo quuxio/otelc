@@ -56,9 +56,31 @@ pub(crate) fn discover(
     scratch: &Path,
     tools: &Toolchain,
 ) -> Result<(Vec<PathBuf>, Vec<String>)> {
-    let depfile = scratch.join("original.d");
     let mut arguments: Vec<OsString> = vec![filename.as_os_str().to_owned()];
     arguments.extend(tools.baseline_flags().into_iter().map(OsString::from));
+    discover_arguments(&arguments, root, scratch, tools)
+}
+
+pub(crate) fn discover_arguments(
+    original: &[OsString],
+    root: &Path,
+    scratch: &Path,
+    tools: &Toolchain,
+) -> Result<(Vec<PathBuf>, Vec<String>)> {
+    let depfile = scratch.join("original.d");
+    let mut arguments = Vec::new();
+    let mut values = original.iter();
+    while let Some(value) = values.next() {
+        if value == "--emit" || value == "--out-dir" || value == "-o" {
+            values
+                .next()
+                .context("Rust compiler output option requires a value")?;
+        } else if !value.to_string_lossy().starts_with("--emit=")
+            && !value.to_string_lossy().starts_with("--out-dir=")
+        {
+            arguments.push(value.clone());
+        }
+    }
     arguments.push(format!("--emit=dep-info={}", depfile.display()).into());
     let compiled = Command::new(&tools.rustc)
         .args(&arguments)

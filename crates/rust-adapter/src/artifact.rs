@@ -38,6 +38,8 @@ struct Build {
     compiler: Compiler,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     compiler_hook: Option<HookEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compiler_driver: Option<crate::compiler_mir::HookEvidence>,
 }
 
 fn hash(path: &Path) -> Result<String> {
@@ -59,14 +61,16 @@ fn hash(path: &Path) -> Result<String> {
 }
 
 fn read(path: &Path) -> Result<Vec<u8>> {
+    read_bound(path, 4 * 1024 * 1024)
+}
+
+fn read_bound(path: &Path, limit: u64) -> Result<Vec<u8>> {
     if !fs::symlink_metadata(path)?.is_file() {
         bail!("Rust artifact inputs must be regular files");
     }
     let mut bytes = Vec::new();
-    File::open(path)?
-        .take(4 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > 4 * 1024 * 1024 {
+    File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
         bail!("Rust artifact metadata exceeds size bound");
     }
     Ok(bytes)
@@ -116,7 +120,7 @@ pub(crate) fn build(
         bail!("Rust source changed during the build");
     }
     let version = Command::new(&tools.rustc)
-        .arg(if tools.llvm.is_some() {
+        .arg(if tools.llvm.is_some() || tools.mir.is_some() {
             "-vV"
         } else {
             "--version"
@@ -126,9 +130,19 @@ pub(crate) fn build(
         bail!("cannot retain Rust compiler version");
     }
     let mut metadata = Build {
-        schema_version: if tools.llvm.is_some() { 2 } else { 1 },
+        schema_version: if tools.mir.is_some() {
+            3
+        } else if tools.llvm.is_some() {
+            2
+        } else {
+            1
+        },
         language: "rust".into(),
-        backend: tools.llvm.as_ref().map(|_| "llvm".into()),
+        backend: if tools.mir.is_some() {
+            Some("compiler".into())
+        } else {
+            tools.llvm.as_ref().map(|_| "llvm".into())
+        },
         executable_sha256: hash(&compiled.binary)?,
         plan_sha256: String::new(),
         adapter_sha256: hash(adapter)?,
@@ -143,6 +157,7 @@ pub(crate) fn build(
             version: String::from_utf8(version.stdout)?.trim().to_owned(),
         },
         compiler_hook: compiled.hook,
+        compiler_driver: compiled.mir_hook,
     };
     // Exclusive creation refuses collisions. The manifest is the last file, so
     // interrupted/incomplete bundles fail validation rather than launching.
@@ -161,6 +176,12 @@ pub(crate) fn build(
     }
     if let Some(resolved) = compiled.resolved {
         write(&directory.join("resolved.json"), &read(&resolved)?)?;
+    }
+    if let Some(request) = compiled.request {
+        write(
+            &directory.join("compiler-request.json"),
+            &read_bound(&request, 8 * 1024 * 1024)?,
+        )?;
     }
     metadata.plan_sha256 = hash(&directory.join("plan.json"))?;
     write(
@@ -181,8 +202,41 @@ pub(crate) fn launch(
         .canonicalize()
         .context("locate Rust artifact bundle")?;
     let metadata: Build = serde_json::from_slice(&read(&directory.join("build.json"))?)?;
-    if !matches!(metadata.schema_version, 1 | 2) || metadata.language != "rust" {
+    if !matches!(metadata.schema_version, 1..=3) || metadata.language != "rust" {
         bail!("unsupported Rust artifact format");
+    }
+    if let Some(driver) = &metadata.compiler_driver {
+        for (name, expected) in [
+            ("profile.json", &driver.profile_sha256),
+            ("inventory.json", &driver.inventory_sha256),
+            ("compiler-request.json", &driver.request_sha256),
+        ] {
+            // Validate retained bytes only. Replay must not load source,
+            // compiler, helper or SDK paths mentioned in these records.
+            let bytes = read_bound(
+                &directory.join(name),
+                if name == "compiler-request.json" {
+                    8 * 1024 * 1024
+                } else {
+                    4 * 1024 * 1024
+                },
+            )?;
+            let actual: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if actual != *expected {
+                bail!("Rust compiler driver provenance fingerprint mismatch: {name}");
+            }
+        }
+        let profile: serde_json::Value =
+            serde_json::from_slice(&read(&directory.join("profile.json"))?)?;
+        if profile["backend"] != "compiler"
+            || profile["driver_sha256"] != driver.driver_sha256
+            || profile["sdk_sha256"] != metadata.sdk_sha256
+        {
+            bail!("Rust compiler driver identity differs from its retained profile");
+        }
     }
     if let Some(hook) = &metadata.compiler_hook {
         let inventory = read(&directory.join("inventory.json"))?;
@@ -230,10 +284,16 @@ pub(crate) fn launch(
     }
     let stored: serde_json::Value = serde_json::from_slice(&stored_bytes)?;
     let llvm = stored["backend"] == "llvm";
+    let mir = metadata.schema_version == 3;
     if llvm != metadata.compiler_hook.is_some()
         || llvm != (metadata.backend.as_deref() == Some("llvm"))
         || (llvm && metadata.schema_version != 2)
-        || (!llvm && (metadata.schema_version != 1 || metadata.backend.is_some()))
+        || mir != metadata.compiler_driver.is_some()
+        || (mir
+            && (llvm
+                || metadata.backend.as_deref() != Some("compiler")
+                || stored["backend"] != "compiler"))
+        || (!llvm && !mir && (metadata.schema_version != 1 || metadata.backend.is_some()))
     {
         bail!("Rust compiler artifact profile evidence is incomplete");
     }

@@ -1,184 +1,13 @@
 use crate::compiler_profile::{HookEvidence, Toolchain};
 use anyhow::{bail, Context, Result};
-use quux_otelc_config::Selection;
 use quux_otelc_rust::policy::Plan;
 use std::{
-    collections::BTreeSet,
     ffi::OsString,
     fs,
-    os::unix::fs::{symlink, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-pub fn doctor(rustc: &str) -> Result<()> {
-    let output = Command::new(rustc)
-        .arg("--version")
-        .output()
-        .context("locate rustc")?;
-    if !output.status.success()
-        || !String::from_utf8_lossy(&output.stdout).starts_with("rustc 1.98.1 ")
-    {
-        bail!("Rust adapter requires the qualified rustc 1.98.1 toolchain");
-    }
-    if std::env::var_os("RUSTC_WRAPPER").is_some()
-        || std::env::var_os("RUSTC_WORKSPACE_WRAPPER").is_some()
-    {
-        bail!("existing Rust compiler wrappers require separate qualification");
-    }
-    Ok(())
-}
-pub fn mirror(root: &Path, destination: &Path) -> Result<()> {
-    mirror_inner(root, destination, &mut BTreeSet::new())
-}
-fn mirror_inner(root: &Path, destination: &Path, ancestors: &mut BTreeSet<PathBuf>) -> Result<()> {
-    let canonical_root = root.canonicalize()?;
-    let canonical_destination = if destination.exists() {
-        destination.canonicalize()?
-    } else {
-        destination
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(Path::new("."))
-            .canonicalize()?
-            .join(
-                destination
-                    .file_name()
-                    .context("generated directory name")?,
-            )
-    };
-    if canonical_destination.starts_with(&canonical_root) {
-        bail!("Rust generated workspace must be outside the source tree; set TMPDIR outside the project");
-    }
-    if !ancestors.insert(canonical_root.clone()) {
-        bail!("cyclic Rust source directory link requires separate qualification");
-    }
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let source = entry.path();
-        let name = entry.file_name();
-        let target = destination.join(&name);
-        let kind = entry.file_type()?;
-        let directory = kind.is_dir() || kind.is_symlink() && source.is_dir();
-        if directory
-            && matches!(
-                name.to_str(),
-                Some(".git" | "target" | "node_modules" | ".venv")
-            )
-        {
-            symlink(source, target)?;
-        } else if directory {
-            mirror_inner(&source, &target, ancestors)?;
-        } else if source.extension().is_some_and(|value| value == "rs") {
-            if !source.is_file() {
-                bail!("Rust source input must resolve to a regular file");
-            }
-            if target.is_symlink() {
-                fs::remove_file(&target)?;
-            }
-            fs::copy(&source, &target)?;
-            // Generated probes need writable private input even when the
-            // original source is read-only. Never change original permissions.
-            let mut permissions = fs::metadata(&target)?.permissions();
-            permissions.set_mode(permissions.mode() | 0o200);
-            fs::set_permissions(&target, permissions)?;
-        } else {
-            symlink(source, target)?;
-        }
-    }
-    ancestors.remove(&canonical_root);
-    Ok(())
-}
-fn prepare(
-    root: &Path,
-    generated: &Path,
-    filename: &Path,
-    plan: &Plan,
-    startup: bool,
-) -> Result<PathBuf> {
-    let relative = filename
-        .strip_prefix(root)
-        .context("Rust source is outside the project root")?;
-    let identity = relative
-        .with_extension("")
-        .to_string_lossy()
-        .replace(['/', '\\'], ".");
-    let selection = Selection::new(&plan.sources.include, &plan.sources.exclude, true)?;
-    let original = fs::read_to_string(filename)?;
-    let (source, _) = crate::transform::transform(
-        &original,
-        &identity,
-        plan,
-        selection.accepts(&relative.to_string_lossy().replace('\\', "/")),
-        startup,
-        false,
-    )?;
-    let target = generated.join(relative);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&target, source)?;
-    Ok(target)
-}
-fn source_tree(root: &Path, generated: &Path, plan: &Plan, main: &Path) -> Result<()> {
-    fn walk(root: &Path, current: &Path, generated: &Path, plan: &Plan, main: &Path) -> Result<()> {
-        for entry in fs::read_dir(current)? {
-            let entry = entry?;
-            let source = entry.path();
-            let kind = entry.file_type()?;
-            if kind.is_dir() {
-                walk(root, &source, generated, plan, main)?;
-            } else if kind.is_file() && source.extension().is_some_and(|value| value == "rs") {
-                let relative = source.strip_prefix(generated)?;
-                let selection = Selection::new(&plan.sources.include, &plan.sources.exclude, true)?;
-                if !selection.accepts(&relative.to_string_lossy()) && root.join(relative) != main {
-                    continue;
-                }
-                prepare(
-                    root,
-                    generated,
-                    &root.join(relative),
-                    plan,
-                    root.join(relative) == main,
-                )?;
-            }
-        }
-        Ok(())
-    }
-    walk(root, generated, generated, plan, main)
-}
-fn sdk_arguments(
-    args: &mut Vec<OsString>,
-    sdk: &Path,
-    source: &Path,
-    original: &Path,
-) -> Result<()> {
-    if args
-        .iter()
-        .any(|arg| arg.to_string_lossy().starts_with("quux_otelc_rust="))
-    {
-        bail!("application dependency collides with the Rust probe crate");
-    }
-    let deps = sdk.parent().context("Rust SDK directory")?.join("deps");
-    args.extend([
-        "--extern".into(),
-        format!("quux_otelc_rust={}", sdk.display()).into(),
-        "-L".into(),
-        format!("dependency={}", deps.display()).into(),
-    ]);
-    let generated_parent = source.parent().context("generated source parent")?;
-    let original_parent = original.parent().unwrap_or(Path::new(""));
-    args.push(
-        format!(
-            "--remap-path-prefix={}={}",
-            generated_parent.display(),
-            original_parent.display()
-        )
-        .into(),
-    );
-    Ok(())
-}
 pub(crate) const BASELINE_FLAGS: [&str; 3] = ["--edition=2024", "-O", "-g"];
 pub(crate) struct Compilation {
     pub binary: PathBuf,
@@ -188,6 +17,8 @@ pub(crate) struct Compilation {
     pub inventory: Option<PathBuf>,
     pub profile: Option<Vec<u8>>,
     pub resolved: Option<PathBuf>,
+    pub mir_hook: Option<crate::compiler_mir::HookEvidence>,
+    pub request: Option<PathBuf>,
 }
 
 pub(crate) fn compile(
@@ -210,52 +41,19 @@ pub(crate) fn compile_recorded(
     if tools.llvm.is_some() {
         return crate::compiler_llvm::compile_recorded(plan, filename, root, scratch, tools);
     }
-    let original_argument = filename.to_path_buf();
-    let filename = filename.canonicalize()?;
-    let generated = scratch.join("source");
-    mirror(root, &generated)?;
-    source_tree(root, &generated, plan, &filename)?;
-    let source = generated.join(filename.strip_prefix(root)?);
-    let binary = scratch.join("application");
-    let mut args = vec![source.as_os_str().to_owned()];
-    args.extend(BASELINE_FLAGS.map(OsString::from));
-    args.extend(["-o".into(), binary.as_os_str().to_owned()]);
-    sdk_arguments(&mut args, &tools.sdk, &source, &original_argument)?;
-    let status = Command::new(&tools.rustc)
-        .args(&args)
-        .status()
-        .context("compile generated Rust input")?;
-    if !status.success() {
-        bail!("Rust compilation failed");
+    if tools.mir.is_some() {
+        return crate::compiler_mir::compile_recorded(plan, filename, root, scratch, tools);
     }
-    let argv = args
-        .iter()
-        .map(|arg| {
-            arg.to_str()
-                .map(str::to_owned)
-                .context("Rust build arguments require UTF-8 paths")
-        })
-        .collect::<Result<_>>()?;
-    Ok(Compilation {
-        binary,
-        argv,
-        baseline_flags: tools.baseline_flags(),
-        hook: None,
-        inventory: None,
-        profile: None,
-        resolved: None,
-    })
+    bail!("Rust compilation requires a qualified compiler profile");
 }
+
 pub fn wrapper(args: Vec<OsString>) -> Result<i32> {
     let compiler = args
         .first()
         .context("Cargo compiler wrapper requires rustc")?;
-    let mut options = args[1..].to_vec();
+    let options = args[1..].to_vec();
     let root =
         PathBuf::from(std::env::var_os("OTELC_RUST_ROOT").context("Rust wrapper project root")?);
-    let generated = PathBuf::from(
-        std::env::var_os("OTELC_RUST_GENERATED").context("Rust wrapper generated directory")?,
-    );
     if let Some(index) = options.iter().position(|value| {
         Path::new(value)
             .extension()
@@ -279,14 +77,25 @@ pub fn wrapper(args: Vec<OsString>) -> Result<i32> {
             let plan = Plan::load(Path::new(
                 &std::env::var_os("OTELC_RUST_PLAN").context("Rust wrapper policy")?,
             ))?;
-            let startup = options
-                .windows(2)
-                .any(|values| values[0] == "--crate-type" && values[1] == "bin");
-            let source = prepare(&root, &generated, &absolute, &plan, startup)?;
-            options[index] = source.as_os_str().to_owned();
-            let sdk =
-                PathBuf::from(std::env::var_os("OTELC_RUST_SDK").context("Rust wrapper SDK")?);
-            sdk_arguments(&mut options, &sdk, &source, &original)?;
+            let adapter = std::env::current_exe()?;
+            let tools = Toolchain::load(&plan.backend, &adapter)?;
+            let profile = tools
+                .mir
+                .as_ref()
+                .context("Cargo requires the stable Rust compiler profile")?;
+            // Cargo sets RUSTC_WRAPPER to this adapter. Validate the explicit
+            // compiler argument without treating our own wrapper as foreign.
+            profile.doctor(Path::new(compiler))?;
+            let scratch = tempfile::tempdir()?;
+            crate::compiler_mir::compile_arguments(
+                &plan,
+                &original,
+                &root,
+                scratch.path(),
+                &tools,
+                options,
+            )?;
+            return Ok(0);
         }
     }
     Ok(quux_otelc_process::child_code(
@@ -308,7 +117,7 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
         if tools.llvm.is_some() {
             println!("Rust qualified nightly/LLVM 23: original-source synchronous compiler hooks; async and Cargo execution unqualified");
         } else {
-            println!("Rust 1.98.1: generated body guards, Cargo wrapper and SDK metrics available");
+            println!("Rust 1.98.1: original-source compiler probes, Cargo wrapper and SDK metrics available");
         }
         return Ok(0);
     }
@@ -316,41 +125,18 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
         if !(2..=3).contains(&args.len()) || args.get(2).is_some_and(|value| value != "--json") {
             bail!("Rust inspect requires SOURCE.rs [--json]");
         }
-        let file = PathBuf::from(&args[1]).canonicalize()?;
-        let relative = file.strip_prefix(&root)?;
-        if tools.llvm.is_some() {
-            tools.doctor()?;
-            let scratch = tempfile::tempdir()?;
-            let compilation =
-                compile_recorded(&plan, Path::new(&args[1]), &root, scratch.path(), &tools)?;
-            let inventory = compilation
-                .inventory
-                .context("Rust LLVM inspection requires the compiled inventory")?;
-            let mut result: serde_json::Value = serde_json::from_slice(&fs::read(inventory)?)?;
-            result["language"] = "rust".into();
-            result["backend"] = "llvm".into();
-            result["phase"] = "compiled".into();
-            println!("{}", serde_json::to_string_pretty(&result)?);
-            return Ok(0);
-        }
-        let selection = Selection::new(&plan.sources.include, &plan.sources.exclude, true)?;
-        let (_, functions) = crate::transform::transform(
-            &fs::read_to_string(file.clone())?,
-            &relative
-                .with_extension("")
-                .to_string_lossy()
-                .replace(['/', '\\'], "."),
-            &plan,
-            selection.accepts(&relative.to_string_lossy()),
-            false,
-            true,
-        )?;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(
-                &serde_json::json!({"language":"rust","functions":functions})
-            )?
-        );
+        tools.doctor()?;
+        let scratch = tempfile::tempdir()?;
+        let compilation =
+            compile_recorded(&plan, Path::new(&args[1]), &root, scratch.path(), &tools)?;
+        let inventory = compilation
+            .inventory
+            .context("Rust inspection requires the compiled inventory")?;
+        let mut result: serde_json::Value = serde_json::from_slice(&fs::read(inventory)?)?;
+        result["language"] = "rust".into();
+        result["backend"] = plan.backend.clone().into();
+        result["phase"] = "compiled".into();
+        println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(0);
     }
     if args.first().is_some_and(|arg| arg == "--build") {
@@ -383,6 +169,9 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
             bail!("Rust LLVM Cargo integration requires separate qualification; use a standalone source file");
         }
         let manifest = PathBuf::from(target).canonicalize()?;
+        if !manifest.starts_with(&root) {
+            bail!("Rust Cargo manifest is outside the project root; run from the Cargo project directory");
+        }
         if !manifest
             .parent()
             .context("Cargo manifest directory")?
@@ -391,10 +180,6 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
         {
             bail!("Rust Cargo execution requires an existing lockfile");
         }
-        let generated = scratch.path().join("source");
-        mirror(&root, &generated)?;
-        // Compile every mirrored source before Cargo reads generated module paths.
-        source_tree(&root, &generated, &plan, Path::new(""))?;
         let mut command = Command::new("cargo");
         command
             .args([
@@ -405,11 +190,11 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
             ])
             .arg(&manifest)
             .env("CARGO_TARGET_DIR", scratch.path().join("cargo-target"))
+            .env("CARGO_INCREMENTAL", "0")
+            .env("RUSTC", &tools.rustc)
             .env("RUSTC_WRAPPER", adapter)
             .env("OTELC_RUST_ROOT", &root)
-            .env("OTELC_RUST_GENERATED", &generated)
             .env("OTELC_RUST_PLAN", plan_path)
-            .env("OTELC_RUST_SDK", &tools.sdk)
             .stderr(Stdio::inherit());
         let mut index = 1;
         if args.get(index).is_some_and(|value| value == "--bin") {

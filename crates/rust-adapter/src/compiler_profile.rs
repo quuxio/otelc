@@ -139,30 +139,56 @@ pub(crate) struct Toolchain {
     pub rustc: String,
     pub sdk: PathBuf,
     pub llvm: Option<Profile>,
+    pub mir: Option<crate::compiler_mir_profile::Profile>,
 }
 
 impl Toolchain {
     pub fn load(backend: &str, adapter: &Path) -> Result<Self> {
+        if !matches!(backend, "compiler" | "llvm") {
+            bail!("unsupported Rust compiler backend");
+        }
         let directory = adapter.parent().context("Rust adapter directory")?;
         let llvm = if backend == "llvm" {
             Some(Profile::load(&directory.join("otelc-rust-llvm.json"))?)
         } else {
             None
         };
+        let mir = if backend == "compiler" {
+            Some(crate::compiler_mir_profile::Profile::load(
+                &directory.join("otelc-rust-compiler.json"),
+            )?)
+        } else {
+            None
+        };
         let rustc = std::env::var("OTELC_RUSTC").unwrap_or_else(|_| {
             llvm.as_ref().map_or_else(
-                || "rustc".into(),
+                || {
+                    mir.as_ref().map_or_else(
+                        || "rustc".into(),
+                        |profile| profile.rustc.to_string_lossy().into_owned(),
+                    )
+                },
                 |profile| profile.rustc.to_string_lossy().into_owned(),
             )
         });
         let sdk = llvm.as_ref().map_or_else(
-            || directory.join("libquux_otelc_rust.rlib"),
+            || {
+                mir.as_ref().map_or_else(
+                    || directory.join("libquux_otelc_rust.rlib"),
+                    |profile| profile.sdk.clone(),
+                )
+            },
             |profile| profile.sdk.clone(),
         );
         if !sdk.is_file() {
             bail!("Rust SDK rlib is missing; run make build");
         }
-        Ok(Self { rustc, sdk, llvm })
+        Ok(Self {
+            rustc,
+            sdk,
+            llvm,
+            mir,
+        })
     }
 
     pub fn doctor(&self) -> Result<()> {
@@ -173,8 +199,10 @@ impl Toolchain {
         }
         if let Some(profile) = &self.llvm {
             profile.doctor(&self.rustc)
+        } else if let Some(profile) = &self.mir {
+            profile.doctor(Path::new(&self.rustc))
         } else {
-            crate::compiler::doctor(&self.rustc)
+            bail!("Rust adapter requires a qualified compiler profile")
         }
     }
 

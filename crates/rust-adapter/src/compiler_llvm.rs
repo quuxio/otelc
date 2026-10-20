@@ -16,13 +16,13 @@ use std::{
     process::Command,
 };
 
-struct Inventory {
-    functions: Vec<Definition>,
-    sources: BTreeMap<PathBuf, String>,
-    discovery_argv: Vec<String>,
+pub(crate) struct Inventory {
+    pub functions: Vec<Definition>,
+    pub sources: BTreeMap<PathBuf, String>,
+    pub discovery_argv: Vec<String>,
 }
 
-fn inventory(
+pub(crate) fn inventory(
     root: &Path,
     entry: &Path,
     plan: &Plan,
@@ -37,12 +37,19 @@ fn inventory(
     };
     let selection = Selection::new(&plan.sources.include, &plan.sources.exclude, true)?;
     for path in inputs {
-        let path = path.canonicalize()?;
+        let canonical = path.canonicalize()?;
+        let path = if plan.backend == "compiler" && path.starts_with(root) {
+            path
+        } else {
+            canonical.clone()
+        };
         let original_digest = hash(&path)?;
         inventory
             .sources
+            .insert(canonical.clone(), original_digest.clone());
+        inventory
+            .sources
             .insert(path.clone(), original_digest.clone());
-        let canonical = path.canonicalize()?;
         if protected
             .iter()
             .any(|excluded| canonical.starts_with(excluded))
@@ -201,5 +208,7 @@ pub(crate) fn compile_recorded(
         inventory: Some(inventory_path),
         profile: Some(profile.bytes.clone()),
         resolved: Some(resolved),
+        mir_hook: None,
+        request: None,
     })
 }

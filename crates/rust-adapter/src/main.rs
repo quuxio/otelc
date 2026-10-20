@@ -1,6 +1,6 @@
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let result = if std::env::var_os("OTELC_RUST_GENERATED").is_some() {
+    let result = if std::env::var_os("OTELC_RUST_ROOT").is_some() {
         quux_otelc_rust_adapter::compiler::wrapper(args)
     } else {
         args.first()

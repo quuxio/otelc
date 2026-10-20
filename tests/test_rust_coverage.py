@@ -32,8 +32,11 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(rust_coverage.line_coverage(report), 50)
 
     def test_build_precedes_native_tests_and_reports(self):
-        with patch("ci.rust_mir_coverage.run", return_value="MIR report"), patch("ci.rust_llvm_coverage.run", return_value="LLVM 23 report"), patch.object(rust_coverage, "coverage_environment", return_value={"MARKER": "value", "CARGO_TARGET_DIR": "/does-not-exist/otelc-test", "OTELC_COVERAGE_BIN_DIR": "/does-not-exist/otelc-test/maps"}):
+        events = []
+        with patch("ci.build_rust_mir.build") as helper, patch("ci.rust_mir_coverage.run", return_value="MIR report"), patch("ci.rust_llvm_coverage.run", return_value="LLVM 23 report"), patch.object(rust_coverage, "coverage_environment", return_value={"MARKER": "value", "RUSTFLAGS": "-C instrument-coverage", "CARGO_ENCODED_RUSTFLAGS": "coverage", "CARGO_TARGET_DIR": "/does-not-exist/otelc-test", "OTELC_COVERAGE_BIN_DIR": "/does-not-exist/otelc-test/maps"}):
             with patch.object(rust_coverage.subprocess, "run") as run:
+                run.side_effect = lambda arguments, **_: events.append(arguments[:2])
+                helper.side_effect = lambda *args: events.append(["compiler", "profile"])
                 with patch.object(rust_coverage, "write_reports") as report:
                     rust_coverage.main()
         self.assertEqual(run.call_args_list[3].args[0][:2], ["cargo", "build"])
@@ -41,9 +44,15 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[5].args[0][:2], ["node", "--test"])
         self.assertEqual(report.call_args.args[0]["MARKER"], "value")
         self.assertEqual(report.call_args.args[1], ["LLVM 23 report", "MIR report"])
+        self.assertLess(events.index(["cargo", "build"]), events.index(["compiler", "profile"]))
+        self.assertLess(events.index(["compiler", "profile"]), events.index(["cargo", "test"]))
+        self.assertEqual(helper.call_args.args[1], Path("/does-not-exist/otelc-test/debug"))
+        self.assertEqual(helper.call_args.args[2]["MARKER"], "value")
+        self.assertNotIn("RUSTFLAGS", helper.call_args.args[2])
+        self.assertNotIn("CARGO_ENCODED_RUSTFLAGS", helper.call_args.args[2])
 
     def test_combined_coverage_rejects_source_changes_between_toolchains(self):
-        with patch("ci.rust_mir_coverage.run", return_value="MIR report"), patch("ci.rust_llvm_coverage.run", return_value="report"), patch("ci.rust_mir_coverage.source_hashes", side_effect=[{"input": "before"}, {"input": "after"}]):
+        with patch("ci.build_rust_mir.build"), patch("ci.rust_mir_coverage.run", return_value="MIR report"), patch("ci.rust_llvm_coverage.run", return_value="report"), patch("ci.rust_mir_coverage.source_hashes", side_effect=[{"input": "before"}, {"input": "after"}]):
             with patch.object(rust_coverage, "coverage_environment", return_value={"CARGO_TARGET_DIR": "/does-not-exist/otelc-test", "OTELC_COVERAGE_BIN_DIR": "/does-not-exist/otelc-test/maps"}), patch.object(rust_coverage.subprocess, "run"), patch.object(rust_coverage, "write_reports") as report:
                 with self.assertRaisesRegex(ValueError, "sources changed"):
                     rust_coverage.main()
@@ -79,6 +88,7 @@ class CoverageTests(unittest.TestCase):
             for report, passes in (("DA:1,0\n", False), ("SF:/tmp/crates/rust-adapter/src/lib.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/lib.rs\nDA:1,1\nSF:/tmp/crates/process/src/lib.rs\nDA:1,1\nSF:/tmp/native/node/PromiseObserver.cpp\nDA:1,1\nSF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/compiler_abi.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_inventory.rs\nDA:1,1\n", True)):
                 if passes:
                     report += "SF:/tmp/crates/rust-probes/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/recording.rs\nDA:1,1\n"
+                    report += "SF:/tmp/crates/rust-adapter/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_mir_profile.rs\nDA:1,1\n"
                 with patch.object(rust_coverage.subprocess, "run"), patch.object(Path, "write_text"):
                     def export_map(command, **_):
                         # LLVM can select a zero-hit library map when exported C
@@ -145,6 +155,7 @@ class CoverageTests(unittest.TestCase):
     def test_trace_and_build_artifact_files_have_their_own_coverage_floors(self):
         good = "SF:/tmp/crates/rust-probes/src/traces.rs\nDA:1,1\nSF:/tmp/crates/export/src/traces.rs\nDA:1,1\nSF:/tmp/crates/runtime/src/traces.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/artifact.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/compiler_abi.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_inventory.rs\nDA:1,1\n"
         good += "SF:/tmp/crates/rust-probes/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-probes/src/recording.rs\nDA:1,1\n"
+        good += "SF:/tmp/crates/rust-adapter/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_mir_profile.rs\nDA:1,1\n"
         rust_coverage.enforce_rust_file_coverage(good)
         no_hits = good.replace("DA:1,1", "DA:1,0")
         with self.assertRaisesRegex(ValueError, "trace context"):
@@ -161,6 +172,8 @@ class CoverageTests(unittest.TestCase):
         for path, label in (("/crates/rust-probes/src/compiler_abi.rs", "Rust compiler ABI"),
                             ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory"),
                             ("/crates/rust-probes/src/compiler_mir.rs", "Rust compiler future observers"),
+                            ("/crates/rust-adapter/src/compiler_mir.rs", "Rust original-source compiler adapter"),
+                            ("/crates/rust-adapter/src/compiler_mir_profile.rs", "Rust stable compiler profile"),
                             ("/crates/rust-probes/src/recording.rs", "Rust SDK recording suppression")):
             missing_component = good.replace(path + "\nDA:1,1", path + "\nDA:1,0")
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, label):
