@@ -17,18 +17,19 @@ except ModuleNotFoundError:
     from benchmark_live import batch, compare, measure, read_line
 
 
-def rust_llvm_bundle(root: Path, output: Path, config: Path, source: Path,
-                     environment: dict[str, str]) -> tuple[str, list[str], list[str], dict]:
+def rust_bundle(root: Path, output: Path, config: Path, source: Path,
+                environment: dict[str, str], backend: str) -> tuple[str, list[str], list[str], dict]:
     """Use the actual instrumented compiler settings for the plain comparison."""
-    folder = Path(tempfile.mkdtemp(prefix="rust-llvm-", dir=output))
+    folder = Path(tempfile.mkdtemp(prefix="rust-build-", dir=output))
     bundle = folder / "bundle"
     prefix = [str(root / "target/debug/quux-otelc"), "--config", str(config), "rust"]
     with (folder / "build.stdout").open("wb") as stdout, (folder / "build.stderr").open("wb") as stderr:
         subprocess.run([*prefix, "--build", str(source), "--output-dir", str(bundle)],
                        cwd=root, env=environment, check=True, stdout=stdout, stderr=stderr)
     metadata = json.loads((bundle / "build.json").read_text())
-    if metadata["schema_version"] != 2 or metadata["backend"] != "llvm":
-        raise ValueError("Rust LLVM benchmark requires an actual compiler-backend bundle")
+    schema = 2 if backend == "llvm" else 3
+    if metadata["schema_version"] != schema or metadata.get("backend") != backend:
+        raise ValueError(f"Rust benchmark requires a schema-{schema} {backend} bundle")
     return (metadata["compiler"]["program"], metadata["baseline_flags"],
             [*prefix, "--run", str(bundle)], {"directory": str(bundle), "metadata": metadata})
 
@@ -50,8 +51,11 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         raise ValueError("Rust LLVM benchmark requires language=rust without --rust-async")
     root, output = Path(root).resolve(), Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    private = Path(tempfile.mkdtemp(prefix="control-", dir=output))
-    socket = private / "metrics.sock"
+    report_path = output / "runtime.json"
+    for path in (report_path, output / "report.json"):
+        path.unlink(missing_ok=True)
+    private = tempfile.TemporaryDirectory(prefix="otelc-benchmark-", dir="/tmp")
+    socket = Path(private.name) / "metrics.sock"
     config = output / "policy.toml"
     extension, adapter, interpreter = ("py", "python", sys.executable) if language == "python" else ("mts" if language == "typescript" else "mjs", "ts" if language == "typescript" else "node", os.environ.get("OTELC_NODE", shutil.which("node") or "node"))
     source = root / f"examples/apps/{language}_{'async_' if node_async else ''}latency.{extension}"
@@ -81,9 +85,8 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
     if endpoint:
         config.write_text(config.read_text().replace("http://127.0.0.1:4318", endpoint))
     cli = root / "target/debug/quux-otelc"
-    report_path = output / "runtime.json"
     environment = {k: v for k, v in os.environ.items() if not k.startswith(("OTEL_", "OTELC_"))}
-    environment.update(OTELC_PYTHON=sys.executable, OTELC_REPORT_PATH=str(report_path))
+    environment.update(OTELC_PYTHON=sys.executable, OTELC_REPORT_PATH=str(report_path), OTELC_ADAPTER_ROOT=str(root / "adapters"))
     if language == "go":
         environment["OTELC_GO"] = interpreter
     elif language == "rust":
@@ -103,9 +106,8 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
         if language == "go":
             plain_command = [interpreter, "run", str(source)]
         elif language == "rust":
-            flags = ["--edition=2024", "-O", "-g"]
-            if rust_llvm:
-                interpreter, flags, instrumented_command, rust_build = rust_llvm_bundle(root, output, config, source, environment)
+            backend = "llvm" if rust_llvm else "compiler"
+            interpreter, flags, instrumented_command, rust_build = rust_bundle(root, output, config, source, environment, backend)
             plain_binary = output / "plain-rust"
             subprocess.run([interpreter, *flags, str(source), "-o", str(plain_binary)], check=True, env=environment, cwd=root)
             plain_command = [str(plain_binary)]
@@ -126,13 +128,15 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
             if process.wait(timeout=10) != 0:
                 raise ValueError("Application failed")
         telemetry = json.loads(report_path.read_text())
+        if telemetry["pid"] != application_pid:
+            raise ValueError("Runtime report belongs to another process")
         complete = telemetry["export_finished"] and not telemetry["export_loss"] and not any(telemetry["losses"].values()) and telemetry["function_calls"] == 1000 + iterations * runs
         if not complete or source.read_bytes() != original:
             raise ValueError("Incomplete telemetry or modified source")
         toolchain = sys.version.split()[0] if language == "python" else subprocess.check_output([interpreter, "version" if language == "go" else "--version"], text=True).strip()
         report = {"language": language, "rust_async": rust_async, "node_async": node_async, "rust_closures": rust_closures, "native_typescript": native_typescript, "host": platform.platform(), "architecture": platform.machine(), "toolchain": toolchain, "iterations_per_batch": iterations, "runs": runs, "same_instrumented_pid": application_pid, "source_sha256": hashlib.sha256(original).hexdigest(), "complete_telemetry": complete, "runtime": telemetry, "summary": compare(samples, iterations), "samples": samples}
-        if rust_llvm:
-            report.update(rust_llvm=True, rust_build=rust_build)
+        if rust_build is not None:
+            report.update(rust_llvm=rust_llvm, rust_build=rust_build)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
     finally:
@@ -142,7 +146,7 @@ def run(root, output, iterations, runs, language="python", endpoint=None, rust_a
                 process.wait(timeout=10)
             process.stdin.close()
             process.stdout.close()
-        shutil.rmtree(private)
+        private.cleanup()
 
 
 def main():

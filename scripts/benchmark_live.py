@@ -8,6 +8,7 @@ import select
 import statistics
 import subprocess
 import platform
+import tempfile
 
 
 def read_line(process):
@@ -78,9 +79,11 @@ def run(root, output, iterations, runs):
     root = Path(root).resolve()
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    private = output / "control"
-    private.mkdir(mode=0o700, exist_ok=True)
-    socket = private / "metrics.sock"
+    report_path = output / "runtime.json"
+    for path in (report_path, output / "report.json"):
+        path.unlink(missing_ok=True)
+    private = tempfile.TemporaryDirectory(prefix="otelc-benchmark-", dir="/tmp")
+    socket = Path(private.name) / "metrics.sock"
     cli = root / "target/debug/quux-otelc"
     toolchain = json.loads((root / "target/debug/otelc-llvm-toolchain.json").read_text())
     compiler = str(Path(toolchain["bindir"]) / "clang++")
@@ -93,7 +96,6 @@ def run(root, output, iterations, runs):
     subprocess.run([compiler, *flags, str(source), "-o", str(plain_path)], check=True, cwd=root)
     subprocess.run([str(cli), "--config", str(config), "clang++", *flags, str(source), "-o", str(instrumented_path)], check=True, cwd=root)
     environment = {key: value for key, value in os.environ.items() if not key.startswith(("OTEL_", "OTELC_"))}
-    report_path = output / "runtime.json"
     processes = []
     try:
         for command, env in [([str(plain_path)], environment),
@@ -130,6 +132,7 @@ def run(root, output, iterations, runs):
                 process.wait(timeout=10)
             process.stdin.close()
             process.stdout.close()
+        private.cleanup()
 
 
 def main():
