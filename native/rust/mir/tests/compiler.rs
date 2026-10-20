@@ -379,3 +379,33 @@ fn original_annotations_and_external_selection_share_exclusion_precedence() {
     assert!(names.iter().any(|name| name == "app.tagged"));
     assert!(names.iter().all(|name| name != "app.selected_excluded"));
 }
+
+#[test]
+fn cancellation_and_nested_body_panics_during_cleanup_keep_distinct_outcomes() {
+    let fixture = Fixture::new(include_str!("fixtures/unwind-cleanup.rs"), &[]);
+    let spans = fixture.pair(6);
+    assert!(spans.iter().all(|span| span.parent_span_id.is_empty()));
+    let report: Value =
+        serde_json::from_slice(&fs::read(fixture.temporary.path().join("report.json")).unwrap())
+            .unwrap();
+    for name in [
+        "selected_sync_panic",
+        "selected_async_panic",
+        "selected_drop_panic",
+    ] {
+        let name = format!("app.{name}");
+        assert_eq!(report["functions"][&name]["count"], 1);
+        assert_eq!(report["functions"][&name]["unwinds"], 1);
+        assert_eq!(report["functions"][&name]["cancellations"], 0);
+        let span = spans.iter().find(|span| span.name == name).unwrap();
+        assert_eq!(span.status.as_ref().unwrap().code, 2);
+    }
+    assert_eq!(report["functions"]["app.selected_pending"]["unwinds"], 0);
+    assert_eq!(
+        report["functions"]["app.selected_pending"]["cancellations"],
+        1
+    );
+    assert_eq!(report["functions"]["app.selected_ok"]["count"], 2);
+    assert_eq!(report["functions"]["app.selected_ok"]["unwinds"], 0);
+    assert_eq!(report["functions"]["app.selected_ok"]["cancellations"], 0);
+}

@@ -98,6 +98,11 @@ pub(crate) fn synchronous<'tcx>(
     } else {
         name.map(|_| hooks.get(tcx, "sync_exit")).transpose()?
     };
+    let unwind_exit = if allocation {
+        exit
+    } else {
+        name.map(|_| hooks.get(tcx, "sync_unwind")).transpose()?
+    };
     let start = startup.then(|| hooks.get(tcx, "start")).transpose()?;
     let stop = startup.then(|| hooks.get(tcx, "stop")).transpose()?;
     let blocks = body.basic_blocks.as_mut();
@@ -111,7 +116,8 @@ pub(crate) fn synchronous<'tcx>(
                 cleanup,
             ));
         }
-        if let (Some(exit), Some(guard)) = (exit, guard) {
+        let completion = if cleanup { unwind_exit } else { exit };
+        if let (Some(exit), Some(guard)) = (completion, guard) {
             target = blocks.push(BasicBlockData::new(
                 Some(call(
                     tcx,

@@ -1,5 +1,5 @@
 //! Typed compiler hooks. Future metadata stays outside application layouts.
-use crate::{traces, Runtime, SyncGuard, ACTIVE};
+use crate::{traces, Completion, Runtime, SyncGuard, ACTIVE};
 use std::{
     collections::HashMap,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -32,6 +32,7 @@ impl Registry {
 enum Exit {
     Suspended,
     Completed,
+    Unwound,
     Cancelled,
 }
 /// A single synchronous poll/drop scope; it must never enter a future's fields.
@@ -73,7 +74,13 @@ impl Drop for PollGuard {
             .and_then(|mut registry| registry.entries.remove(&self.key));
         if let Some(entry) = entry {
             if catch_unwind(AssertUnwindSafe(|| {
-                runtime.finish(entry.token, matches!(self.exit, Exit::Cancelled));
+                let completion = match self.exit {
+                    Exit::Completed => Completion::Returned,
+                    Exit::Unwound => Completion::Unwound,
+                    Exit::Cancelled => Completion::Cancelled,
+                    Exit::Suspended => unreachable!("suspended polls retain their frame"),
+                };
+                runtime.finish(entry.token, completion);
             }))
             .is_err()
             {
@@ -110,7 +117,7 @@ impl Runtime {
                 .then(|| traces::Scope::attach(context)),
             runtime: tracked.then(|| self.clone()),
             key,
-            exit: Exit::Cancelled,
+            exit: Exit::Unwound,
         }
     }
     fn enter_future(self: &Arc<Self>, name: &str, key: Key) -> PollGuard {
@@ -208,11 +215,13 @@ pub fn drop_enter(site: u128, address: usize) -> PollGuard {
     })
 }
 /// Complete cancellation after the application's original drop glue finishes.
-pub fn drop_exit(guard: PollGuard) {
+pub fn drop_exit(mut guard: PollGuard) {
+    guard.exit = Exit::Cancelled;
     drop(guard);
 }
 /// Complete an escaping panic without altering its payload or caller context.
-pub fn poll_unwind(guard: PollGuard) {
+pub fn poll_unwind(mut guard: PollGuard) {
+    guard.exit = Exit::Unwound;
     drop(guard);
 }
 
@@ -232,9 +241,15 @@ pub fn sync_enter(name: &str) -> SyncGuard {
         }
     })
 }
-/// Restore caller context and record the synchronous return or original unwind.
-pub fn sync_exit(guard: SyncGuard) {
-    drop(guard);
+/// Restore caller context and record a compiler-observed normal return.
+pub fn sync_exit(mut guard: SyncGuard) {
+    guard.scope.take();
+    guard.guard.finish(Completion::Returned);
+}
+/// Record a compiler-observed unwind, even inside another panic's cleanup.
+pub fn sync_unwind(mut guard: SyncGuard) {
+    guard.scope.take();
+    guard.guard.finish(Completion::Unwound);
 }
 
 /// Install the resolved runtime before the application's original main body.

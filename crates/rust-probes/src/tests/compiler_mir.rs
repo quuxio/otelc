@@ -243,3 +243,63 @@ fn sdk_operations_do_not_reenter_sync_or_future_recording() {
         .iter()
         .all(|name| name == "application" || name == "pending"));
 }
+
+#[test]
+fn cancellation_during_an_unrelated_unwind_is_not_a_body_panic() {
+    struct CancelOnDrop(Arc<Runtime>);
+    impl Drop for CancelOnDrop {
+        fn drop(&mut self) {
+            drop_exit(self.0.drop_future(key(16, 1)));
+        }
+    }
+    let receiver = Receiver::good();
+    let runtime = Runtime::new(trace_plan(&receiver)).unwrap();
+    poll_exit(runtime.enter_future("pending", key(16, 1)), false);
+    let original = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let _cleanup = CancelOnDrop(runtime.clone());
+        std::panic::panic_any(17_u8);
+    }))
+    .unwrap_err();
+    assert_eq!(original.downcast_ref::<u8>(), Some(&17));
+    assert!(traces::current(runtime.owner).is_none());
+    runtime.close();
+    let report = runtime.report();
+    assert_eq!(report["functions"]["pending"]["unwinds"], 0);
+    assert_eq!(report["functions"]["pending"]["cancellations"], 1);
+    assert_eq!(report["future_observers"]["pending"], 0);
+    assert_eq!(report["export_loss"], 0);
+    assert_eq!(spans(&receiver).len(), 1);
+}
+
+#[test]
+fn actual_body_unwind_during_existing_cleanup_is_still_an_error() {
+    struct PollOnDrop(Arc<Runtime>);
+    impl Drop for PollOnDrop {
+        fn drop(&mut self) {
+            let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                let _poll = self.0.enter_future("inner_panic", key(16, 1));
+                std::panic::panic_any(23_u8);
+            }))
+            .unwrap_err();
+            assert_eq!(payload.downcast_ref::<u8>(), Some(&23));
+            assert!(traces::current(self.0.owner).is_none());
+        }
+    }
+    let receiver = Receiver::good();
+    let runtime = Runtime::new(trace_plan(&receiver)).unwrap();
+    let original = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let _cleanup = PollOnDrop(runtime.clone());
+        std::panic::panic_any(17_u8);
+    }))
+    .unwrap_err();
+    assert_eq!(original.downcast_ref::<u8>(), Some(&17));
+    runtime.close();
+    let report = runtime.report();
+    assert_eq!(report["functions"]["inner_panic"]["unwinds"], 1);
+    assert_eq!(report["functions"]["inner_panic"]["cancellations"], 0);
+    assert_eq!(report["future_observers"]["pending"], 0);
+    assert_eq!(report["export_loss"], 0);
+    let decoded = spans(&receiver);
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].status.as_ref().unwrap().code, 2);
+}

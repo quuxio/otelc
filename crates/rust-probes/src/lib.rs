@@ -46,6 +46,12 @@ struct Frame {
     started: Instant,
     was_panicking: bool,
 }
+enum Completion {
+    Inferred,
+    Returned,
+    Unwound,
+    Cancelled,
+}
 #[derive(Default)]
 struct Data {
     functions: BTreeMap<String, Function>,
@@ -427,7 +433,7 @@ impl Runtime {
             self.state.revision.fetch_add(1, Ordering::Release);
         }
     }
-    fn finish(&self, token: u64, cancelled: bool) {
+    fn finish(&self, token: u64, completion: Completion) {
         let _sdk = recording::Suppression::enter();
         let ended = Instant::now();
         if let Ok(mut data) = self.state.data.lock() {
@@ -437,8 +443,12 @@ impl Runtime {
             let Some(function) = data.functions.get_mut(&frame.name) else {
                 return;
             };
-            let escaped = std::thread::panicking() && !frame.was_panicking;
-            let cancelled = cancelled && !escaped;
+            let escaped = match completion {
+                Completion::Inferred => std::thread::panicking() && !frame.was_panicking,
+                Completion::Unwound => true,
+                Completion::Returned | Completion::Cancelled => false,
+            };
+            let cancelled = matches!(completion, Completion::Cancelled);
             if frame.metrics {
                 function.count = function.count.saturating_add(1);
                 if escaped {
@@ -543,9 +553,9 @@ pub struct Guard {
     token: u64,
 }
 impl Guard {
-    fn finish(&mut self, cancelled: bool) {
+    fn finish(&mut self, completion: Completion) {
         if let Some(runtime) = self.runtime.take() {
-            if catch_unwind(AssertUnwindSafe(|| runtime.finish(self.token, cancelled))).is_err() {
+            if catch_unwind(AssertUnwindSafe(|| runtime.finish(self.token, completion))).is_err() {
                 if let Ok(mut data) = runtime.state.data.lock() {
                     runtime.lose(&mut data, "invalid");
                 }
@@ -555,16 +565,24 @@ impl Guard {
 }
 impl Drop for Guard {
     fn drop(&mut self) {
-        self.finish(false);
+        self.finish(Completion::Inferred);
     }
 }
-struct AsyncGuard {
+struct AsyncGuard<'a> {
     guard: Guard,
     completed: bool,
+    unwound: &'a AtomicBool,
 }
-impl Drop for AsyncGuard {
+impl Drop for AsyncGuard<'_> {
     fn drop(&mut self) {
-        self.guard.finish(!self.completed);
+        let completion = if self.unwound.load(Ordering::Relaxed) {
+            Completion::Unwound
+        } else if self.completed {
+            Completion::Returned
+        } else {
+            Completion::Cancelled
+        };
+        self.guard.finish(completion);
     }
 }
 /// Observe one async body from its first poll through completion or drop.
@@ -581,13 +599,18 @@ pub async fn observe_future<F: std::future::Future>(name: &str, future: F) -> F:
     observe_with_guard(guard, future).await
 }
 async fn observe_with_guard<F: std::future::Future>(guard: Guard, future: F) -> F::Output {
+    // Shared by the poll/drop observer and completion guard without allocating
+    // or requiring F: Sync. Declaration order keeps it alive through cleanup.
+    let unwound = AtomicBool::new(false);
     let mut guard = AsyncGuard {
         guard,
         completed: false,
+        unwound: &unwound,
     };
     let output = traces::InContext {
         future: Some(future),
         context: guard.guard.context,
+        unwound: &unwound,
     }
     .await;
     guard.completed = true;
@@ -627,7 +650,7 @@ pub struct SyncGuard {
 impl Drop for SyncGuard {
     fn drop(&mut self) {
         self.scope.take();
-        self.guard.finish(false);
+        self.guard.finish(Completion::Inferred);
     }
 }
 pub fn enter(name: &str) -> SyncGuard {
