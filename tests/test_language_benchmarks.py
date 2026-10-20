@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,6 +88,53 @@ class LanguageBenchmarkTests(unittest.TestCase):
         report = {"export_finished": True, "export_loss": 0 if valid else 1, "losses": {}, "function_calls": 1020}
         (output / "runtime.json").write_text(json.dumps(report))
         return root, output
+
+    def test_rust_llvm_baseline_uses_actual_bundle_compiler_flags_and_replay(self):
+        flags = ["--edition=2024", "-O", "-g", "-Zmir-enable-passes=-Inline,-ForceInline", "-Ccodegen-units=1"]
+        metadata = {"schema_version": 2, "backend": "llvm", "compiler": {"program": "/qualified/nightly/rustc"}, "baseline_flags": flags}
+        with tempfile.TemporaryDirectory() as directory:
+            root, output = self.fixture(directory)
+            source = root / "examples/apps/rust_latency.rs"
+            source.write_text("unchanged Rust application")
+            (root / "examples/rust.toml").write_text('[functions]\ninclude=["examples.apps.rust_app.*"]\n[resource]\nservice_name="test"\n[adapters.rust]\nbackend = "compiler"\n')
+
+            def build(command, **kwargs):
+                self.assertNotIn("OTELC_RUSTC", kwargs["env"])
+                if "--build" in command:
+                    bundle = Path(command[command.index("--output-dir") + 1])
+                    bundle.mkdir()
+                    (bundle / "build.json").write_text(json.dumps(metadata))
+                    kwargs["stdout"].write(b"build output")
+
+            samples = {key: [{"elapsed_ns": ns, "checksum": 9, "calls": 10}] * 2 for key, ns in (("baseline", 10), ("metrics_off", 20), ("metrics_on", 30))}
+            with patch.dict(os.environ, {"OTELC_RUSTC": "/wrong/compiler"}), patch.object(benchmark.platform, "platform", return_value="test"), patch.object(benchmark.platform, "machine", return_value="arm64"), patch.object(benchmark.subprocess, "run", side_effect=build) as compile_app, patch.object(benchmark.subprocess, "Popen", side_effect=lambda *a, **k: Process()) as launch, patch.object(benchmark, "read_line", return_value="ready"), patch.object(benchmark, "batch"), patch.object(benchmark.subprocess, "check_output", side_effect=['{"pid":42}', 'qualified nightly']), patch.object(benchmark, "measure", return_value=samples):
+                report = benchmark.run(root, output, 10, 2, "rust", rust_llvm=True)
+            self.assertEqual(compile_app.call_args_list[1].args[0], ["/qualified/nightly/rustc", *flags, str(source.resolve()), "-o", str(output.resolve() / "plain-rust")])
+            self.assertIn("--run", launch.call_args_list[1].args[0])
+            self.assertNotIn(str(source), launch.call_args_list[1].args[0])
+            self.assertIn('backend = "llvm"', (output / "policy.toml").read_text())
+            self.assertTrue(report["rust_llvm"])
+            self.assertEqual(report["rust_build"]["metadata"], metadata)
+            self.assertEqual(source.read_text(), "unchanged Rust application")
+            bundle = Path(report["rust_build"]["directory"])
+            self.assertTrue(bundle.is_dir())
+            self.assertEqual((bundle.parent / "build.stdout").read_bytes(), b"build output")
+
+    def test_rust_llvm_refuses_other_languages_async_and_wrong_bundle_backend(self):
+        for language, asynchronous in (("python", False), ("rust", True)):
+            with self.assertRaisesRegex(ValueError, "Rust LLVM benchmark"):
+                benchmark.run("unused", "unused", 1, 2, language, rust_async=asynchronous, rust_llvm=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def build(command, **_):
+                bundle = Path(command[command.index("--output-dir") + 1])
+                bundle.mkdir()
+                (bundle / "build.json").write_text('{"schema_version":1,"backend":"compiler"}')
+
+            with patch.object(benchmark.subprocess, "run", side_effect=build):
+                with self.assertRaisesRegex(ValueError, "actual compiler-backend bundle"):
+                    benchmark.rust_llvm_bundle(root, root, root / "policy", root / "app.rs", {})
 
     def test_driver_records_real_application_identity_and_validates_evidence(self):
         with tempfile.TemporaryDirectory() as directory:

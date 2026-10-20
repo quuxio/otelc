@@ -16,6 +16,69 @@ pub struct Function {
     pub line: usize,
     pub selected: bool,
     pub unsupported: Option<&'static str>,
+    #[serde(skip)]
+    pub(crate) compiler_site: CompilerSite,
+}
+#[derive(Clone, Debug, serde::Deserialize, Serialize)]
+pub struct CompilerSite {
+    pub leaf: String,
+    pub header_start: usize,
+    pub header_end: usize,
+    pub body_start_line: usize,
+    pub body_start_column: usize,
+    pub body_end_line: usize,
+    pub body_end_column: usize,
+    pub declaration_start_line: usize,
+    pub declaration_start_column: usize,
+    pub declaration_end_line: usize,
+    pub declaration_end_column: usize,
+    pub startup: bool,
+    #[serde(skip)]
+    pub asynchronous: bool,
+}
+impl CompilerSite {
+    fn new(
+        source: &str,
+        leaf: String,
+        declaration: (Span, Span),
+        body: Span,
+        startup: bool,
+        asynchronous: bool,
+    ) -> Self {
+        let (header, declaration_end) = declaration;
+        // Rust debug-info columns count bytes. proc-macro2 positions count
+        // Unicode characters, including the closure's original prefix tokens.
+        let column = |position: proc_macro2::LineColumn| {
+            let offset = position_offset(source, position);
+            offset - source[..offset].rfind('\n').map_or(0, |index| index + 1) + 1
+        };
+        Self {
+            leaf,
+            header_start: header.start().line,
+            header_end: body.start().line,
+            body_start_line: body.start().line,
+            body_start_column: column(body.start()),
+            body_end_line: body.end().line,
+            body_end_column: column(body.end()),
+            declaration_start_line: header.start().line,
+            declaration_start_column: column(header.start()),
+            declaration_end_line: declaration_end.start().line,
+            declaration_end_column: column(declaration_end.start()),
+            startup,
+            asynchronous,
+        }
+    }
+}
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Rewrite,
+    Inspect,
+    CompilerInventory,
+}
+impl Mode {
+    fn inspecting(self) -> bool {
+        self != Self::Rewrite
+    }
 }
 struct Parser<'a> {
     source: &'a str,
@@ -26,7 +89,7 @@ struct Parser<'a> {
     selected_source: bool,
     plan: &'a Plan,
     startup: bool,
-    inspect: bool,
+    mode: Mode,
     guard: String,
     shutdown: String,
     error: Option<anyhow::Error>,
@@ -148,10 +211,18 @@ impl Parser<'_> {
             line: position.line,
             selected,
             unsupported,
+            compiler_site: CompilerSite::new(
+                self.source,
+                "<closure>".into(),
+                (node.span(), node.inputs_begin.span),
+                node.body.span(),
+                false,
+                node.asyncness.is_some(),
+            ),
         });
         if selected {
             if let Some(reason) = unsupported {
-                if !self.inspect {
+                if !self.mode.inspecting() {
                     self.error = Some(anyhow::anyhow!("{name}: {reason}"));
                 }
             } else {
@@ -228,6 +299,14 @@ impl Parser<'_> {
             line: sig.fn_token.span.start().line,
             selected,
             unsupported,
+            compiler_site: CompilerSite::new(
+                self.source,
+                sig.ident.to_string(),
+                (span, sig.fn_token.span),
+                body.span(),
+                self.startup && root && sig.ident == "main",
+                sig.asyncness.is_some(),
+            ),
         });
         let mut code = String::new();
         if self.startup && root && sig.ident == "main" {
@@ -250,7 +329,7 @@ impl Parser<'_> {
         }
         if selected {
             if let Some(reason) = unsupported {
-                if !self.inspect {
+                if !self.mode.inspecting() {
                     self.error = Some(anyhow::anyhow!("{name}: {reason}"));
                 }
                 return;
@@ -411,7 +490,10 @@ impl<'ast> Visit<'ast> for Parser<'_> {
         self.scope.pop();
     }
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if self.selected_source && node.path.is_ident("include") {
+        if self.selected_source
+            && node.path.is_ident("include")
+            && self.mode != Mode::CompilerInventory
+        {
             self.error = Some(anyhow::anyhow!(
                 "Rust include! source fragments require separate qualification"
             ));
@@ -437,6 +519,45 @@ pub fn transform(
     selected_source: bool,
     startup: bool,
     inspect: bool,
+) -> Result<(String, Vec<Function>)> {
+    transform_mode(
+        source,
+        identity,
+        plan,
+        selected_source,
+        startup,
+        if inspect {
+            Mode::Inspect
+        } else {
+            Mode::Rewrite
+        },
+    )
+}
+
+pub(crate) fn compiler_definitions(
+    source: &str,
+    identity: &str,
+    plan: &Plan,
+    selected_source: bool,
+    startup: bool,
+) -> Result<(String, Vec<Function>)> {
+    transform_mode(
+        source,
+        identity,
+        plan,
+        selected_source,
+        startup,
+        Mode::CompilerInventory,
+    )
+}
+
+fn transform_mode(
+    source: &str,
+    identity: &str,
+    plan: &Plan,
+    selected_source: bool,
+    startup: bool,
+    mode: Mode,
 ) -> Result<(String, Vec<Function>)> {
     if source.contains(&format!("/*{MARKER}*/")) {
         bail!("Rust input is already generated");
@@ -465,7 +586,7 @@ pub fn transform(
         selected_source,
         plan,
         startup,
-        inspect,
+        mode,
         guard: unique("__quux_otelc_guard"),
         shutdown: unique("__quux_otelc_shutdown"),
         error: None,
@@ -478,7 +599,7 @@ pub fn transform(
     parser
         .edits
         .sort_by_key(|(position, _)| std::cmp::Reverse(*position));
-    if !inspect {
+    if !mode.inspecting() {
         for (position, code) in parser.edits {
             generated.insert_str(position, &code);
         }

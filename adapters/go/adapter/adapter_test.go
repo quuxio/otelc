@@ -100,16 +100,29 @@ func TestOverlayBuildPreservesModuleSourcesRecoverAndArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	manifest := []byte("module example.test/app\n\ngo 1.26.0\n")
+	manifest := []byte("module example.test/app\n\ngo 1.26.0\nrequire example.test/stable v1.0.0\nreplace example.test/stable => ./dependency\n")
 	os.WriteFile(filepath.Join(root, "go.mod"), manifest, 0600)
+	dependency := filepath.Join(root, "dependency")
+	if err := os.Mkdir(dependency, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dependencyFiles := map[string][]byte{
+		"go.mod":    []byte("module example.test/stable\n\ngo 1.26.0\n"),
+		"stable.go": []byte("package stable\nconst Value=1\n"),
+	}
+	for name, data := range dependencyFiles {
+		if err := os.WriteFile(filepath.Join(dependency, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	source := []byte(`package main
-import("fmt";"os";"sync")
+import("fmt";"os";"sync";"example.test/stable")
 func recursive(n int)int{if n==0{return 0};return 1+recursive(n-1)}
 func recovered()(n int){defer func(){if recover()!=nil{n=7}}();panic("same")}
 func escaping(){panic("same")}
 func deferred()(n int){defer func(){n++}();return 4}
 func selected(n int)int{return n*2}
-func main(){var wg sync.WaitGroup;ch:=make(chan int,2);for _,n:=range []int{2,3}{wg.Go(func(){ch<-selected(n)})};wg.Wait();close(ch);n:=recursive(3)+recovered()+deferred();for value:=range ch{n+=value};func(){defer func(){if recover()!="same"{panic("changed")}}();escaping()}();fmt.Println(n,os.Args[1])}
+func main(){if stable.Value!=1{panic("dependency changed")};var wg sync.WaitGroup;ch:=make(chan int,2);for _,n:=range []int{2,3}{wg.Go(func(){ch<-selected(n)})};wg.Wait();close(ch);n:=recursive(3)+recovered()+deferred();for value:=range ch{n+=value};func(){defer func(){if recover()!="same"{panic("changed")}}();escaping()}();fmt.Println(n,os.Args[1])}
 `)
 	filename := filepath.Join(root, "main.go")
 	os.WriteFile(filename, source, 0600)
@@ -161,6 +174,12 @@ func main(){var wg sync.WaitGroup;ch:=make(chan int,2);for _,n:=range []int{2,3}
 	afterMod, _ := os.ReadFile(filepath.Join(root, "go.mod"))
 	if !bytes.Equal(after, source) || !bytes.Equal(afterMod, manifest) {
 		t.Fatal("original application was edited")
+	}
+	for name, want := range dependencyFiles {
+		got, err := os.ReadFile(filepath.Join(dependency, name))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("original dependency %s changed: %v", name, err)
+		}
 	}
 	if _, err = os.Stat(filepath.Join(root, "go.sum")); !os.IsNotExist(err) {
 		t.Fatal("original sum was created")

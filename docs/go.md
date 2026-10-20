@@ -2,6 +2,8 @@
 
 The Go adapter parses original source with Go's AST and adds deferred probes through compiler overlays. Original `.go`, `go.mod` and `go.sum` files stay unchanged. A private alternate module manifest supplies the pinned Go OpenTelemetry SDK; the application needs no imports, annotations or manual probes.
 
+Use [retained Go build bundles](go-builds.md) to compile ordinary/instrumented executables once and replay them without Go or SDK source installation. Build-only does not execute application code; selectors, annotations and trace weaving remain bound to the retained build.
+
 ## Install and run
 
 Use Go 1.26+; the local and CI qualification uses Go 1.27.2. Install the pinned validation tools, build the launcher and start the [metrics stack](observability-stack.md):
@@ -80,11 +82,15 @@ Set `runtime.control_socket` inside an owner-only directory, then use `status`, 
 make benchmark-language LANGUAGE=go LANGUAGE_BENCHMARK_ARGS="--output build/benchmarks/go --iterations 10000 --runs 8"
 ```
 
-The benchmark compares original execution, disabled probes and enabled metrics, preserving one instrumented PID. It checks matching results, original hashes, exact counts, complete export and zero losses. `make go-check` runs formatting, vet, Staticcheck, govulncheck, race detection and an 80% product statement-coverage gate. Coverage includes the overlay adapter, policy, runtime and launcher. Trace store, scope handling and transport also have independent 80% statement-coverage gates.
+The benchmark compares original execution, disabled probes and enabled metrics, preserving one instrumented PID. It checks matching results, original hashes, exact counts, complete export and zero losses. `make go-check` runs formatting, vet, Staticcheck, govulncheck, race detection and an 80% product statement-coverage gate. Coverage includes the overlay adapter, policy, runtime and launcher. Trace store, scope handling, transport, module preservation and all four retained-build components also have independent 80% statement-coverage gates.
 
 ## Build and runtime boundaries
 
-Only project packages are transformed; third-party and standard-library sources remain untouched. Existing module manifests are copied into a private alternate manifest. Dependency resolution can raise shared dependency versions in that private build graph to meet the pinned SDK's requirements; run normal application regression tests as well. Standalone files with standard-library imports are supported without creating a module in the original project. Temporary build files are removed after execution.
+Only project packages are transformed; third-party and standard-library sources remain untouched. Existing module manifests and checksums are copied into a private alternate manifest. Before adding the SDK, the adapter records the original selected module versions, available checksums, replacement identities and dependency-manifest hashes, plus the application language version, toolchain directive and GODEBUG defaults. It compares them after SDK resolution and again after compilation. New SDK dependencies are permitted; changing an existing application dependency or these application settings is refused before execution. Normal launches remove their private module snapshots at cleanup; [build-only mode](go-builds.md) retains them with the compiled executables.
+
+This matters even when no functions are selected: raising a module from `go 1.20` to the SDK's `go 1.26.0` changes loop-variable semantics. Such older modules and incompatible shared dependency versions currently fail clearly; separate SDK dependency isolation remains unsupported. Do not upgrade the baseline just to hide the difference. Run normal application regressions for compatible builds as well: unchanged module identities do not prove arbitrary semantic equivalence. See Go's [module version rules](https://go.dev/ref/mod#go-mod-file-go) and [runtime compatibility defaults](https://go.dev/doc/godebug).
+
+Standalone files with standard-library imports are supported without creating a module in the original project. Their private module uses the selected compiler version, preserving the language/runtime defaults of ordinary module-free compilation. Temporary build files are removed after execution.
 
 Go workspaces, project cgo packages, vendor mode, conflicting overlay/modfile/toolexec/buildmode flags and older compilers are rejected pending qualification. `GODEBUG=panicnil=1` is rejected because legacy nil panic recovery cannot preserve both panic propagation and normal-return classification. If an application enables that legacy mode dynamically, the probe avoids recovery, preserves propagation and reports an `unsupported_runtime` loss.
 

@@ -33,7 +33,7 @@ otelc provides a local native timing prototype for automatic function telemetry 
 
 The first target is synchronous C and C++ on macOS ARM64 and Linux x86-64/ARM64. The architecture separates compiler integration, a language-neutral probe ABI, a bounded runtime, and telemetry export so additional native languages can be added through validated adapters.
 
-**Current status: local native prototype, validated on macOS ARM64.** The compiler wrapper, manifest inspection, bounded runtime, OTLP/HTTP metrics, exception-aware LLVM pass and explicit C++ object lifetime guard are implemented locally. Existing Clang function annotations, live LLVM metrics on/off controls and unchanged-source Python function timing are also implemented. Python uses CPython 3.12+ monitoring and the Python OpenTelemetry SDK. JavaScript uses an in-memory Node module transform and the JavaScript SDK; see its [101 guide](docs/javascript.md). TypeScript uses compiler emission, original source maps and the same SDK, with an opt-in [TypeScript 7 native emitter](docs/typescript-native.md); see its [101 guide](docs/typescript.md). Java uses a JDK agent and bytecode body probes; see its [101 guide](docs/java.md). Go uses compiler overlays and the Go SDK; see its [101 guide](docs/go.md). Rust uses private generated source and a Cargo compiler wrapper with the Rust SDK, including qualified async completion and cancellation timing; see its [101 guide](docs/rust.md). See the [language adapters](docs/languages.md). Live filter changes and additional platform qualification remain planned. Published quality badges cover the repository-tooling SonarQube analysis; native coverage is enforced separately by the product quality gate. See the [local implementation and validation](docs/local-implementation.md).
+**Current status: local native prototype, validated on macOS ARM64.** The compiler wrapper, manifest inspection, bounded runtime, OTLP/HTTP metrics, exception-aware LLVM pass and explicit C++ object lifetime guard are implemented locally. Existing Clang function annotations, live LLVM metrics on/off controls and unchanged-source Python function timing are also implemented. Python uses CPython 3.12+ monitoring and the Python OpenTelemetry SDK. JavaScript uses an in-memory Node module transform and the JavaScript SDK; see its [101 guide](docs/javascript.md). TypeScript uses compiler emission, original source maps and the same SDK, with an opt-in [TypeScript 7 native emitter](docs/typescript-native.md); see its [101 guide](docs/typescript.md). Java uses a JDK agent and bytecode body probes; see its [101 guide](docs/java.md). Go uses compiler overlays and the Go SDK; see its [101 guide](docs/go.md). Rust uses private generated source and a Cargo compiler wrapper with the Rust SDK, including qualified async completion and cancellation timing; see its [101 guide](docs/rust.md). An explicit [Rust LLVM profile](docs/rust-compiler.md) preserves tested original source locations for synchronous standalone inputs and remains under qualification. See the [language adapters](docs/languages.md). Live filter changes and additional platform qualification remain planned. Published quality badges cover the repository-tooling SonarQube analysis; native coverage is enforced separately by the product quality gate. See the [local implementation and validation](docs/local-implementation.md).
 
 ## How it will work
 
@@ -53,7 +53,7 @@ The callback backend provides normal-return function timing using Clang's `-fins
 
 ## Local workflow
 
-The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Build the CLI and runtime together, then use the supplied local fixture configuration:
+The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Go builds [refuse SDK resolution that changes application language or existing dependencies](docs/go.md#build-and-runtime-boundaries); older/incompatible module graphs require separate dependency isolation. Build the CLI and runtime together, then use the supplied local fixture configuration:
 
 ```sh
 make build
@@ -87,10 +87,13 @@ Start with the [documentation index](docs/README.md) or [system design](docs/des
 
 ## Working on this repository
 
-The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98+, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24.11+ and Make, then run:
+The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98.1, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24.11+ and Make. The full quality gate also requires the [pinned experimental Rust compiler profile](docs/rust-compiler.md#build-the-pinned-profile), including its separate nightly and LLVM 23 tools:
 
 ```sh
 make setup
+rustup toolchain install nightly-2026-09-28 --profile minimal
+brew install llvm@23
+OTELC_RUSTC="$(rustup which --toolchain nightly-2026-09-28 rustc)" make rust-llvm-build
 make check
 make help
 ```
@@ -115,6 +118,7 @@ Start with the [developer 101](docs/developer-101.md) for source examples, confi
 | [Build the internal C/C++ examples](docs/local-implementation.md) | `make examples` |
 | [Compare plain, probes-disabled and metrics-enabled builds](docs/benchmarks.md) | `make benchmark` |
 | [Measure metrics off/on in the same process](docs/benchmarks.md#live-metrics-latency-in-one-process) | `make benchmark-live` |
+| [Reuse ordinary and instrumented Go executables](docs/go-builds.md) | `go --build`, then `go --run-baseline` / `go --run` through the CLI |
 | [Verify stored function and worker traces](docs/traces.md) | `make trace-check`; add `TRACE_CHECK_ARGS='--workload tasks'` for Python/Java workers |
 
 Open the [Grafana dashboard](http://localhost:3000/d/otelc-local) after starting the stack. For exception-enabled C++, select `examples/exceptions.toml` with the matched LLVM backend. Benchmark reports retain raw samples and telemetry-loss evidence.

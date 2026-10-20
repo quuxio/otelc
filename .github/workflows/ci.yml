@@ -71,8 +71,11 @@ jobs:
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --component llvm-tools-preview
           rustup default 1.98.1
-          brew install llvm@22
+          rustup toolchain install nightly-2026-09-28 --profile minimal --component rustc-dev --component clippy
+          brew install llvm@22 llvm@23
           cargo install cargo-llvm-cov --version 0.8.7 --locked
+      - name: Build the pinned experimental Rust compiler profile
+        run: OTELC_RUSTC="$(rustup which --toolchain nightly-2026-09-28 rustc)" make rust-llvm-build PYTHON=python3
       - name: Validate native runtime and coverage
         run: make rust-check model-check rust-coverage python-check node-check java-check go-check PYTHON=python3
 

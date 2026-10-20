@@ -8,7 +8,7 @@ The SonarQube analysis covers Python CI helpers, their tests, and GitHub workflo
 
 ## Local workflow
 
-Requirements: Rust 1.98+, LLVM 22/Clang, Python 3.12+, Node.js 24.11+, Make, and Git. `sonar-scanner` is needed only for local scanning. `make setup` creates a local virtual environment and installs coverage from hash-verified binary wheels, then installs `markdownlint-cli` 0.49.1 and its dependencies from the committed npm lockfile with package scripts disabled.
+Requirements: Rust 1.98.1, LLVM 22/Clang, Python 3.12+, Node.js 24.11+, Make, and Git. Full product coverage additionally requires the separately built [pinned Rust LLVM profile](rust-compiler.md#build-the-pinned-profile). `sonar-scanner` is needed only for local scanning. `make setup` creates a local virtual environment and installs coverage from hash-verified binary wheels, then installs `markdownlint-cli` 0.49.1 and its dependencies from the committed npm lockfile with package scripts disabled.
 
 The npm overrides pin patched `js-yaml`, KaTeX, and `smol-toml` releases while retaining the current Markdown CLI. Check for dependency advisories with `npm audit --prefix ci/markdownlint` when updating the lockfile.
 
@@ -40,10 +40,13 @@ make scan
 | `rust-check` | Rust formatting, Clippy, unit and native integration tests |
 | `model-check` | Loom queue publication/reuse model |
 | `rust-coverage` | Enforce at least 80% product line coverage, including the native shim, LLVM pass and lifetime header |
+| `rust-llvm-coverage` | Rebuild and qualify compiler hooks with isolated LLVM 23 profiles and separate component floors |
 | `sonar-policy` | Verify project-level `sonar.leak.period=previous_version` remotely |
 | `scan` | Check a clean Git checkout, verify policy, and scan the exact commit with quality-gate wait |
 
 Rust coverage requires cargo-llvm-cov and Clang/llvm-cov/llvm-profdata matching rustc. Set LLVM_COV and LLVM_PROFDATA explicitly for Homebrew LLVM if cargo cannot find bundled tools. The coverage workflow builds the instrumented static runtime before executing the native fixtures. It generates `build/rust-coverage.lcov` and fails below 80% line coverage. Rust language adapter and probe SDK code each have an independent 80% line gate, including retained generated-application SDK maps. Test sources, build scripts, vendor code and standard-library sources are excluded; Rust product code, the C shim, the LLVM pass and the C++ lifetime header are measured. Native coverage maps are exported individually to avoid collisions between C ABI function names in Rust test binaries and the linked runtime. Source paths and line hits are then merged into one line report. Cached workspace maps and profiles are cleared before each run; a supported release still requires the roadmap's 90% product coverage gate and authenticated analysis of its exact commit.
+
+`rust-coverage` also runs the experimental compiler-profile tests with its pinned nightly SDK and LLVM 23 pass. Those profiles are rebuilt, cleared, merged and exported separately from the stable LLVM 22 profiles. Only exported line hits from unchanged sources are combined. Compiler input discovery, profile validation, driver and LLVM pass each require 80%; missing execution evidence fails the gate. The individual compiler report and source fingerprints are retained as `build/rust-llvm-coverage.lcov` and `.json`. CI builds the pinned profile before running the combined gate without changing the default stable compiler.
 
 ## SonarQube Cloud project
 
