@@ -5,7 +5,7 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-fn trace_plan(receiver: &Receiver) -> policy::Plan {
+pub(crate) fn trace_plan(receiver: &Receiver) -> policy::Plan {
     let mut plan = plan(receiver);
     plan.traces.enabled = true;
     plan.traces.root_sample_ratio = 1.0;
@@ -16,7 +16,7 @@ fn trace_plan(receiver: &Receiver) -> policy::Plan {
     });
     plan
 }
-fn spans(receiver: &Receiver) -> Vec<Span> {
+pub(crate) fn spans(receiver: &Receiver) -> Vec<Span> {
     receiver
         .traces
         .lock()

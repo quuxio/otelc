@@ -24,6 +24,10 @@ pub struct Request {
 
 impl Request {
     pub fn load(path: &Path) -> Result<Self> {
+        Self::load_for_backend(path, "llvm")
+    }
+
+    pub fn load_for_backend(path: &Path, backend: &str) -> Result<Self> {
         let mut bytes = Vec::new();
         fs::File::open(path)?
             .take(8 * 1024 * 1024 + 1)
@@ -32,8 +36,9 @@ impl Request {
             bail!("Rust frontend request exceeds 8 MiB");
         }
         let request: Self = serde_json::from_slice(&bytes).context("read Rust frontend request")?;
-        if request.schema_version != 1
-            || request.policy.backend != "llvm"
+        if !matches!(backend, "llvm" | "compiler")
+            || request.schema_version != 1
+            || request.policy.backend != backend
             || !request.root.is_absolute()
             || !request.entry.starts_with(&request.root)
             || !request.sources.contains_key(&request.entry)

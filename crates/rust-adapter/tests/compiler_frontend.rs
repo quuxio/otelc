@@ -84,6 +84,28 @@ fn protocol_rejects_wrong_backend_version_roots_hashes_and_runtime_limits() {
 }
 
 #[test]
+fn compiler_requests_are_explicitly_bound_to_the_requested_backend() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("request.json");
+    let mut input = request();
+    input.policy.backend = "compiler".into();
+    fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+    assert!(Request::load(&path).is_err());
+    assert!(Request::load_for_backend(&path, "llvm").is_err());
+    assert!(Request::load_for_backend(&path, "unknown").is_err());
+    assert_eq!(
+        Request::load_for_backend(&path, "compiler")
+            .unwrap()
+            .policy
+            .backend,
+        "compiler"
+    );
+    input.policy.runtime.max_active_calls = 0;
+    fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+    assert!(Request::load_for_backend(&path, "compiler").is_err());
+}
+
+#[test]
 fn original_aliases_require_exact_owner_ranges_and_refuse_ambiguous_matches() {
     let mut request = request();
     let function = request.declarations[0].clone();

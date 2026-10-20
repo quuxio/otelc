@@ -1,5 +1,6 @@
 //! Source-free Rust body guards and language-native SDK metrics.
 mod compiler_abi;
+pub mod compiler_mir;
 mod control;
 pub mod policy;
 mod reader;
@@ -72,6 +73,7 @@ pub struct Runtime {
     duration: Histogram<f64>,
     stop: mpsc::SyncSender<mpsc::SyncSender<()>>,
     control: Mutex<Option<control::Control>>,
+    futures: Mutex<compiler_mir::Registry>,
 }
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: OnceLock<Arc<Runtime>> = OnceLock::new();
@@ -90,6 +92,7 @@ impl Runtime {
             "active_call_capacity",
             "incomplete",
             "invalid",
+            "future_capacity",
         ] {
             data.losses.insert(reason, 0);
         }
@@ -298,6 +301,7 @@ impl Runtime {
             duration,
             stop,
             control: Mutex::new(None),
+            futures: Mutex::new(compiler_mir::Registry::default()),
         });
         if let Some(path) = runtime.plan.runtime.control_socket.as_deref() {
             match control::Control::bind(path, runtime.clone()) {
@@ -455,6 +459,8 @@ impl Runtime {
         }
     }
     pub fn report(&self) -> serde_json::Value {
+        // Poll admission acquires the registry before the ordinary frame store.
+        let futures = self.futures.lock().ok().map(|registry| registry.report());
         let mut values = BTreeMap::new();
         let mut losses = BTreeMap::new();
         let mut count = 0;
@@ -471,7 +477,7 @@ impl Runtime {
             losses = data.losses.clone();
             *losses.entry("incomplete").or_default() += data.pending.len() as u64;
         }
-        serde_json::json!({"schema_version":1,"traces":traces,"language":"rust","pid":std::process::id(),"function_calls":count,"functions":values,"losses":losses,"export_loss":self.state.export_loss.load(Ordering::Relaxed),"export_finished":self.state.finished.load(Ordering::Acquire)})
+        serde_json::json!({"schema_version":1,"traces":traces,"language":"rust","pid":std::process::id(),"function_calls":count,"functions":values,"losses":losses,"future_observers":futures,"export_loss":self.state.export_loss.load(Ordering::Relaxed),"export_finished":self.state.finished.load(Ordering::Acquire)})
     }
     pub fn close(&self) {
         if self.state.closed.swap(true, Ordering::AcqRel) {
@@ -485,6 +491,11 @@ impl Runtime {
             if let Some(control) = control.take() {
                 control.close();
             }
+        }
+        // Metadata has no owning guard: shutdown censors the pending frames
+        // below, rather than inventing future completions while clearing it.
+        if let Ok(mut registry) = self.futures.lock() {
+            registry.clear();
         }
         if let Ok(mut data) = self.state.data.lock() {
             let pending = data.pending.len() as u64;
