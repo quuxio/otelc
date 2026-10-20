@@ -55,8 +55,9 @@ class TrafficBadgeTests(unittest.TestCase):
 
     def test_unexpected_data_branch_content_is_not_overwritten(self):
         self.command("-C", str(self.root / "seed"), "push", str(self.remote), "main:traffic-data")
+        content = traffic.badge({"count": 1, "uniques": 1})
         with self.assertRaisesRegex(ValueError, "unexpected"):
-            self.publish("unsafe", traffic.badge({"count": 1, "uniques": 1}))
+            self.publish("unsafe", content)
         self.assertEqual(self.command("--git-dir", str(self.remote), "rev-parse", "traffic-data"), self.original)
         self.assert_main_unchanged()
 
@@ -73,9 +74,10 @@ class TrafficBadgeTests(unittest.TestCase):
                 self.publish("concurrent", concurrent)
             return original_git(directory, *args, **kwargs)
 
+        stale = traffic.badge({"count": 2, "uniques": 1})
         with patch.object(traffic, "git", side_effect=racing):
             with self.assertRaises(subprocess.CalledProcessError):
-                self.publish("stale", traffic.badge({"count": 2, "uniques": 1}))
+                self.publish("stale", stale)
         latest = self.command("--git-dir", str(self.remote), "show", "traffic-data:.badges/traffic.json")
         self.assertEqual(json.loads(latest), json.loads(concurrent))
         self.assert_main_unchanged()

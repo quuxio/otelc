@@ -7,6 +7,8 @@ import tempfile
 
 BRANCH = "traffic-data"
 REMOTE = "https://github.com/quuxio/otelc.git"
+BADGE_FILE = ".badges/traffic.json"
+README_FILE = "README.md"
 README = "# Generated traffic data\n\nRepository traffic for the README badge, maintained by the Traffic Badge workflow.\n"
 
 
@@ -41,16 +43,16 @@ def publish(directory: Path, remote: str, content: str) -> bool:
         entries = git(directory, "ls-tree", "-rz", "FETCH_HEAD").stdout.split("\0")
         for entry in filter(None, entries):
             metadata, name = entry.split("\t", 1)
-            if not metadata.startswith("100644 blob ") or name not in {"README.md", ".badges/traffic.json"}:
+            if not metadata.startswith("100644 blob ") or name not in {README_FILE, BADGE_FILE}:
                 raise ValueError("traffic branch contains unexpected files or modes")
         git(directory, "checkout", "-B", BRANCH, "FETCH_HEAD")
     elif found.returncode != 2:
         found.check_returncode()
-    target = directory / ".badges/traffic.json"
+    target = directory / BADGE_FILE
     target.parent.mkdir(exist_ok=True)
     target.write_text(content)
-    (directory / "README.md").write_text(README)
-    git(directory, "add", "--", ".badges/traffic.json", "README.md")
+    (directory / README_FILE).write_text(README)
+    git(directory, "add", "--", BADGE_FILE, README_FILE)
     changed = git(directory, "diff", "--cached", "--quiet", check=False)
     if changed.returncode == 0:
         return False
