@@ -78,6 +78,19 @@ class ExecutionOwner:
         with self.lock:
             return int(self.wrapper is not None) + len(self.targets)
 
+    def adopt_entry(self, entry: object, frame: FrameType) -> OwnerEvent:
+        """Adopt actual earlier entry events after ordinary target imports finish."""
+        from .witness_entry import EntryAnchor
+        if type(entry) is not EntryAnchor or threading.get_native_id() != self.thread:
+            raise CodeBindingError('wrong_entry_context')
+        with self.lock:
+            if self.primary_seen or self.closed or self.fault is not None:
+                raise CodeBindingError('owner_already_started')
+            snapshot = entry.claim(self.profile, frame)
+            self.primary, self.envelope = snapshot.primary, snapshot.envelope
+            self.primary_seen = self.envelope_seen = True
+            return self._event('entry_adopted', self.envelope)
+
     def _invalidate(self, reason: str) -> OwnerEvent | None:
         if self.fault is not None:
             return None
