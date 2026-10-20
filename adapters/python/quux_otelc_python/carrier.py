@@ -8,6 +8,7 @@ from opentelemetry.trace import SpanContext, TraceFlags, TraceState
 _PARENT = re.compile(r'([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})')
 _KEY = re.compile(r'[a-z][_0-9a-z*/-]{0,255}|[a-z0-9][_0-9a-z*/-]{0,240}@[a-z][_0-9a-z*/-]{0,13}')
 _KNOWN_FLAGS = 3  # Sampled and the SDK random-trace-ID extension.
+_STATE_NAMESPACE = TraceState.__dict__['__dict__']
 
 
 @dataclass(frozen=True)
@@ -93,15 +94,37 @@ def extract(parents: Sequence[str], states: Sequence[str] = ()) -> Context | Non
     return Context(int(trace, 16), int(parent, 16), int(flags, 16) & _KNOWN_FLAGS, _state(states))
 
 
+def _sdk_state(state: TraceState) -> str | None:
+    """Copy bounded builtin storage without dispatching SDK instance overrides."""
+    namespace = _STATE_NAMESPACE.__get__(state, TraceState)
+    pairs = None
+    for index, (key, value) in enumerate(namespace.items()):
+        if index >= 32:
+            return None
+        if type(key) is str and key == '_dict':
+            pairs = value
+            break
+    if type(pairs) is not dict or len(pairs) > 32:
+        return None
+    fields = []
+    for key, value in pairs.items():
+        if (type(key) is not str or type(value) is not str
+                or not 1 <= len(key) <= 256 or not 1 <= len(value) <= 256):
+            return None
+        fields.append(key + '=' + value)
+    return _state(fields)
+
+
 def from_sdk(context: SpanContext) -> Context | None:
     """Copy a concrete SDK identity into the validated wire representation."""
     if (type(context) is not SpanContext or not context.is_valid
             or type(context.trace_id) is not int or type(context.span_id) is not int
-            or type(context.trace_flags) not in (int, TraceFlags) or not 0 <= context.trace_flags <= 255
+            or type(context.trace_flags) is not int and type(context.trace_flags) is not TraceFlags
+            or not 0 <= context.trace_flags <= 255
             or type(context.trace_state) is not TraceState):
         return None
     return Context(context.trace_id, context.span_id, context.trace_flags & _KNOWN_FLAGS,
-                   _state([context.trace_state.to_header()]))
+                   _sdk_state(context.trace_state))
 
 
 def inject(context: Context) -> dict[str, str]:

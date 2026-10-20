@@ -6,9 +6,8 @@ import sys
 import tempfile
 import unittest
 import zipfile
-import importlib.util
 
-from test_python_adapter import ADAPTER, plan, launch
+from test_python_adapter import ADAPTER, plan
 from test_python_spans import receiver
 
 
@@ -74,9 +73,40 @@ if "fail" in sys.argv: raise SystemExit(7)
                         self.assertEqual(script.read_text(),source)
                         self.assertEqual((package/"__main__.py").read_text(),"from . import MARKER\n"+source)
 
-    def test_missing_or_opaque_entry_points_fail_before_execution(self):
-        with self.assertRaisesRegex(ImportError, "no executable main module"):
-            launch.module_entry(None)
-        spec=importlib.util.find_spec("sys")
-        with self.assertRaisesRegex(ImportError, "no executable code"):
-            launch.module_entry(spec)
+    def test_missing_or_builtin_modules_match_interpreter_diagnostics(self):
+        with tempfile.TemporaryDirectory() as name, receiver() as (endpoint, _):
+            root = Path(name)
+            policy = plan(); policy['metrics']['enabled'] = False
+            policy['metrics_endpoint'] = endpoint + '/v1/metrics'
+            config = root / 'plan.json'; config.write_text(json.dumps(policy))
+            for module in ('missing_otelc_test_module', 'sys'):
+                with self.subTest(module=module):
+                    plain = subprocess.run([sys.executable, '-m', module], cwd=root,
+                                           capture_output=True, timeout=10)
+                    actual = subprocess.run([sys.executable, str(ADAPTER / 'launch.py'),
+                                             str(config), '-m', module], cwd=root,
+                                            capture_output=True, timeout=10)
+                    self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                                     (plain.returncode, plain.stdout, plain.stderr))
+
+    def test_package_initialisation_observes_the_normal_pre_entry_main_module(self):
+        with tempfile.TemporaryDirectory() as name, receiver() as (endpoint, _):
+            root = Path(name)
+            package = root / 'application'; package.mkdir()
+            (package / '__init__.py').write_text('''import json, sys
+main = sys.modules['__main__']
+print(json.dumps({'argv': sys.argv, 'file': getattr(main, '__file__', None),
+                  'loader': getattr(main.__loader__, '__name__', None),
+                  'spec': getattr(main.__spec__, 'name', None)}))
+''')
+            (package / '__main__.py').write_text('print("application")\n')
+            policy = plan(); policy['metrics']['enabled'] = False
+            policy['metrics_endpoint'] = endpoint + '/v1/metrics'
+            config = root / 'plan.json'; config.write_text(json.dumps(policy))
+            plain = subprocess.run([sys.executable, '-m', 'application', 'kept'], cwd=root,
+                                   capture_output=True, timeout=10)
+            actual = subprocess.run([sys.executable, str(ADAPTER / 'launch.py'), str(config),
+                                     '-m', 'application', 'kept'], cwd=root,
+                                    capture_output=True, timeout=10)
+            self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                             (plain.returncode, plain.stdout, plain.stderr))
