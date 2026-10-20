@@ -21,7 +21,8 @@ def source_hashes(root: Path) -> dict[str, str]:
     """Reject stale or concurrently changed source maps before combining reports."""
     files = [root / name for name in ("Cargo.toml", "Cargo.lock",
              "native/rust/frontend/Cargo.toml", "native/rust/frontend/Cargo.lock",
-             "ci/build_rust_llvm.py", "ci/rust_llvm_coverage.py", "ci/rust_coverage.py")]
+             "ci/build_rust_llvm.py", "ci/rust_llvm_coverage.py", "ci/rust_coverage.py",
+             "tests/fixtures/trace-context.json")]
     for directory in ("crates", "native", "include"):
         files.extend(path for path in (root / directory).rglob("*")
                      if path.is_file() and path.suffix in (".rs", ".cpp", ".h", ".hpp")

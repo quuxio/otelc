@@ -22,7 +22,8 @@ def fixture(root: Path) -> None:
     (root / "crates/example").mkdir(parents=True)
     (root / "crates/example/lib.rs").write_text("fn selected() {}")
     for name in ('native/rust/frontend/Cargo.toml', 'native/rust/frontend/Cargo.lock',
-                 'ci/build_rust_llvm.py', 'ci/rust_llvm_coverage.py', 'ci/rust_coverage.py'):
+                 'ci/build_rust_llvm.py', 'ci/rust_llvm_coverage.py', 'ci/rust_coverage.py',
+                 'tests/fixtures/trace-context.json'):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('source fixture')
@@ -33,6 +34,17 @@ def report() -> str:
 
 
 class CompilerCoverageTests(unittest.TestCase):
+    def test_shared_carrier_vectors_are_part_of_source_freshness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root)
+            before = gate.source_hashes(root)
+            path = 'tests/fixtures/trace-context.json'
+            (root / path).write_text('changed expected wire value')
+            after = gate.source_hashes(root)
+            self.assertNotEqual(before[path], after[path])
+            self.assertEqual({name for name in before if before[name] != after[name]}, {path})
+
     def test_environment_requires_qualified_tools_and_removes_coverage_wrappers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); descriptor = root / "target/debug/otelc-rust-llvm.json"
