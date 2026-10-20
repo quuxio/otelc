@@ -127,4 +127,4 @@ Open the [Grafana dashboard](http://localhost:3000/d/otelc-local) after starting
 - [Language guides](docs/languages.md): adapter setup and current support. See the [roadmap](docs/roadmap.md#todo-language-adapters) for remaining work.
 - [Rust compiler inspection](docs/rust-compiler.md): the experimental LLVM backend reports the actual build inventory without running the application.
 - [Context and lifetime spans](docs/context-and-lifetime-plan.md): the all-language delivery plan, with [Python task and worker context](docs/python-task-context.md) and [Java executor qualification](docs/java-task-context.md).
-- [Object lifetimes](docs/object-lifetimes.md): source-free Python [collection spans](docs/python-collection.md) and [explicit resource boundaries](docs/python-resources.md), plus the C++ metric guard; automatic destruction remains planned.
+- [Object lifetimes](docs/object-lifetimes.md): source-free Python [collection spans](docs/python-collection.md) and [explicit resource boundaries](docs/python-resources.md), JavaScript [collection spans](docs/javascript-collection.md), plus the C++ metric guard; automatic destruction remains planned.

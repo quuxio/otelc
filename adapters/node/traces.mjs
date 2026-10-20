@@ -20,13 +20,37 @@ export class TraceStore {
           || url.username || url.password || url.search || url.hash || !(url.protocol === 'https:' || url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw new Error();
     } catch { throw new Error('invalid resolved JavaScript trace settings'); }
     this.provider = new TracerProvider({ resource, sampler: new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(p.traces.root_sample_ratio) }),
-      spanLimits: { attributeCountLimit: 1, attributeValueLengthLimit: 1024, eventCountLimit: 0, linkCountLimit: 0 } });
+      spanLimits: { attributeCountLimit: p.lifetimes?.enabled ? 3 : 1, attributeValueLengthLimit: 1024, eventCountLimit: 0, linkCountLimit: p.lifetimes?.enabled ? 1 : 0 } });
     this.tracer = this.provider.getTracer('quux.otelc', '0.1.0');
     this.exporter = new TraceExporter(runtime);
     this.roots = new Map(); this.ready = []; this.retained = 0;
     this.losses = {}; this.completed = 0; this.sampledOut = 0; this.activeFlush = null;
   }
   lose(reason) { this.losses[reason] = (this.losses[reason] ?? 0) + 1; }
+  beginLifetime(name, token, creation, started) {
+    // A creation link is not a parent: sample this standalone root independently.
+    if (this.retained >= MAX_RECORDS) { this.lose('span_capacity'); return null; }
+    const epoch = BigInt(Date.now()) * 1000000n;
+    const span = this.tracer.startSpan(name + ' lifetime', { startTime: hrTime(epoch),
+      attributes: { 'code.type.name': name, 'otelc.lifetime.boundary': 'collection', 'otelc.lifetime.instance': String(token) },
+      links: creation?.sampled ? [{ context: creation.context }] : [] }, ROOT_CONTEXT);
+    if (!(span.spanContext().traceFlags & TraceFlags.SAMPLED)) return null;
+    this.retained++;
+    return { span, name, started, epoch, finished: false };
+  }
+  discardLifetime(identity) {
+    if (!identity || identity.finished) return;
+    identity.finished = true; this.retained--;
+  }
+  finishLifetime(identity, elapsed) {
+    if (!identity || identity.finished) return;
+    try { identity.span.end(hrTime(identity.epoch + (elapsed > 0n ? elapsed : 0n))); }
+    catch { this.discardLifetime(identity); this.lose('invalid'); return; }
+    identity.finished = true;
+    if (this.ready.length >= this.runtime.plan.export.max_queued_batches) { this.retained--; this.lose('queue_capacity'); return; }
+    this.ready.push({ nodes: new Map([[identity.span.spanContext().spanId, identity.span]]), bytes: 2 * Buffer.byteLength(identity.name) + 512 });
+    this.completed++;
+  }
   reject(parent, reason) {
     if (parent === null) this.lose(reason);
     else if (parent?.sampled) {
