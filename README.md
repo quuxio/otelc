@@ -53,7 +53,7 @@ The callback backend provides normal-return function timing using Clang's `-fins
 
 ## Local workflow
 
-The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Build the CLI and runtime together, then use the supplied local fixture configuration:
+The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Go builds [refuse SDK resolution that changes application language or existing dependencies](docs/go.md#build-and-runtime-boundaries); older/incompatible module graphs require separate dependency isolation. Build the CLI and runtime together, then use the supplied local fixture configuration:
 
 ```sh
 make build
