@@ -15,6 +15,9 @@ from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportM
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 
+CLI = ROOT / 'target/debug/quux-otelc'
+
+
 ERRORS = {
     'ordinary': 'def fail():\n    raise ValueError("original failure")\nfail()\n',
     'chain': '''def fail():
@@ -53,6 +56,7 @@ raise ValueError("original error")
 
 
 class PythonUncaughtTests(unittest.TestCase):
+    @unittest.skipUnless(CLI.is_file(), 'make python-check builds the native CLI')
     def test_selected_unhandled_error_preserves_output_and_exports_completed_error_spans(self):
         source = 'def fail():\n    raise ValueError("original failure")\ndef outer():\n    fail()\nouter()\n'
         with tempfile.TemporaryDirectory() as name, receiver() as (endpoint, requests):
@@ -152,6 +156,7 @@ class PythonUncaughtTests(unittest.TestCase):
         self.assertEqual(measured.stdout, baseline.stdout)
         self.assertEqual(measured.stderr, baseline.stderr)
 
+    @unittest.skipUnless(CLI.is_file(), 'make python-check builds the native CLI')
     def test_exception_getters_and_setters_are_not_dispatched_by_traceback_cleanup(self):
         source = '''import json, sys
 GETS = SETS = 0
@@ -187,6 +192,7 @@ raise EXPECTED
                 with self.subTest(arguments=arguments):
                     self.compare(folder, config, arguments, environment)
 
+    @unittest.skipUnless(CLI.is_file(), 'make python-check builds the native CLI')
     def test_syntax_error_matches_interpreter_and_setup_failure_remains_diagnostic(self):
         with tempfile.TemporaryDirectory() as name, receiver() as (endpoint, _):
             folder = Path(name)
@@ -209,6 +215,7 @@ raise EXPECTED
             self.assertIn(b'launch.py', actual.stderr)
             self.assertIn(b'unsupported OTLP metrics compression', actual.stderr)
 
+    @unittest.skipUnless(CLI.is_file(), 'make python-check builds the native CLI')
     def test_unhandled_errors_and_hooks_match_all_supported_valid_entry_routes(self):
         self.assertTrue((ROOT / 'target/debug/quux-otelc').is_file(), 'build the real CLI first')
         with tempfile.TemporaryDirectory(prefix='otelc uncaught ') as name, receiver() as (endpoint, _):
