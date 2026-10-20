@@ -181,12 +181,12 @@ test('documented unedited and annotated examples preserve bytes and expose type 
 });
 
 test('invalid resolved settings fail before SDK setup', () => {
-  for (const change of [p => { p.language = 'typescript'; }, p => { p.traces.enabled = false; },
+  for (const change of [p => { p.language = 'java'; }, p => { p.traces.enabled = false; },
     p => { p.lifetimes.boundary = 'object'; }, p => { p.lifetimes.enabled = 'true'; }, p => { p.lifetimes.resources = [{}]; },
     p => { p.runtime.max_live_lifetimes = 0; }, p => { p.runtime.max_live_lifetimes = '8'; },
     p => { p.runtime.max_live_lifetimes = 65537; }, p => { p.runtime.max_functions = 0; }, p => { p.runtime.max_functions = 65537; }, p => { p.lifetime_matchers = null; }]) {
     const p = collectionPlan('http://127.0.0.1:1/v1/metrics'); change(p);
-    assert.throws(() => new Runtime(p), /JavaScript lifetimes require/);
+    assert.throws(() => new Runtime(p), /JavaScript\/TypeScript lifetimes require/);
   }
 });
 

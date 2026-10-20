@@ -1,6 +1,8 @@
 import * as t from '@babel/types';
 import { Selection } from './policy.mjs';
 
+export const TYPE_IDENTITY = '@quux.otelc.type ';
+
 // Register the actual constructor in a static block: no added instance fields,
 // prototype members, wrapper class or application-visible constructor alias.
 export function instrumentLifetime(path, helper, name, plan, tag) {

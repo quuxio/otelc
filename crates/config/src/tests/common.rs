@@ -20,11 +20,12 @@ fn python_collection_lifetimes_are_explicit_and_other_boundaries_stay_unavailabl
     assert!(resolved.execution_available);
     assert_eq!(resolved.lifetimes.boundary, "collection");
     assert_eq!(resolved.runtime.max_live_lifetimes, 4096);
-    for language in config
-        .languages
-        .iter()
-        .filter(|language| !matches!(language, Language::Python | Language::JavaScript))
-    {
+    for language in config.languages.iter().filter(|language| {
+        !matches!(
+            language,
+            Language::Python | Language::JavaScript | Language::TypeScript
+        )
+    }) {
         assert!(!config.resolve(*language).unwrap().execution_available);
     }
     for boundary in ["object", "resource"] {
@@ -38,7 +39,7 @@ fn python_collection_lifetimes_are_explicit_and_other_boundaries_stay_unavailabl
     }
 }
 #[test]
-fn javascript_collection_is_explicit_and_typescript_still_requires_qualification() {
+fn javascript_and_typescript_collection_require_tracing_and_collection_boundary() {
     let mut config = policy();
     config.lifetimes.enabled = true;
     config.lifetimes.boundary = "collection".into();
@@ -56,7 +57,7 @@ fn javascript_collection_is_explicit_and_typescript_still_requires_qualification
             .execution_available
     );
     assert!(
-        !config
+        config
             .resolve(Language::TypeScript)
             .unwrap()
             .execution_available
