@@ -47,6 +47,10 @@ try:
 finally:
     SourceFileLoader.get_code = ORIGINAL_GET_CODE
 '''
+        if loader_clone == 'hidden':
+            imports = imports.replace('SourceFileLoader.get_code = cloned_get_code',
+                "if 'get_code' in SourceFileLoader.__dict__:\n    del SourceFileLoader.get_code\nfor index in range(65):\n    setattr(SourceFileLoader, '_otelc_extra_' + str(index), True)\nSourceFileLoader.get_code = cloned_get_code")
+            imports += "for index in range(65):\n    delattr(SourceFileLoader, '_otelc_extra_' + str(index))\ndel SourceFileLoader.get_code\n"
     deferred = '    global otelc_witness_provider\n    import otelc_witness_provider\n' if lazy else ''
     return imports + control + '''def rendezvous():
     if not RELEASE.wait(5):
@@ -265,6 +269,10 @@ otelc_witness_provider.target = FunctionType(otelc_witness_provider.target.__cod
 
     def test_replaced_standard_loader_compiler_cannot_attest_equal_cloned_code(self):
         _, _, events, _, _, _ = self.execute(loader_clone=True)
+        self.assertFalse(events[-1]['complete'])
+
+    def test_a_loader_override_beyond_the_namespace_scan_limit_cannot_hide(self):
+        _, _, events, _, _, _ = self.execute(loader_clone='hidden')
         self.assertFalse(events[-1]['complete'])
 
     def test_manifest_roundtrip_refuses_source_policy_site_and_record_changes(self):

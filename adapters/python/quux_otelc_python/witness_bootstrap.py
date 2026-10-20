@@ -1,7 +1,7 @@
 """Bind frozen declarations to observed ordinary imports and live SDK ownership."""
 from importlib import _bootstrap
 from importlib.machinery import SourceFileLoader
-from types import CodeType, FrameType, ModuleType
+from types import CodeType, FrameType, FunctionType, ModuleType
 import weakref
 
 from .witness_callsite import bind_site
@@ -19,6 +19,7 @@ _LOADER_NAMESPACE = next(base.__dict__['__dict__'] for base in SourceFileLoader.
                          if '__dict__' in base.__dict__)
 _MODULE_NAMESPACE = ModuleType.__dict__['__dict__']
 _LOADER_MRO = SourceFileLoader.__mro__
+_UNKNOWN_METHOD = object()
 
 
 def _member(namespace, name: str):
@@ -33,10 +34,14 @@ def _member(namespace, name: str):
 
 def _loader_method(name: str):
     for base in _LOADER_MRO:
-        value = _member(type.__getattribute__(base, '__dict__'), name)
-        if value is not None:
-            return value
-    return None
+        namespace = type.__getattribute__(base, '__dict__')
+        # Exhausted/unsupported metadata is unknown, not an absent shadowing
+        # attribute. A real None also shadows a method inherited from a base.
+        if len(namespace) > 64 or any(type(key) is not str for key in namespace):
+            return _UNKNOWN_METHOD
+        if name in namespace:
+            return namespace[name]
+    return _UNKNOWN_METHOD
 
 
 _LOADER_METHODS = {name: _loader_method(name) for name in (
@@ -46,7 +51,8 @@ _LOADER_METHODS = {name: _loader_method(name) for name in (
 def _qualified_loader() -> bool:
     # Read class namespaces, never bind a newly installed application descriptor.
     return (type.__getattribute__(SourceFileLoader, '__mro__') is _LOADER_MRO
-            and all(_loader_method(name) is value for name, value in _LOADER_METHODS.items()))
+            and all(type(value) is FunctionType and _loader_method(name) is value
+                    for name, value in _LOADER_METHODS.items()))
 
 
 class WitnessBootstrap:
