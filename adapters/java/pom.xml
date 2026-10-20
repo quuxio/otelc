@@ -4,7 +4,7 @@
   <groupId>io.quux.otelc</groupId><artifactId>java-agent</artifactId><version>0.1.0</version>
   <properties>
     <maven.compiler.release>21</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <otel.version>1.67.0</otel.version><asm.version>9.10.1</asm.version>
+    <otel.version>1.67.0</otel.version><asm.version>9.11</asm.version>
   </properties>
   <dependencies>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-metrics</artifactId><version>${otel.version}</version></dependency>
