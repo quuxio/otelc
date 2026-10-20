@@ -40,7 +40,7 @@ class PythonWitnessCallsiteTests(unittest.TestCase):
         registry.register(caller); registry.register(callee)
         return namespace, caller, callee, registry, calls[-1]
 
-    def observed(self, namespace, site):
+    def observed(self, namespace, site, warmups=0):
         observations = []
 
         def entered(code, _offset):
@@ -55,6 +55,8 @@ class PythonWitnessCallsiteTests(unittest.TestCase):
         previous = signal.signal(signal.SIGUSR1, namespace['callback'])
         sys.monitoring.use_tool_id(tool, 'otelc-private-callsite-test')
         try:
+            for _ in range(warmups):
+                self.assertEqual(namespace['envelope'](), 42)
             sys.monitoring.register_callback(tool, sys.monitoring.events.PY_START, entered)
             sys.monitoring.set_events(tool, sys.monitoring.events.PY_START)
             self.assertEqual(namespace['envelope'](), 42)
@@ -77,6 +79,13 @@ class PythonWitnessCallsiteTests(unittest.TestCase):
         self.assertEqual(site.record()['call_offset'], offset)
         self.assertEqual(site.record()['caller_probe_id'], registry.lookup(caller).digest)
         self.assertFalse(site.matches(object()))
+
+    def test_specialized_hot_calls_keep_the_qualified_observation_offset(self):
+        namespace, caller, callee, registry, offset = self.prepared()
+        site = bind_site(registry, caller, callee, offset)
+        self.assertEqual([entry[0] for entry in self.observed(namespace, site, warmups=64)], [False, True])
+        self.assertIs(namespace['envelope'].__code__, caller)
+        self.assertIs(namespace['wrapper'].__code__, callee)
 
     def test_equal_caller_or_callee_clones_cannot_satisfy_the_site(self):
         for name in ('envelope', 'wrapper'):
