@@ -89,19 +89,29 @@ func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (str
 			return "", err
 		}
 		cwd = scratch
-		err = os.WriteFile(modfile, []byte("module io.quux.otelc/generated\n\ngo 1.26.0\n"), 0600)
+		compiler, failure := output(goTool, root, "env", "GOVERSION")
+		if failure != nil {
+			return "", failure
+		}
+		// A standalone file outside a module uses the compiler's own version.
+		goVersion := strings.TrimPrefix(strings.TrimSpace(string(compiler)), "go")
+		err = os.WriteFile(modfile, []byte("module io.quux.otelc/generated\n\ngo "+goVersion+"\n"), 0600)
 	} else {
 		data, failure := os.ReadFile(original)
 		if failure != nil {
 			return "", failure
 		}
 		err = os.WriteFile(modfile, data, 0600)
-		if sum, failure := os.ReadFile(filepath.Join(filepath.Dir(original), "go.sum")); failure == nil {
-			err = os.WriteFile(filepath.Join(scratch, "go.sum"), sum, 0600)
+		if err == nil {
+			err = copyModuleSum(filepath.Join(filepath.Dir(original), "go.sum"), filepath.Join(scratch, "go.sum"))
 		}
 	}
 	if err != nil {
 		return "", err
+	}
+	before, err := snapshotModules(goTool, cwd, modfile, "readonly", filepath.Join(scratch, "modules-original.json"))
+	if err != nil {
+		return "", fmt.Errorf("cannot record original Go module identities: %w", err)
 	}
 	if _, err = output(goTool, cwd, "mod", "edit", "-modfile="+modfile, "-require=io.quux.otelc/go@v0.0.0", "-replace=io.quux.otelc/go="+sdkRoot); err != nil {
 		return "", err
@@ -109,6 +119,9 @@ func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (str
 	// Resolution may update only our private alternate mod/sum, never originals.
 	data, err := output(goTool, cwd, "list", "-deps", "-json", "-mod=mod", "-modfile="+modfile, target)
 	if err != nil {
+		return "", err
+	}
+	if err = verifyModules(before, goTool, cwd, modfile, scratch); err != nil {
 		return "", err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -180,6 +193,11 @@ func Build(plan policy.Plan, target, root, scratch, sdkRoot, goTool string) (str
 	}
 	binary := filepath.Join(scratch, "application")
 	if _, err = output(goTool, cwd, "build", "-mod=mod", "-modfile="+modfile, "-overlay="+overlay, "-o", binary, target); err != nil {
+		return "", err
+	}
+	// Generated imports may load additional lazy dependencies during compilation.
+	// Recheck the final recipe before the caller can execute the application.
+	if err = verifyModules(before, goTool, cwd, modfile, scratch); err != nil {
 		return "", err
 	}
 	return binary, nil
