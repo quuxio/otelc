@@ -318,6 +318,21 @@ pub fn run(plan_path: &Path, args: &[String], adapter: &Path) -> Result<i32> {
         }
         let file = PathBuf::from(&args[1]).canonicalize()?;
         let relative = file.strip_prefix(&root)?;
+        if tools.llvm.is_some() {
+            tools.doctor()?;
+            let scratch = tempfile::tempdir()?;
+            let compilation =
+                compile_recorded(&plan, Path::new(&args[1]), &root, scratch.path(), &tools)?;
+            let inventory = compilation
+                .inventory
+                .context("Rust LLVM inspection requires the compiled inventory")?;
+            let mut result: serde_json::Value = serde_json::from_slice(&fs::read(inventory)?)?;
+            result["language"] = "rust".into();
+            result["backend"] = "llvm".into();
+            result["phase"] = "compiled".into();
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            return Ok(0);
+        }
         let selection = Selection::new(&plan.sources.include, &plan.sources.exclude, true)?;
         let (_, functions) = crate::transform::transform(
             &fs::read_to_string(file.clone())?,
