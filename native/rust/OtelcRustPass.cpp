@@ -1,9 +1,8 @@
 // Rust compiler hooks retain original source spans and use the Rust SDK.
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Demangle/Demangle.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/DebugInfoMetadata.h"
-#include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
@@ -15,7 +14,6 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 using namespace llvm;
 
@@ -27,12 +25,9 @@ struct Definition {
   std::string File, Name, Leaf, Suffix, Unsupported, SourceHash;
   uint64_t HeaderStart, HeaderEnd, BodyStartLine, BodyStartColumn, BodyEndLine, BodyEndColumn;
   uint64_t DeclarationStartLine, DeclarationStartColumn, DeclarationEndLine, DeclarationEndColumn;
-  bool Selected, Startup;
+  bool Selected, Startup, Emitted;
+  std::string Symbol;
 };
-
-std::string normalPath(StringRef Directory, StringRef File) {
-  return (std::filesystem::path(Directory.str()) / File.str()).lexically_normal().string();
-}
 
 SmallVector<Definition> definitions() {
   const char *Path = std::getenv("OTELC_RUST_LLVM_INVENTORY");
@@ -42,7 +37,7 @@ SmallVector<Definition> definitions() {
     report_fatal_error("otelc Rust: compiler inventory is unavailable or too large");
   auto Document = json::parse((*Buffer)->getBuffer());
   auto *Object = Document ? Document->getAsObject() : nullptr;
-  if (!Object || Object->getInteger("schema_version") != 2)
+  if (!Object || Object->getInteger("schema_version") != 3)
     report_fatal_error("otelc Rust: invalid compiler inventory version");
   auto *Entries = Object->getArray("functions");
   auto *Sources = Object->getObject("sources");
@@ -74,8 +69,9 @@ SmallVector<Definition> definitions() {
       Number("body_start_column"), Number("body_end_line"), Number("body_end_column"),
       Number("declaration_start_line"), Number("declaration_start_column"),
       Number("declaration_end_line"), Number("declaration_end_column"),
-      Flag("selected"), Flag("startup")};
-    if (Item.Name.empty() || Item.Name.size() > 1024 || Item.HeaderEnd < Item.HeaderStart
+      Flag("selected"), Flag("startup"), Flag("emitted"), Text("compiled_symbol")};
+    if (Item.Emitted != !Item.Symbol.empty() || (Item.Startup && !Item.Emitted)
+        || Item.Name.empty() || Item.Name.size() > 1024 || Item.HeaderEnd < Item.HeaderStart
         || std::pair(Item.BodyEndLine, Item.BodyEndColumn) < std::pair(Item.BodyStartLine, Item.BodyStartColumn)
         || std::pair(Item.DeclarationEndLine, Item.DeclarationEndColumn) < std::pair(Item.DeclarationStartLine, Item.DeclarationStartColumn))
       report_fatal_error("otelc Rust: invalid compiler definition bounds");
@@ -88,119 +84,16 @@ SmallVector<Definition> definitions() {
   return Result;
 }
 
-bool closureDeclaration(const Function &Function, const Definition &Definition) {
-  auto Begin = std::pair(Definition.DeclarationStartLine, Definition.DeclarationStartColumn);
-  auto End = std::pair(Definition.DeclarationEndLine, Definition.DeclarationEndColumn);
-  for (const auto &Block : Function) for (const auto &Instruction : Block)
-    for (const auto &Record : Instruction.getDbgRecordRange()) {
-      const auto *Variable = dyn_cast<DbgVariableRecord>(&Record);
-      if (!Variable || Variable->getVariable()->getArg() != 1) continue;
-      const auto &Location = Record.getDebugLoc();
-      if (!Location || cast<DILocalScope>(Location.getScope())->getSubprogram() != Function.getSubprogram()) continue;
-      auto Position = std::pair(uint64_t(Location.getLine()), uint64_t(Location.getCol()));
-      if (Begin <= Position && Position <= End) return true;
-    }
-  return false;
-}
-
-std::string withoutGenerics(StringRef Name) {
-  std::string Result;
-  unsigned Depth = 0;
-  for (char Value : Name) {
-    if (Value == '<') ++Depth;
-    else if (Value == '>') { if (Depth) --Depth; }
-    else if (!Depth && Value != ' ') Result.push_back(Value);
-  }
-  for (size_t Index = 0; (Index = Result.find("::", Index)) != std::string::npos;)
-    Result.replace(Index, 2, ".");
-  for (size_t Index = 0; (Index = Result.find("r#", Index)) != std::string::npos;)
-    Result.erase(Index, 2);
-  return Result;
-}
-
-bool bodyLocation(const Function &Function, const Definition &Definition) {
-  for (const auto &Block : Function) for (const auto &Instruction : Block) {
-    const auto &Location = Instruction.getDebugLoc();
-    if (!Location || cast<DILocalScope>(Location.getScope())->getSubprogram() != Function.getSubprogram()) continue;
-    uint64_t Line = Location.getLine(), Column = Location.getCol();
-    if (!Column || Line < Definition.BodyStartLine || Line > Definition.BodyEndLine) continue;
-    if (Line == Definition.BodyStartLine && Column < Definition.BodyStartColumn) continue;
-    if (Line == Definition.BodyEndLine && Column > Definition.BodyEndColumn) continue;
-    return true;
-  }
-  return false;
-}
-
-const Definition *definitionFor(const Function &Function, ArrayRef<Definition> Definitions) {
-  const auto *Subprogram = Function.getSubprogram();
-  if (!Subprogram || !Subprogram->getFile()) return nullptr;
-  const auto *File = Subprogram->getFile();
-  auto Path = normalPath(File->getDirectory(), File->getFilename());
-  auto Leaf = withoutGenerics(Subprogram->getName());
-  SmallVector<const Definition *> Candidates;
-  for (const auto &Definition : Definitions) {
-    if (Definition.File != Path || Subprogram->getLine() < Definition.HeaderStart
-        || Subprogram->getLine() > Definition.HeaderEnd) continue;
-    if (Definition.Leaf == "<closure>" ? !Subprogram->getName().starts_with("{closure")
-                                       : withoutGenerics(Definition.Leaf) != Leaf) continue;
-    Candidates.push_back(&Definition);
-  }
-  // Unselected declarations are still needed to disambiguate selected peers,
-  // but their compiler-specific closure environments need no probe identity.
-  if (!llvm::any_of(Candidates, [](const Definition *Item) { return Item->Selected || Item->Startup; }))
-    return nullptr;
-  if (!Candidates.empty() && Candidates.front()->Leaf == "<closure>") {
-    // Constant/zero-sized closure returns can share the same body-end debug
-    // location. Their compiler-owned environment argument identifies the
-    // original closure prefix, including move/parameter tokens.
-    SmallVector<const Definition *> Specific;
-    for (const auto *Definition : Candidates)
-      if (closureDeclaration(Function, *Definition)) Specific.push_back(Definition);
-    if (Specific.empty()) report_fatal_error("otelc Rust: compiled closure declaration did not resolve");
-    Candidates = std::move(Specific);
-  }
-  if (Candidates.size() > 1) {
-    SmallVector<const Definition *> Specific;
-    for (const auto *Definition : Candidates)
-      if (bodyLocation(Function, *Definition)) Specific.push_back(Definition);
-    Candidates = std::move(Specific);
-    if (Candidates.empty()) report_fatal_error("otelc Rust: compiled function source position did not resolve");
-  }
-  if (Candidates.size() > 1) {
-    // A nested same-name function's body is contained in its parent's source
-    // range, although its instructions belong to a separate compiler scope.
-    SmallVector<const Definition *> Inner;
-    for (const auto *Candidate : Candidates) {
-      auto Begin = std::pair(Candidate->BodyStartLine, Candidate->BodyStartColumn);
-      auto End = std::pair(Candidate->BodyEndLine, Candidate->BodyEndColumn);
-      bool ContainsAnother = false;
-      for (const auto *Other : Candidates) {
-        if (Other == Candidate) continue;
-        auto OtherBegin = std::pair(Other->BodyStartLine, Other->BodyStartColumn);
-        auto OtherEnd = std::pair(Other->BodyEndLine, Other->BodyEndColumn);
-        ContainsAnother |= Begin <= OtherBegin && OtherEnd <= End && (Begin != OtherBegin || End != OtherEnd);
-      }
-      if (!ContainsAnother) Inner.push_back(Candidate);
-    }
-    Candidates = std::move(Inner);
-  }
-  if (Candidates.size() > 1) {
-    auto Symbol = withoutGenerics(llvm::demangle(Function.getName().str()));
-    SmallVector<const Definition *> Specific;
-    for (const auto *Definition : Candidates)
-      if (StringRef(Symbol).ends_with(withoutGenerics(Definition->Suffix))) Specific.push_back(Definition);
-    if (!Specific.empty()) Candidates = std::move(Specific);
-  }
-  if (Candidates.size() > 1)
-    report_fatal_error("otelc Rust: compiled function identity is ambiguous");
-  return Candidates.empty() ? nullptr : Candidates.front();
-}
-
 struct RustPass : PassInfoMixin<RustPass> {
   PreservedAnalyses run(Module &Module, ModuleAnalysisManager &) {
     if (Module.getNamedMetadata("otelc.rust.instrumented"))
       report_fatal_error("otelc Rust: compiler module is already instrumented");
     auto Definitions = definitions();
+    StringMap<const Definition *> Symbols;
+    for (const auto &Definition : Definitions)
+      if (Definition.Emitted && !Symbols.try_emplace(Definition.Symbol, &Definition).second)
+        report_fatal_error("otelc Rust: duplicate compiled symbol identity");
+    StringSet<> Matched;
     auto &Context = Module.getContext();
     auto *Pointer = PointerType::getUnqual(Context);
     auto *Void = Type::getVoidTy(Context);
@@ -216,7 +109,7 @@ struct RustPass : PassInfoMixin<RustPass> {
     SmallVector<std::pair<Function *, const Definition *>> Selected;
     for (auto &Function : Module) {
       if (Function.isDeclaration()) continue;
-      const auto *Definition = definitionFor(Function, Definitions);
+      const auto *Definition = Symbols.lookup(Function.getName());
       if (Definition && (Definition->Selected || Definition->Startup)) {
         if (!Definition->Unsupported.empty()) report_fatal_error(Twine("otelc Rust: ") + Definition->Unsupported);
         if (Function.hasFnAttribute(Attribute::Naked)) report_fatal_error("otelc Rust: naked compiler bodies are unsupported");
@@ -226,8 +119,12 @@ struct RustPass : PassInfoMixin<RustPass> {
             report_fatal_error("otelc Rust: unsupported compiler exception personality");
         }
         Selected.push_back({&Function, Definition});
+        Matched.insert(Function.getName());
       }
     }
+    for (const auto &Definition : Definitions)
+      if (Definition.Emitted && (Definition.Selected || Definition.Startup) && !Matched.contains(Definition.Symbol))
+        report_fatal_error("otelc Rust: selected compiled symbol did not resolve to its LLVM body");
     bool ExpectedStartup = llvm::any_of(Definitions, [](const Definition &Item) { return Item.Startup; });
     bool FoundStartup = llvm::any_of(Selected, [](const auto &Item) { return Item.second->Startup; });
     if (ExpectedStartup && !FoundStartup)

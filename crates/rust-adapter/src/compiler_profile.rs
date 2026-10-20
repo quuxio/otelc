@@ -39,8 +39,10 @@ pub(crate) struct Profile {
     pub rustc: PathBuf,
     pub sdk: PathBuf,
     pub plugin: PathBuf,
+    pub frontend: PathBuf,
     pub sdk_sha256: String,
     pub plugin_sha256: String,
+    pub frontend_sha256: String,
     llvm_version: String,
     pub protected_source_roots: Vec<PathBuf>,
     #[serde(skip)]
@@ -64,11 +66,12 @@ impl Profile {
         }
         let mut profile: Self =
             serde_json::from_slice(&bytes).context("read Rust compiler profile")?;
-        if profile.schema_version != 1
+        if profile.schema_version != 2
             || profile.llvm_version != "23.1.3"
             || !profile.rustc.is_absolute()
             || !profile.sdk.is_absolute()
             || !profile.plugin.is_absolute()
+            || !profile.frontend.is_absolute()
             || profile.protected_source_roots.is_empty()
             || profile.protected_source_roots.len() > 16
             || profile.protected_source_roots.iter().any(|path| {
@@ -78,17 +81,18 @@ impl Profile {
                         .any(|part| matches!(part, std::path::Component::ParentDir))
             })
         {
-            bail!("invalid qualified Rust compiler profile");
+            bail!("invalid qualified Rust compiler profile; run make rust-llvm-build");
         }
         for (path, expected) in [
             (&profile.sdk, &profile.sdk_sha256),
             (&profile.plugin, &profile.plugin_sha256),
+            (&profile.frontend, &profile.frontend_sha256),
         ] {
             if !fs::symlink_metadata(path)?.is_file()
                 || expected.len() != 64
                 || hash(path)? != *expected
             {
-                bail!("Rust compiler SDK/pass fingerprint mismatch; rebuild the compiler profile");
+                bail!("Rust compiler SDK/pass/frontend fingerprint mismatch; rebuild the compiler profile");
             }
         }
         profile.fingerprint = format!("{:x}", Sha256::digest(&bytes));
@@ -202,5 +206,38 @@ mod tests {
             assert!(Profile::validate_version(true, &changed).is_err());
         }
         assert!(Profile::validate_version(false, &version).is_err());
+    }
+
+    #[test]
+    fn profile_binds_the_frontend_and_refuses_older_or_changed_inputs() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path();
+        for name in ["sdk.rlib", "pass.dylib", "frontend"] {
+            fs::write(root.join(name), name).unwrap();
+        }
+        let path = root.join("profile.json");
+        let value = serde_json::json!({"schema_version":2,"rustc":"/compiler/bin/rustc",
+            "sdk":root.join("sdk.rlib"),"sdk_sha256":hash(&root.join("sdk.rlib")).unwrap(),
+            "plugin":root.join("pass.dylib"),"plugin_sha256":hash(&root.join("pass.dylib")).unwrap(),
+            "frontend":root.join("frontend"),"frontend_sha256":hash(&root.join("frontend")).unwrap(),
+            "llvm_version":"23.1.3","protected_source_roots":["/sdk"]});
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(Profile::load(&path).is_ok());
+        fs::write(root.join("frontend"), b"changed compiler frontend").unwrap();
+        assert!(Profile::load(&path)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("fingerprint"));
+        fs::write(root.join("frontend"), b"frontend").unwrap();
+        for (key, replacement) in [
+            ("schema_version", serde_json::json!(1)),
+            ("frontend", serde_json::json!("relative/frontend")),
+        ] {
+            let mut changed = value.clone();
+            changed[key] = replacement;
+            fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(Profile::load(&path).is_err());
+        }
     }
 }

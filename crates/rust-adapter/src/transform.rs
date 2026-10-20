@@ -19,8 +19,8 @@ pub struct Function {
     #[serde(skip)]
     pub(crate) compiler_site: CompilerSite,
 }
-#[derive(Debug, Serialize)]
-pub(crate) struct CompilerSite {
+#[derive(Clone, Debug, serde::Deserialize, Serialize)]
+pub struct CompilerSite {
     pub leaf: String,
     pub header_start: usize,
     pub header_end: usize,
@@ -69,6 +69,17 @@ impl CompilerSite {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Rewrite,
+    Inspect,
+    CompilerInventory,
+}
+impl Mode {
+    fn inspecting(self) -> bool {
+        self != Self::Rewrite
+    }
+}
 struct Parser<'a> {
     source: &'a str,
     scope: Vec<String>,
@@ -78,7 +89,7 @@ struct Parser<'a> {
     selected_source: bool,
     plan: &'a Plan,
     startup: bool,
-    inspect: bool,
+    mode: Mode,
     guard: String,
     shutdown: String,
     error: Option<anyhow::Error>,
@@ -211,7 +222,7 @@ impl Parser<'_> {
         });
         if selected {
             if let Some(reason) = unsupported {
-                if !self.inspect {
+                if !self.mode.inspecting() {
                     self.error = Some(anyhow::anyhow!("{name}: {reason}"));
                 }
             } else {
@@ -318,7 +329,7 @@ impl Parser<'_> {
         }
         if selected {
             if let Some(reason) = unsupported {
-                if !self.inspect {
+                if !self.mode.inspecting() {
                     self.error = Some(anyhow::anyhow!("{name}: {reason}"));
                 }
                 return;
@@ -479,7 +490,10 @@ impl<'ast> Visit<'ast> for Parser<'_> {
         self.scope.pop();
     }
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        if self.selected_source && node.path.is_ident("include") {
+        if self.selected_source
+            && node.path.is_ident("include")
+            && self.mode != Mode::CompilerInventory
+        {
             self.error = Some(anyhow::anyhow!(
                 "Rust include! source fragments require separate qualification"
             ));
@@ -505,6 +519,45 @@ pub fn transform(
     selected_source: bool,
     startup: bool,
     inspect: bool,
+) -> Result<(String, Vec<Function>)> {
+    transform_mode(
+        source,
+        identity,
+        plan,
+        selected_source,
+        startup,
+        if inspect {
+            Mode::Inspect
+        } else {
+            Mode::Rewrite
+        },
+    )
+}
+
+pub(crate) fn compiler_definitions(
+    source: &str,
+    identity: &str,
+    plan: &Plan,
+    selected_source: bool,
+    startup: bool,
+) -> Result<(String, Vec<Function>)> {
+    transform_mode(
+        source,
+        identity,
+        plan,
+        selected_source,
+        startup,
+        Mode::CompilerInventory,
+    )
+}
+
+fn transform_mode(
+    source: &str,
+    identity: &str,
+    plan: &Plan,
+    selected_source: bool,
+    startup: bool,
+    mode: Mode,
 ) -> Result<(String, Vec<Function>)> {
     if source.contains(&format!("/*{MARKER}*/")) {
         bail!("Rust input is already generated");
@@ -533,7 +586,7 @@ pub fn transform(
         selected_source,
         plan,
         startup,
-        inspect,
+        mode,
         guard: unique("__quux_otelc_guard"),
         shutdown: unique("__quux_otelc_shutdown"),
         error: None,
@@ -546,7 +599,7 @@ pub fn transform(
     parser
         .edits
         .sort_by_key(|(position, _)| std::cmp::Reverse(*position));
-    if !inspect {
+    if !mode.inspecting() {
         for (position, code) in parser.edits {
             generated.insert_str(position, &code);
         }

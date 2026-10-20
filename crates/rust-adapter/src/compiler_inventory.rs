@@ -1,29 +1,18 @@
 //! Resolve compiler-hook identities from original declarations and common policy.
 use anyhow::{bail, Result};
 use quux_otelc_rust::policy::Plan;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Definition {
-    file: String,
-    name: String,
-    suffix: String,
-    unsupported: String,
-    selected: bool,
+    pub file: String,
+    pub name: String,
+    pub suffix: String,
+    pub unsupported: String,
+    pub selected: bool,
     #[serde(flatten)]
-    site: crate::transform::CompilerSite,
-}
-impl Definition {
-    pub(crate) fn selected_or_startup(&self) -> bool {
-        self.selected || self.site.startup
-    }
-    pub(crate) fn startup(&self) -> bool {
-        self.site.startup
-    }
-    pub(crate) fn unsupported_reason(&self) -> Option<&str> {
-        (!self.unsupported.is_empty()).then_some(&self.unsupported)
-    }
+    pub site: crate::transform::CompilerSite,
 }
 
 /// The caller supplies the absolute original compiler source path, never a generated copy.
@@ -39,7 +28,7 @@ pub fn source_definitions(
         bail!("Rust compiler inventory requires an absolute original path and identity");
     }
     let (_, functions) =
-        crate::transform::transform(source, identity, plan, selected_source, startup, true)?;
+        crate::transform::compiler_definitions(source, identity, plan, selected_source, startup)?;
     functions
         .into_iter()
         .map(|function| {

@@ -12,7 +12,8 @@ from ci import rust_llvm_coverage as gate
 
 
 COMPONENTS = ("crates/rust-adapter/src/compiler_inputs.rs", "crates/rust-adapter/src/compiler_profile.rs",
-              "crates/rust-adapter/src/compiler_llvm.rs", "native/rust/OtelcRustPass.cpp")
+              "crates/rust-adapter/src/compiler_llvm.rs", "crates/rust-adapter/src/compiler_frontend.rs",
+              "native/rust/frontend/src/main.rs", "native/rust/OtelcRustPass.cpp")
 
 
 def fixture(root: Path) -> None:
@@ -20,6 +21,11 @@ def fixture(root: Path) -> None:
     (root / "Cargo.lock").write_text("lockfile")
     (root / "crates/example").mkdir(parents=True)
     (root / "crates/example/lib.rs").write_text("fn selected() {}")
+    for name in ('native/rust/frontend/Cargo.toml', 'native/rust/frontend/Cargo.lock',
+                 'ci/build_rust_llvm.py', 'ci/rust_llvm_coverage.py', 'ci/rust_coverage.py'):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('source fixture')
 
 
 def report() -> str:
@@ -68,10 +74,14 @@ class CompilerCoverageTests(unittest.TestCase):
             (target / "retained").mkdir(parents=True)
             (target / "retained/old").write_text("old map")
             (target / "old.profraw").write_text("old profile")
-            with patch.object(gate, "environment", return_value=({"RUSTC": "/qualified/rustc"}, "/llvm-config")), patch.object(gate.builder, "llvm_tools", return_value=Path("/LLVM23")), patch.object(gate.builder, "compile_pass", return_value=target / "pass.dylib"), patch.object(gate.builder, "write_profile"), patch.object(gate.subprocess, "run") as run, patch.object(gate, "export_report", return_value=report()):
+            with patch.object(gate, "environment", return_value=({"RUSTC": "/qualified/rustc", "RUSTFLAGS": "-C instrument-coverage"}, "/llvm-config")), patch.object(gate.builder, "llvm_tools", return_value=Path("/LLVM23")), patch.object(gate.builder, "compile_pass", return_value=target / "pass.dylib"), patch.object(gate.builder, "compile_frontend", return_value=target / "frontend") as frontend, patch.object(gate.builder, "write_profile"), patch.object(gate.subprocess, "run") as run, patch.object(gate, "export_report", return_value=report()):
                 self.assertEqual(gate.run(root), report())
+            self.assertEqual(frontend.call_args.args[3]['RUSTFLAGS'],
+                             '-C instrument-coverage -C metadata=otelc_frontend_coverage -C link-dead-code')
             self.assertFalse((target / "old.profraw").exists()); self.assertFalse((target / "retained/old").exists())
-            self.assertIn("--include-ignored", run.call_args_list[1].args[0])
+            qualification = [call.args[0] for call in run.call_args_list if call.args[0][:2] == ['cargo', 'test']]
+            self.assertEqual(len(qualification), 1)
+            self.assertIn("--include-ignored", qualification[0])
             self.assertTrue(all(call.kwargs["check"] for call in run.call_args_list))
             output = root / "build/rust-llvm-coverage.lcov"
             record = json.loads(output.with_suffix(".json").read_text())
@@ -79,15 +89,16 @@ class CompilerCoverageTests(unittest.TestCase):
             self.assertEqual(record["sources"], gate.source_hashes(root))
 
     def test_build_failure_and_source_changes_never_publish_success(self):
-        for changed in (False, True):
+        for changed in (False, True, 'frontend-lock'):
             with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory); fixture(root)
 
                 def compile_step(*_, **__):
                     if not changed: raise subprocess.CalledProcessError(1, "cargo")
-                    (root / "crates/example/lib.rs").write_text("changed during qualification")
+                    path = 'native/rust/frontend/Cargo.lock' if changed == 'frontend-lock' else 'crates/example/lib.rs'
+                    (root / path).write_text("changed during qualification")
 
-                with patch.object(gate, "environment", return_value=({"RUSTC": "/qualified/rustc"}, "/llvm-config")), patch.object(gate.builder, "llvm_tools", return_value=Path("/LLVM23")), patch.object(gate.builder, "compile_pass", return_value=Path("/pass")), patch.object(gate.builder, "write_profile"), patch.object(gate.subprocess, "run", side_effect=compile_step), patch.object(gate, "export_report", return_value=report()):
+                with patch.object(gate, "environment", return_value=({"RUSTC": "/qualified/rustc", "RUSTFLAGS": "-C instrument-coverage"}, "/llvm-config")), patch.object(gate.builder, "llvm_tools", return_value=Path("/LLVM23")), patch.object(gate.builder, "compile_pass", return_value=Path("/pass")), patch.object(gate.builder, "compile_frontend", return_value=Path("/frontend")), patch.object(gate.builder, "write_profile"), patch.object(gate.subprocess, "run", side_effect=compile_step), patch.object(gate, "export_report", return_value=report()):
                     with self.assertRaises((ValueError, subprocess.CalledProcessError)): gate.run(root)
                 self.assertFalse((root / "build/rust-llvm-coverage.json").exists())
 
