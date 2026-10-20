@@ -17,7 +17,7 @@ from test_python_adapter import Capture, plan
 from test_python_spans import trace_plan
 from quux_otelc_python.telemetry import Runtime, Session
 from quux_otelc_python.traces import TraceSession
-from quux_otelc_python.deadlines import Adapter, Deadline, workers
+from quux_otelc_python.deadlines import Adapter, Deadline, DeadlineHTTPSConnection, workers
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceResponse
 
 
@@ -35,11 +35,12 @@ def trickle_receiver(mode: str, tls: ssl.SSLContext | None = None, statuses: lis
         def do_POST(self):
             received.append(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             status = statuses[min(len(received) - 1, len(statuses) - 1)] if statuses else 200
+            fast = mode == "fast" or self.headers.get("X-Otelc-Test-Warm") == "1"
             headers = f"HTTP/1.1 {status} Response\r\nContent-Length: {len(body)}\r\nRetry-After: 0\r\n\r\n".encode()
-            if mode == "no_eof":
+            if mode == "no_eof" and not fast:
                 headers = b"HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\n"
             try:
-                if mode == "fast":
+                if fast:
                     self.wfile.write(headers + body)
                     self.wfile.flush()
                 elif mode == "headers":
@@ -190,19 +191,41 @@ class PythonDeadlineTests(unittest.TestCase):
                            check=True, capture_output=True, timeout=10)
             tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             tls.load_cert_chain(cert, key)
-            for mode in ("fast", "body", "headers", "no_eof"):
-                with self.subTest(mode=mode), trickle_receiver(mode, tls) as (endpoint, received), Session() as session:
-                    for _ in range(3 if mode == "fast" else 1):
+            original_connect = DeadlineHTTPSConnection.connect
+            connections = 0
+
+            def delayed_first_connect(connection: DeadlineHTTPSConnection) -> None:
+                nonlocal connections
+                connections += 1
+                if connections == 1:
+                    time.sleep(0.15)  # A valid cold handshake can exceed 100 ms.
+                original_connect(connection)
+
+            with patch.object(DeadlineHTTPSConnection, "connect", delayed_first_connect):
+                for mode in ("fast", "body", "headers", "no_eof"):
+                    with self.subTest(mode=mode), trickle_receiver(mode, tls) as (endpoint, received), Session() as session:
+                        # Verify TLS separately, then exercise response deadlines
+                        # on the established connection, including its reuse.
                         started = time.monotonic()
-                        try:
-                            response = session.post(endpoint, data=b"tls-batch", timeout=0.1, verify=str(cert))
-                        except requests.RequestException:
-                            response = None
-                        self.assertLess(time.monotonic() - started, 0.4)
-                        self.assertTrue(response is not None and response.status_code == 200 if mode == "fast"
-                                        else response is None or response.status_code != 200)
-                    self.assertTrue(received)
-                    self.assertTrue(all(body == b"tls-batch" for body in received))
+                        warm = session.post(endpoint, data=b"tls-batch", timeout=1, verify=str(cert),
+                                            headers={"X-Otelc-Test-Warm": "1"})
+                        self.assertEqual(warm.status_code, 200)
+                        self.assertLess(time.monotonic() - started, 1.3)
+                        for _ in range(3 if mode == "fast" else 1):
+                            started = time.monotonic()
+                            try:
+                                response = session.post(endpoint, data=b"tls-batch", timeout=0.1, verify=str(cert))
+                            except requests.RequestException:
+                                response = None
+                            elapsed = time.monotonic() - started
+                            self.assertLess(elapsed, 0.4)
+                            self.assertTrue(response is not None and response.status_code == 200 if mode == "fast"
+                                            else response is None or response.status_code != 200,
+                                            f"{mode}: response={response}, elapsed={elapsed:.3f}s, received={len(received)}")
+                        if mode == "fast":
+                            self.assertEqual(connections, 1, "all four successful requests must reuse one TLS connection")
+                        self.assertEqual(len(received), 4 if mode == "fast" else 2)
+                        self.assertTrue(all(body == b"tls-batch" for body in received))
 
     def test_private_pools_and_deadline_capacity_do_not_modify_application_transport(self):
         from urllib3 import poolmanager
