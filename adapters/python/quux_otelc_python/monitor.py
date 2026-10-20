@@ -53,6 +53,7 @@ class Monitor:
         self.tags = {}
         self.tool = None
         self.context = None
+        self.http = None
         if plan["annotations"]["read_existing"]:
             for path in self.root.rglob("*.py"):
                 name = source_name(str(path), self.root)
@@ -85,7 +86,7 @@ class Monitor:
             if len(self.names) >= self.plan["runtime"]["max_functions"] or len(name.encode()) > 1024:
                 if self.runtime.traces is not None:
                     self.runtime.reject_observation("function_capacity", self.parent_key(sys._getframe(1)),
-                                                    self.context.current.get() if self.context else None)
+                                                    self.parent_context())
                     return None
                 self.runtime.loss["function_capacity"] += 1
                 return sys.monitoring.DISABLE
@@ -97,12 +98,16 @@ class Monitor:
         frame = sys._getframe(1)
         key = id(frame)
         self.runtime.enter(key, name, self.parent_key(frame),
-                           self.context.current.get() if self.context else None)
+                           self.parent_context())
         if self.context is not None:
             with self.runtime.lock:
                 pending = self.runtime.pending.get(key)
                 if pending is not None:
                     self.context.enter(key, pending.trace)
+
+    def parent_context(self):
+        parent = self.context.current.get() if self.context else None
+        return parent if parent is not None else self.http.current() if self.http else None
 
     def parent_key(self, frame):
         parent = None
@@ -113,7 +118,8 @@ class Monitor:
             for _ in range(4096):
                 if ancestor is None:
                     break
-                if self.context is not None and self.context.boundary(ancestor.f_code):
+                if (self.context is not None and self.context.boundary(ancestor.f_code)
+                        or self.http is not None and self.http.boundary(ancestor.f_code)):
                     break
                 if id(ancestor.f_code) in self.names or self.display_name(ancestor.f_code) is not None:
                     parent = id(ancestor)
@@ -143,7 +149,7 @@ class Monitor:
                 pending = self.runtime.pending.get(id(frame))
                 if pending is None:
                     pending = self.runtime.pending.get(self.parent_key(frame))
-                parent = pending.trace if pending is not None else self.context.current.get() if self.context else None
+                parent = pending.trace if pending is not None else self.parent_context()
                 self.runtime.lifetimes.returned(frame, code, value, parent)
         if id(code) not in self.names:
             # A selected frame may have started while monitoring was off.
@@ -176,6 +182,13 @@ class Monitor:
         if self.context is not None:
             self.context.resume(id(sys._getframe(1)))
 
+    def handled_http_exception(self, code, _, exception):
+        if self.http is not None:
+            try:
+                self.http.handled(code, exception)
+            except Exception:
+                self.http.loss('http_hook')
+
     def install(self):
         monitoring = sys.monitoring
         for tool in (3, 4, 2, 5):
@@ -199,6 +212,18 @@ class Monitor:
             monitoring.register_callback(self.tool, events.PY_RESUME, self.resumed)
             monitoring.register_callback(self.tool, events.PY_THROW, self.thrown)
         self.runtime.monitor = self
+        if self.plan.get('propagation', {}).get('http', False):
+            from .http_context import HTTPContext
+            if self.runtime.traces is None:
+                self.close()
+                raise ValueError('Python HTTP propagation requires tracing')
+            self.http = HTTPContext(self.runtime)
+            monitoring.register_callback(self.tool, events.EXCEPTION_HANDLED, self.handled_http_exception)
+            try:
+                self.http.install()
+            except BaseException:
+                self.close()
+                raise
         self.refresh()
 
     def refresh(self):
@@ -209,6 +234,8 @@ class Monitor:
             events.PY_RETURN | events.PY_UNWIND if self.runtime.pending else 0)
         if self.context is not None and self.runtime.observing:
             mask |= events.PY_YIELD | events.PY_RESUME | events.PY_THROW
+        if self.http is not None and self.runtime.observing:
+            mask |= events.EXCEPTION_HANDLED
         sys.monitoring.set_events(self.tool, mask)
 
     def close(self):
@@ -216,11 +243,15 @@ class Monitor:
             return
         monitoring = sys.monitoring
         monitoring.set_events(self.tool, 0)
+        if self.http is not None:
+            self.http.close()
+            self.http = None
         if self.context is not None:
             self.context.close()
             self.context = None
         for event in (monitoring.events.PY_START, monitoring.events.PY_RETURN, monitoring.events.PY_UNWIND,
-                      monitoring.events.PY_YIELD, monitoring.events.PY_RESUME, monitoring.events.PY_THROW):
+                      monitoring.events.PY_YIELD, monitoring.events.PY_RESUME, monitoring.events.PY_THROW,
+                      monitoring.events.EXCEPTION_HANDLED):
             monitoring.register_callback(self.tool, event, None)
         monitoring.free_tool_id(self.tool)
         self.tool = None

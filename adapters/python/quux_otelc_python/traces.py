@@ -15,8 +15,9 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-from opentelemetry.trace import Link, NonRecordingSpan, Status, StatusCode
+from opentelemetry.trace import Link, NonRecordingSpan, SpanContext as SDKSpanContext, SpanKind, Status, StatusCode, TraceFlags, TraceState
 
+from .carrier import Context as WireContext
 from .telemetry import Session, export_headers
 
 
@@ -28,6 +29,15 @@ class SpanContext:
 
 
 SUPPRESSED = SpanContext()
+
+
+def remote_context(parent: WireContext) -> SDKSpanContext:
+    """Retain canonical wire state when constructing an SDK remote parent."""
+    state = TraceState.from_header([parent.tracestate]) if parent.tracestate else TraceState()
+    if state.to_header() != (parent.tracestate or ''):
+        raise ValueError('SDK cannot represent canonical remote state')
+    return SDKSpanContext(parent.trace_id, parent.span_id, True,
+                          TraceFlags(parent.trace_flags), state)
 
 
 @dataclass
@@ -113,7 +123,8 @@ class TraceStore:
             resource=resource, sampler=ParentBased(TraceIdRatioBased(ratio)),
             shutdown_on_exit=False,
             span_limits=SpanLimits(max_attributes=3 if plan.get('lifetimes', {}).get('enabled') else 2,
-                                   max_events=0, max_links=1 if plan.get('lifetimes', {}).get('enabled') else 0,
+                                   max_events=0, max_links=1 if (plan.get('lifetimes', {}).get('enabled')
+                                                               or plan.get('propagation', {}).get('http')) else 0,
                                    max_span_attribute_length=1024))
         self.tracer = self.provider.get_tracer("quux.otelc", "0.1.0")
         self.delegate = delegate if delegate is not None else OTLPSpanExporter(
@@ -154,10 +165,13 @@ class TraceStore:
             self.losses[reason] += 1
         return SUPPRESSED
 
-    def begin(self, parent, name, started):
+    def begin(self, parent, name, started, *, remote=None, kind=SpanKind.INTERNAL, links=()):
+        if parent is not None and remote is not None:
+            raise ValueError('cannot combine local and remote parents')
         if parent is not None:
             if not parent.sampled:
-                return SUPPRESSED
+                # Unrecorded valid SDK identities still carry unsampled HTTP context.
+                return parent
             tree = self.roots.get(parent.local_root)
             if tree is None:
                 self.losses["context_expired"] += 1
@@ -170,14 +184,17 @@ class TraceStore:
             wall = tree.epoch + max(0, started - tree.origin)
         else:
             context, wall = Context(), time.time_ns()
+            if remote is not None:
+                context = trace.set_span_in_context(NonRecordingSpan(remote_context(remote)), context)
         span = self.tracer.start_span(name, context=context, start_time=wall,
+                                      kind=kind, links=links,
                                       attributes={"code.function.name": name})
         identity = span.get_span_context()
         if not identity.is_valid:
             return self.reject(parent, "invalid")
         if not identity.trace_flags.sampled:
             self.sampled_out += 1
-            return SUPPRESSED
+            return SpanContext(identity)
         if parent is None:
             if len(self.roots) >= self.policy["max_active_traces"] or self.retained >= 1048576:
                 return self.reject(None, "trace_capacity")
