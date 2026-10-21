@@ -8,12 +8,16 @@ import os
 import re
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 
 from otelc.config import Policy, Selection
 
 AGENT_VERSION = "2.32.0"
 AGENT_SHA256 = "f787eb6c7f3d18e69a431e108a15278d25ee37f83d68b678f621e063f3988f82"
+PARSER_CLASS = ("io/opentelemetry/javaagent/shaded/io/opentelemetry/api/trace/"
+                "propagation/internal/W3CTraceContextEncoding.class")
+PARSER_SHA256 = "bb56f27410ee111a92ab5c172eacb136f1e69795d4e84906a036d7d3b1b42712"
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -38,6 +42,37 @@ def agent() -> Path:
         temporary.replace(path)
     if hashlib.sha256(path.read_bytes()).hexdigest() != AGENT_SHA256:
         raise ValueError("cached official Java agent checksum mismatch")
+    return path
+
+
+def parser_patch() -> Path:
+    """Require the exact official patched parser, with no extra bootstrap code."""
+    path = ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT-bootstrap-patch.jar"
+    if os.pathsep in str(path):
+        raise ValueError("bootstrap parser patch path contains a classpath separator")
+    if not path.is_file():
+        raise ValueError("build the Java bootstrap parser patch with make java-build first")
+    if path.stat().st_size > 262_144:
+        raise ValueError("bootstrap parser patch JAR is too large")
+    required = {PARSER_CLASS, "META-INF/LICENSE.opentelemetry", "META-INF/NOTICE.opentelemetry"}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            files = {name for name in names if not name.endswith("/")}
+            directories = {name for name in names if name.endswith("/")}
+            if (len(set(names)) != len(names) or files != required
+                    or any(not any(file.startswith(directory) for file in required) for directory in directories)):
+                raise ValueError("unexpected or missing bootstrap patch entries")
+            if any(info.orig_filename != info.filename or info.flag_bits & 1
+                   or info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                   for info in archive.infolist()):
+                raise ValueError("unsupported bootstrap patch encryption or compression")
+            if archive.getinfo(PARSER_CLASS).file_size > 16_384:
+                raise ValueError("bootstrap parser class is too large")
+            if hashlib.sha256(archive.read(PARSER_CLASS)).hexdigest() != PARSER_SHA256:
+                raise ValueError("bootstrap parser patch checksum mismatch")
+    except zipfile.BadZipFile as error:
+        raise ValueError("invalid bootstrap parser patch JAR") from error
     return path
 
 
@@ -179,7 +214,8 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
         "health.selection-sha256": hashlib.sha256(selection.encode()).hexdigest(),
         "health.shutdown-timeout-ms": str(data["export"]["shutdown_timeout_ms"]),
     }))
-    launch += [f"-javaagent:{agent()}", f"-Dotel.javaagent.extensions={extension}",
+    launch += [f"-Xbootclasspath/a:{parser_patch()}",
+               f"-javaagent:{agent()}", f"-Dotel.javaagent.extensions={extension}",
                f"-Dotel.javaagent.configuration-file={configuration}", f"-Dotelc.plan={plan}",
                f"-Dotelc.traces.enabled={str(data['traces']['enabled']).lower()}",
                f"-Dotelc.lifetime.types={','.join(types)}",
