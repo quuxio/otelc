@@ -84,7 +84,8 @@ class WitnessClassCaptureTests {
     assertThrows(IllegalArgumentException.class, () -> WitnessClassCapture.install(jvm.instrumentation, Map.of(), Map.of()));
     Map<String, WitnessBindings.Binding> swapped = new HashMap<>(original);
     swapped.put("target", original.get("wrapper"));
-    assertThrows(IllegalArgumentException.class, () -> WitnessClassCapture.install(jvm.instrumentation, swapped, Map.of(OWNER, ORIGIN)));
+    Map<String, String> expectedOrigins = Map.of(OWNER, ORIGIN);
+    assertThrows(IllegalArgumentException.class, () -> WitnessClassCapture.install(jvm.instrumentation, swapped, expectedOrigins));
     for (Map<String, String> origins : java.util.List.of(Map.<String, String>of(), Map.of(OWNER, ""), Map.of("Other", ORIGIN))) {
       assertThrows(IllegalArgumentException.class, () -> WitnessClassCapture.install(jvm.instrumentation, original, origins));
     }
