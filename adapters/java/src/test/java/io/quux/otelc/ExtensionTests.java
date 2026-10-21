@@ -13,6 +13,7 @@ import io.opentelemetry.sdk.metrics.InstrumentType;
 import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.metrics.data.AggregationTemporality;
 import io.opentelemetry.sdk.metrics.data.MetricData;
+import io.opentelemetry.sdk.metrics.data.LongPointData;
 import io.opentelemetry.sdk.metrics.export.MetricExporter;
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import io.quux.otelc.lifecycle.Observer;
@@ -56,7 +57,7 @@ class ExtensionTests {
 
   static long count(String name) {
     return GLOBAL.collectAllMetrics().stream().filter(metric -> metric.getName().equals(name))
-        .flatMap(metric -> metric.getLongSumData().getPoints().stream()).mapToLong(point -> point.getValue()).sum();
+        .flatMap(metric -> metric.getLongSumData().getPoints().stream()).mapToLong(LongPointData::getValue).sum();
   }
 
   @Test void cachedAndNewInstrumentsFollowCollectionState() {
@@ -75,7 +76,7 @@ class ExtensionTests {
       state.command("collection on");
       counter.add(7);
       late.add(5);
-      assertEquals(15, reader.collectAllMetrics().stream().flatMap(metric -> metric.getLongSumData().getPoints().stream()).mapToLong(point -> point.getValue()).sum());
+      assertEquals(15, reader.collectAllMetrics().stream().flatMap(metric -> metric.getLongSumData().getPoints().stream()).mapToLong(LongPointData::getValue).sum());
       for (String command : List.of("off", "on", "emission off", "emission on", "flush", "status")) {
         assertTrue(state.command(command).contains("\"schema_version\":1"));
       }

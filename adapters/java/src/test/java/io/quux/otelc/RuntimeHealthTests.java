@@ -235,12 +235,12 @@ class RuntimeHealthTests {
     int ends;
     CompletableResultCode flushed = CompletableResultCode.ofSuccess();
     CompletableResultCode closed = CompletableResultCode.ofSuccess();
-    public void onStart(Context parent, ReadWriteSpan span) { starts++; }
-    public boolean isStartRequired() { return true; }
-    public void onEnd(ReadableSpan span) { ends++; }
-    public boolean isEndRequired() { return true; }
-    public CompletableResultCode forceFlush() { return flushed; }
-    public CompletableResultCode shutdown() { return closed; }
+    @Override public void onStart(Context parent, ReadWriteSpan span) { starts++; }
+    @Override public boolean isStartRequired() { return true; }
+    @Override public void onEnd(ReadableSpan span) { ends++; }
+    @Override public boolean isEndRequired() { return true; }
+    @Override public CompletableResultCode forceFlush() { return flushed; }
+    @Override public CompletableResultCode shutdown() { return closed; }
   }
 
   @Test void unsupportedProcessorAndShutdownFailureStayUnavailable() throws Exception {
