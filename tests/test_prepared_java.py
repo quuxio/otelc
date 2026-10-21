@@ -18,6 +18,8 @@ from otelc import control, java, prepared_java
 from otelc.config import Policy, Selection
 from test_java_integration import Capture, batch
 
+APPLICATION_STDERR = "[otel.javaagent] application-owned text\nOpenJDK application-owned warning\n"
+
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -109,6 +111,9 @@ class ManifestTests(unittest.TestCase):
         launch = prepared_java.prepare(application, policy, runtime, plain=True)
         launch.verify_inputs()
         self.assertIsNone(launch.identity["control_socket"])
+        self.assertIsNone(launch.identity["agent_diagnostics"])
+        self.assertEqual(launch.identity["jvm_profile"], "default")
+        self.assertNotIn("-Xshare:off", launch.argv)
         self.assertTrue((runtime / "launch.json").is_file())
         with self.assertRaisesRegex(ValueError, "fresh"):
             prepared_java.prepare(application, policy, runtime, plain=True)
@@ -178,6 +183,8 @@ public final class Driver {
     Excluded.workload(); item.close(); return value;
   }
   public static void main(String[] args) throws Exception {
+    System.err.println("[otel.javaagent] application-owned text");
+    System.err.println("OpenJDK application-owned warning");
     var input = new BufferedReader(new InputStreamReader(System.in));
     String line;
     while ((line = input.readLine()) != null && !line.equals("quit")) {
@@ -211,7 +218,10 @@ public final class Driver {
             for plain in (True, False):
                 runtime = root / ("plain" if plain else "instrumented")
                 runtime.mkdir(mode=0o700)
-                launch = prepared_java.prepare(application, policy, runtime, plain=plain, arguments=("argument with spaces",))
+                launch = prepared_java.prepare(application, policy, runtime, plain=plain,
+                                               arguments=("argument with spaces",), diagnostic_profile=True)
+                self.assertIn("-Xshare:off", launch.argv)
+                self.assertEqual(launch.identity["jvm_profile"], "diagnostic-no-cds")
                 with (runtime / "stderr").open("w+") as errors:
                     process = subprocess.Popen(launch.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
                     try:
@@ -246,7 +256,7 @@ public final class Driver {
                         process.stdin.close()
                         process.stdout.close()
                     errors.seek(0)
-                    self.assertNotIn("ERROR", errors.read())
+                    self.assertEqual(errors.read(), APPLICATION_STDERR)
                 launch.verify_inputs()
                 origins = (runtime / "class-load.log").read_text()
                 self.assertIn("external.Driver source: file:", origins)
@@ -255,6 +265,9 @@ public final class Driver {
                     self.assertFalse(capture.metrics)
                     self.assertFalse(capture.traces)
                 else:
+                    diagnostics = Path(launch.identity["agent_diagnostics"]).read_text()
+                    self.assertIn("opentelemetry-javaagent - version: 2.32.0", diagnostics)
+                    self.assertNotIn("application-owned", diagnostics)
                     (runtime / "plan.properties").write_text("changed=true\n")
                     with self.assertRaisesRegex(ValueError, "configuration changed"):
                         launch.verify_inputs()
@@ -269,6 +282,7 @@ public final class Driver {
                                      "--plain", "--", "argument with spaces"],
                                     input="2\nquit\n", capture_output=True, text=True, check=True)
             self.assertEqual(json.loads(result.stdout)["checksum"], 3)
+            self.assertEqual(result.stderr, APPLICATION_STDERR)
             self.assertGreater(json.loads((runtime / "process.json").read_text())["pid"], 0)
             runtime = root / "prepared-json"
             result = subprocess.run([sys.executable, "-m", "otelc", "java", "--manifest", str(manifest),
@@ -276,9 +290,12 @@ public final class Driver {
                                     capture_output=True, text=True, check=True)
             identity = json.loads(result.stdout)
             self.assertEqual(identity["control_socket"], str(runtime.resolve() / "control.sock"))
+            self.assertEqual(identity["jvm_profile"], "default")
+            self.assertNotIn("-Xshare:off", identity["argv"])
             self.assertTrue(any(argument.startswith("-javaagent:") for argument in identity["argv"]))
             self.assertFalse((runtime / "process.json").exists())
             self.assertFalse((runtime / "class-load.log").exists())
+            self.assertFalse(Path(identity["agent_diagnostics"]).exists())
             application_jar = root / "application.jar"
             with zipfile.ZipFile(application_jar, "w") as archive:
                 for compiled in classes.rglob("*.class"):
@@ -288,10 +305,12 @@ public final class Driver {
             jar_capture = Capture()
             self.addCleanup(jar_capture.close)
             data["export"]["endpoint"] = f"http://127.0.0.1:{jar_capture.server.server_port}"
+            data["lifetimes"]["enabled"] = False
             runtime = root / "bound-jar"
             runtime.mkdir(mode=0o700)
             launch = prepared_java.prepare(prepared_java.PreparedApplication.load(manifest),
-                                           Policy.parse(data), runtime, arguments=("argument with spaces",))
+                                           Policy.parse(data), runtime, arguments=("argument with spaces",),
+                                           diagnostic_profile=True)
             with subprocess.Popen(launch.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True) as process:
                 try:
@@ -302,6 +321,7 @@ public final class Driver {
                     self.assertEqual(jar_capture.calls(), 2)
                     output, errors = process.communicate("quit\n", timeout=15)
                     self.assertEqual(process.returncode, 0, errors)
+                    self.assertEqual(errors, APPLICATION_STDERR)
                     self.assertEqual(output, "")
                 finally:
                     if process.poll() is None:
@@ -309,6 +329,7 @@ public final class Driver {
                         process.wait(timeout=5)
             launch.verify_inputs()
             self.assertIn("application.jar", (runtime / "class-load.log").read_text())
+            self.assertIn("Helper classes and resources wont be injected", Path(launch.identity["agent_diagnostics"]).read_text())
 
 
 if __name__ == "__main__":

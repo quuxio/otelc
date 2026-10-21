@@ -30,6 +30,7 @@ def main() -> int:
     prepared.add_argument("--runtime", type=Path, required=True, help="new private directory with a short path")
     prepared.add_argument("--plain", action="store_true")
     prepared.add_argument("--prepare-only", action="store_true", help="emit JSON launch identity without starting Java")
+    prepared.add_argument("--diagnostic-profile", action="store_true", help="disable JVM CDS in both comparison lanes")
     prepared.add_argument("arguments", nargs=argparse.REMAINDER)
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--socket", type=Path, required=True)
@@ -43,7 +44,8 @@ def main() -> int:
         if args.command == "java":
             arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
             return prepared_java.run(args.manifest, policy, args.runtime, plain=args.plain,
-                                     prepare_only=args.prepare_only, arguments=tuple(arguments))
+                                     prepare_only=args.prepare_only, arguments=tuple(arguments),
+                                     diagnostic_profile=args.diagnostic_profile)
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"], "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0

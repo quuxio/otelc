@@ -60,7 +60,8 @@ manifest = {"schema_version": 1, "main_class": "examples.BenchmarkApp",
 (classes.parent / "application.json").write_text(json.dumps(manifest, indent=2))
 PY
 .venv/bin/python -m otelc --config examples/otelc.toml java \
-  --manifest build/prepared/application.json --runtime /tmp/otelc-java-$$
+  --manifest build/prepared/application.json --runtime /tmp/otelc-java-$$ \
+  --diagnostic-profile
 ```
 
 The CLI creates a new owned 0700 runtime directory. Its path must be short and contain no `:`, `,`, `=` or `%`. Enter `10`, `gc`, `lifecycle`, `throw` or `quit`, as for the built-in example. Use a new runtime path and `--plain` for a baseline run. Arguments after `--` go unchanged to the main method. The same policy applies; no agent-specific settings belong in it.
@@ -79,7 +80,8 @@ from otelc.prepared_java import PreparedApplication, prepare
 application = PreparedApplication.load(Path("build/prepared/application.json"))
 runtime = Path("/tmp/otelc-prepared-consumer")  # fresh for each run
 runtime.mkdir(mode=0o700)
-launch = prepare(application, Policy.load(Path("examples/otelc.toml")), runtime)
+launch = prepare(application, Policy.load(Path("examples/otelc.toml")), runtime,
+                 diagnostic_profile=True)
 launch.verify_inputs()
 process = subprocess.Popen(launch.argv, stdin=subprocess.PIPE, text=True)
 state = control.wait_ready(Path(launch.identity["control_socket"]), process.pid)
@@ -92,10 +94,16 @@ launch.verify_inputs()
 
 `prepare(..., plain=True, arguments=(... ,))` gives the baseline command without an agent or controls. Both modes send JVM class-loading diagnostics to a separate `class-load.log`, preserving application stdout/stderr. Consumers own process cleanup and PID recording; the CLI records its PID automatically.
 
+For exact application-output comparison, pass `diagnostic_profile=True` to **both** prepares, or `--diagnostic-profile` to both CLI lanes. This adds `-Xshare:off` in both JVM commands and records `jvm_profile=diagnostic-no-cds`. It avoids the JVM CDS/bootstrap warning without deleting stderr text. The ordinary default profile retains its original JVM CDS setting; startup/performance results from different profiles must not be mixed.
+
+Instrumented prepared launches route the pinned agent's simple logger directly to `agent.log`, recorded in `agent_diagnostics`. The command explicitly sets `otel.javaagent.logging=simple` and `io.opentelemetry.javaagent.slf4j.simpleLogger.logFile`; these settings are also retained in the recorded argv. The official agent's [simple logging implementation](https://github.com/open-telemetry/opentelemetry-java-instrumentation/blob/v2.32.0/javaagent-internal-logging-simple/src/main/java/io/opentelemetry/javaagent/logging/simple/Slf4jSimpleLoggingCustomizer.java) uses its own shaded SLF4J backend. This version-specific setting is covered by the exact-agent checksum and real launch tests. Agent version, helper warnings and later agent/SDK diagnostics remain available in that file. Plain launches have no agent log.
+
+Application stdout/stderr are never filtered or globally redirected. Application text that resembles an agent or JVM warning remains byte-for-byte visible. Early fatal JVM/premain failures can still write stderr before logging is established; preserve those failed runs and do not present them as successful application-output qualification. The diagnostic profile separates successful-run diagnostics; it does not promise that arbitrary application/native code cannot produce its own warnings.
+
 Use `java --prepare-only` with the same CLI arguments for a JSON preparation route in the provider's own Python environment. It creates `launch.json`, prints the same identity JSON (including `argv` and `control_socket`), and starts no application JVM. The JDK version query still runs. A consumer can execute that argv with its own bounded process driver without importing otelc into its host environment. Loaded-origin evidence is available only after that child runs.
 
 `launch.json` records argv, ordered classpath, source/compiler bindings, file hashes/sizes/inodes/mtimes, JDK version/binary, policy digest, and instrumented agent/extension/generated-configuration identities. `class-load.log` records actual JVM loaded-class origins separately from the static inventory. The generated `agent.properties` retains the resolved official method selector; `launch.json` binds its hash.
 
 Verify inputs before launch and after execution. The CLI verifies after termination automatically; a mismatch is an error. This detects persistent changes, new classpath files and replaced inputs. It is not a filesystem snapshot or protection against inputs that change and are restored during execution. Keep inputs stable throughout the run. Dynamic JDK libraries, application I/O outside the explicit classpath, custom loader contents and transformed in-memory class bytes are not attested by the input record.
 
-Tests run an external main, an unbound dependency JAR, an excluded bound class, resource objects, unchanged arguments, plain execution, all four metric states in one PID, and decoded function/lifetime telemetry. Negative controls cover stale bindings, ambiguous inputs, unsupported JARs and runtime reuse. This does not qualify every Java build tool or extend lifetime classloader support.
+Tests run an external main, an unbound dependency JAR, an excluded bound class, resource objects, unchanged arguments, plain execution, all four metric states in one PID, and decoded function/lifetime telemetry. An agent-looking application stderr marker remains exactly identical in both diagnostic lanes; actual agent startup/helper diagnostics are retained separately, including when lifetimes are disabled. Negative controls cover stale bindings, ambiguous inputs, unsupported JARs and runtime reuse. This does not qualify every Java build tool or extend lifetime classloader support.
