@@ -56,6 +56,12 @@ class WitnessBindingsTests {
       catch (IllegalArgumentException error) { return -1; }
     }
     static int duplicateWrapper(int value) { target(value); return target(value); }
+    static int unicodeWrapper(int value) { return Δ.μέτρο(value); }
+    static int unicodeEnvelope(int value) { rendezvous(); return unicodeWrapper(value); }
+  }
+
+  static class Δ {
+    static int μέτρο(int value) { return value; }
   }
 
   static WitnessBindings.Declaration declaration(String method, String descriptor) {
@@ -101,19 +107,41 @@ class WitnessBindingsTests {
     assertEquals(4, WitnessBindings.compile(Map.of(OWNER, original()), instance).size());
   }
 
+  @Test void supportsUnicodeJavaNamesAndRejectsInvalidJvmDescriptors() throws IOException {
+    String owner = Type.getInternalName(Δ.class);
+    Map<String, WitnessBindings.Declaration> declarations = new HashMap<>(DECLARATIONS);
+    declarations.put("target", new WitnessBindings.Declaration(owner, "μέτρο", "(I)I"));
+    declarations.put("wrapper", declaration("unicodeWrapper", "(I)I"));
+    declarations.put("envelope", declaration("unicodeEnvelope", "(I)I"));
+    try (var stream = Δ.class.getResourceAsStream("/" + owner + ".class")) {
+      assertEquals("μέτρο", WitnessBindings.compile(Map.of(OWNER, original(), owner, stream.readAllBytes()), declarations)
+          .get("target").declaration().name());
+    }
+    for (String descriptor : new String[] {"(" + "J".repeat(128) + ")V", "()" + "[".repeat(256) + "I",
+        "(L;)V", "(Ljava/lang/Object)V", "(Lbad.name;)V", "([)V", "(I", "(", "()VI"}) {
+      assertThrows(IllegalArgumentException.class, () -> declaration("x", descriptor), descriptor);
+    }
+    assertEquals("(" + "I".repeat(255) + ")V", declaration("x", "(" + "I".repeat(255) + ")V").descriptor());
+    assertEquals("()[I", declaration("x", "()[I").descriptor());
+    assertThrows(IllegalArgumentException.class, () -> declaration("x\u0001", "()V"));
+  }
+
   @Test void refusesMissingDuplicateMalformedAndWrongOwnerDeclarations() throws IOException {
-    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(), DECLARATIONS));
+    Map<String, byte[]> noClasses = Map.of();
+    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(noClasses, DECLARATIONS));
     Map<String, WitnessBindings.Declaration> declarations = new HashMap<>(DECLARATIONS);
     declarations.remove("wrapper");
-    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(), declarations));
+    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(noClasses, declarations));
     declarations.put("wrapper", DECLARATIONS.get("target"));
-    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(), declarations));
+    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(noClasses, declarations));
     declarations.put("wrapper", declaration("absent", "()V"));
     byte[] bytes = original();
-    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(OWNER, bytes), declarations));
+    Map<String, byte[]> classes = Map.of(OWNER, bytes);
+    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(classes, declarations));
     declarations.put("wrapper", new WitnessBindings.Declaration("Other", "wrapper", "(I)I"));
+    Map<String, byte[]> wrongOwner = Map.of(OWNER, bytes, "Other", bytes);
     assertThrows(IllegalArgumentException.class,
-        () -> WitnessBindings.compile(Map.of(OWNER, bytes, "Other", bytes), declarations));
+        () -> WitnessBindings.compile(wrongOwner, declarations));
     for (String descriptor : new String[] {"", "I", "()", "(V)V", "()[V", "()Vjunk", "(Lbad//name;)V"}) {
       assertThrows(IllegalArgumentException.class, () -> declaration("target", descriptor), descriptor);
     }
@@ -137,22 +165,24 @@ class WitnessBindingsTests {
     Map<String, WitnessBindings.Declaration> declarations = new HashMap<>(DECLARATIONS);
     declarations.put("rendezvous", declaration("target", "(J)I"));
     byte[] bytes = original();
-    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(OWNER, bytes), declarations));
+    Map<String, byte[]> classes = Map.of(OWNER, bytes);
+    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(classes, declarations));
   }
 
   @Test void refusesActualJavacCompiledUnsafeHarnessesAndWrongOverload() throws IOException {
     byte[] bytes = original();
+    Map<String, byte[]> classes = Map.of(OWNER, bytes);
     for (String method : new String[] {"callbackEnvelope", "bypassEnvelope", "catchingEnvelope"}) {
       Map<String, WitnessBindings.Declaration> declarations = new HashMap<>(DECLARATIONS);
       declarations.put("envelope", declaration(method, "(I)I"));
-      assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(OWNER, bytes), declarations));
+      assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(classes, declarations));
     }
     Map<String, WitnessBindings.Declaration> declarations = new HashMap<>(DECLARATIONS);
     declarations.put("wrapper", declaration("duplicateWrapper", "(I)I"));
-    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(OWNER, bytes), declarations));
+    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(classes, declarations));
     declarations.put("wrapper", DECLARATIONS.get("wrapper"));
     declarations.put("target", declaration("target", "(J)I"));
-    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(Map.of(OWNER, bytes), declarations));
+    assertThrows(IllegalArgumentException.class, () -> WitnessBindings.compile(classes, declarations));
   }
 
   @Test void refusesWrapperCallbacksCatchesDuplicateCallsAndWrongStaticDispatch() throws IOException {

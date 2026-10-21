@@ -27,9 +27,12 @@ import org.objectweb.asm.tree.TableSwitchInsnNode;
 /** Compile exact method bindings for the proposed synchronous action capability. */
 public final class WitnessBindings {
   public static final String PROFILE = "java-sync-action-v1";
-  private static final Set<String> ROLES = Set.of("envelope", "rendezvous", "wrapper", "target");
-  private static final String INTERNAL_NAME = "[A-Za-z_$][A-Za-z0-9_$]*(?:/[A-Za-z_$][A-Za-z0-9_$]*)*";
-  private static final String VALUE_TYPE = "\\[*(?:[BCDFIJSZ]|L" + INTERNAL_NAME + ";)";
+  private static final String ENVELOPE = "envelope";
+  private static final String RENDEZVOUS = "rendezvous";
+  private static final String WRAPPER = "wrapper";
+  private static final String TARGET = "target";
+  private static final List<String> ROLE_ORDER = List.of(ENVELOPE, RENDEZVOUS, WRAPPER, TARGET);
+  private static final Set<String> ROLES = Set.copyOf(ROLE_ORDER);
   private static final int FORBIDDEN = Opcodes.ACC_ABSTRACT | Opcodes.ACC_NATIVE
       | Opcodes.ACC_SYNTHETIC | Opcodes.ACC_BRIDGE;
 
@@ -38,9 +41,7 @@ public final class WitnessBindings {
   /** The owner is a JVM internal name; descriptor includes the exact return type. */
   public record Declaration(String owner, String name, String descriptor) {
     public Declaration {
-      if (owner == null || !owner.matches(INTERNAL_NAME)
-          || name == null || !name.matches("[A-Za-z_$][A-Za-z0-9_$]*")
-          || descriptor == null || !descriptor.matches("\\((?:" + VALUE_TYPE + ")*\\)(?:V|" + VALUE_TYPE + ")")) {
+      if (!internalName(owner) || !identifier(name) || !methodDescriptor(descriptor)) {
         throw new IllegalArgumentException("invalid witness declaration");
       }
     }
@@ -55,6 +56,49 @@ public final class WitnessBindings {
   public record Binding(String role, Declaration declaration, String classSha256,
                         String methodSha256, String probeId) {}
 
+  private static boolean identifier(String text) {
+    if (text == null || text.isEmpty() || !Character.isJavaIdentifierStart(text.codePointAt(0))) return false;
+    return text.codePoints().allMatch(value -> Character.isJavaIdentifierPart(value) && !Character.isISOControl(value));
+  }
+
+  private static boolean internalName(String text) {
+    if (text == null) return false;
+    for (String segment : text.split("/", -1)) {
+      if (!identifier(segment)) return false;
+    }
+    return true;
+  }
+
+  private static boolean methodDescriptor(String text) {
+    if (text == null || !text.startsWith("(")) return false;
+    int index = 1;
+    int slots = 0;
+    while (index < text.length() && text.charAt(index) != ')') {
+      int end = valueEnd(text, index);
+      if (end < 0) return false;
+      slots += text.charAt(index) == 'J' || text.charAt(index) == 'D' ? 2 : 1;
+      if (slots > 255) return false;
+      index = end;
+    }
+    if (index >= text.length() - 1) return false;
+    index++;
+    return text.charAt(index) == 'V' ? index == text.length() - 1 : valueEnd(text, index) == text.length();
+  }
+
+  private static int valueEnd(String text, int index) {
+    int dimensions = 0;
+    while (index < text.length() && text.charAt(index) == '[') {
+      if (++dimensions > 255) return -1;
+      index++;
+    }
+    if (index == text.length()) return -1;
+    char kind = text.charAt(index);
+    if ("BCDFIJSZ".indexOf(kind) >= 0) return index + 1;
+    if (kind != 'L') return -1;
+    int end = text.indexOf(';', index);
+    return end > index && internalName(text.substring(index + 1, end)) ? end + 1 : -1;
+  }
+
   /** Validate all four roles together; do not derive a runtime capability from this result. */
   public static Map<String, Binding> compile(Map<String, byte[]> classes,
                                               Map<String, Declaration> declarations) {
@@ -66,7 +110,7 @@ public final class WitnessBindings {
     }
     Map<String, Binding> bindings = new LinkedHashMap<>();
     Map<String, MethodNode> methods = new LinkedHashMap<>();
-    for (String role : List.of("envelope", "rendezvous", "wrapper", "target")) {
+    for (String role : ROLE_ORDER) {
       Declaration declaration = declarations.get(role);
       byte[] bytes = classes.get(declaration.owner());
       if (bytes == null) throw new IllegalArgumentException("missing witness class: " + declaration.owner());
@@ -78,7 +122,7 @@ public final class WitnessBindings {
       if ((method.access & FORBIDDEN) != 0 || method.instructions.size() == 0) {
         throw new IllegalArgumentException("witness method must have ordinary executable bytecode");
       }
-      if (!role.equals("target") && (method.access & (Opcodes.ACC_STATIC | Opcodes.ACC_SYNCHRONIZED)) != Opcodes.ACC_STATIC) {
+      if (!role.equals(TARGET) && (method.access & (Opcodes.ACC_STATIC | Opcodes.ACC_SYNCHRONIZED)) != Opcodes.ACC_STATIC) {
         throw new IllegalArgumentException("control methods must be static and unsynchronised");
       }
       String classHash = digest(bytes);
@@ -88,11 +132,11 @@ public final class WitnessBindings {
       bindings.put(role, new Binding(role, declaration, classHash, methodHash, probe));
       methods.put(role, method);
     }
-    if (!declarations.get("rendezvous").descriptor().equals("()V")) {
+    if (!declarations.get(RENDEZVOUS).descriptor().equals("()V")) {
       throw new IllegalArgumentException("rendezvous must be static ()V");
     }
-    validateWrapper(methods.get("wrapper"), declarations.get("target"), methods.get("target"));
-    validateEnvelope(methods.get("envelope"), declarations.get("rendezvous"), declarations.get("wrapper"));
+    validateWrapper(methods.get(WRAPPER), declarations.get(TARGET), methods.get(TARGET));
+    validateEnvelope(methods.get(ENVELOPE), declarations.get(RENDEZVOUS), declarations.get(WRAPPER));
     return Map.copyOf(bindings);
   }
 
@@ -216,8 +260,7 @@ public final class WitnessBindings {
     if (arguments.length != 16) throw new IllegalArgumentException("expected four classfile/owner/name/descriptor groups");
     Map<String, byte[]> classes = new LinkedHashMap<>();
     Map<String, Declaration> declarations = new LinkedHashMap<>();
-    List<String> roles = List.of("envelope", "rendezvous", "wrapper", "target");
-    for (int index = 0; index < roles.size(); index++) {
+    for (int index = 0; index < ROLE_ORDER.size(); index++) {
       int offset = index * 4;
       byte[] bytes = Files.readAllBytes(Path.of(arguments[offset]));
       String owner = arguments[offset + 1];
@@ -225,13 +268,13 @@ public final class WitnessBindings {
       if (previous != null && !java.util.Arrays.equals(previous, bytes)) {
         throw new IllegalArgumentException("conflicting class bytes for one owner");
       }
-      declarations.put(roles.get(index), new Declaration(owner, arguments[offset + 2], arguments[offset + 3]));
+      declarations.put(ROLE_ORDER.get(index), new Declaration(owner, arguments[offset + 2], arguments[offset + 3]));
     }
     Map<String, Binding> result = compile(classes, declarations);
     StringBuilder output = new StringBuilder("{\"schema_version\":1,\"kind\":\"otelc.java-witness-bindings\",\"profile\":\"")
         .append(PROFILE).append("\",\"bindings\":{");
-    for (String role : roles) {
-      if (!role.equals("envelope")) output.append(',');
+    for (String role : ROLE_ORDER) {
+      if (!role.equals(ENVELOPE)) output.append(',');
       Binding binding = result.get(role);
       output.append('"').append(role).append("\":{\"probe_id\":\"").append(binding.probeId())
           .append("\",\"owner\":\"").append(binding.declaration().owner())
@@ -240,6 +283,6 @@ public final class WitnessBindings {
           .append("\",\"class_sha256\":\"").append(binding.classSha256())
           .append("\",\"method_sha256\":\"").append(binding.methodSha256()).append("\"}");
     }
-    System.out.println(output.append("}}"));
+    System.out.write(output.append("}}\n").toString().getBytes(StandardCharsets.UTF_8));
   }
 }
