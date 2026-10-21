@@ -123,6 +123,20 @@ def validate_lifetime_type(name: str, output: str) -> None:
         raise ValueError("initial Java lifetime profile requires one constructor")
 
 
+def selected_return_types(output: str, methods: list[str]) -> set[str]:
+    """Read reference return metadata needed by the pinned advice, without loading classes."""
+    result = set()
+    pattern = r"\s([\w$]+)\([^)]*\)(?: throws [^;]+)?;\s+descriptor: \([^)]*\)(\S+)"
+    for method, descriptor in re.findall(pattern, output):
+        returned = descriptor.lstrip("[")
+        if method in methods and returned.startswith("L"):
+            name = returned[1:-1].replace("/", ".")
+            if not name or name.startswith(("-", "@")) or "\x00" in name:
+                raise ValueError("invalid selected Java return type")
+            result.add(name)
+    return result
+
+
 def has_release_method(output: str, methods: list[str]) -> bool:
     """Find a selected existing instance zero-argument void release method."""
     for release in methods:
@@ -138,18 +152,25 @@ def resolve_bindings(classpath: list[Path], bindings: dict[str, str], policy: Po
     selected: dict[str, list[str]] = {}
     types: list[str] = []
     resources: list[str] = []
+    return_types: set[str] = set()
     for name, source in sorted(bindings.items()):
         if not policy.selection("sources").accepts(source):
             continue
-        output = subprocess.check_output([executable("javap"), "-p", "-classpath", os.pathsep.join(map(str, classpath)), name], text=True)
+        output = subprocess.check_output([executable("javap"), "-p", "-s", "-classpath", os.pathsep.join(map(str, classpath)), name], text=True)
         methods = selected_methods(name, output, policy.selection("functions"))
         if methods:
             selected[name] = methods
+            return_types.update(selected_return_types(output, methods))
         if policy.data["lifetimes"]["enabled"] and policy.selection("lifetimes").accepts(name):
             validate_lifetime_type(name, output)
             types.append(name)
             if has_release_method(output, policy.data["lifetimes"]["release_methods"]):
                 resources.append(name)
+    if return_types:
+        checked = subprocess.run([executable("javap"), "-classpath", os.pathsep.join(map(str, classpath)),
+                                  *sorted(return_types)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=30)
+        if checked.returncode:
+            raise ValueError("selected Java return-type metadata is unavailable: " + checked.stderr.strip())
     return selected, types, resources
 
 

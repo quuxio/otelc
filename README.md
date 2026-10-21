@@ -72,4 +72,6 @@ The launcher supports the internal Java example and explicit prepared classpaths
 
 Function probes use the official agent and instrumenter with exception-safe hooks. ERROR spans contain the original thrown type, with no message, stack trace or cause unwrapping: those operations can execute application getters or formatters. The original throwable and application future remain unchanged. Official asynchronous completion support keeps selected future operations open until completion; metric switches remain independent. See [Java exception safety](docs/java-exceptions.md).
 
+Selected functions require readable return-type metadata for the pinned advice implementation. Preflight rejects unavailable selected return types before application execution. Missing types on unrelated declarations or unused parameters remain accepted. See the [prepared launcher](docs/prepared-java.md) for this boundary.
+
 The build includes the official upstream trace-state parser fix in a verified bootstrap JAR, applied automatically by instrumented launches. The official agent remains unmodified. See [Java dependency versions and security backport](docs/java-dependencies.md) for the exact compile/runtime combination, source attribution and validation boundary.
