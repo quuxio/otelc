@@ -35,11 +35,13 @@ def reply() -> dict:
 
 class WitnessProtocolTests(unittest.TestCase):
     def test_only_explicit_full_tracing_can_request_the_profile(self) -> None:
+        application = SimpleNamespace()
+        unused = Path("unused")
         for tracing in ({"enabled": False, "sample_ratio": 1.0},
                         {"enabled": True, "sample_ratio": 0.999999999999}):
             policy = Policy.parse({"schema_version": 3, "languages": ["java"], "traces": tracing})
             with self.subTest(tracing=tracing), self.assertRaisesRegex(ValueError, "sample_ratio=1"):
-                witness.configure(SimpleNamespace(), policy, Path("unused"), Path("unused"), {}, [])
+                witness.configure(application, policy, unused, unused, {}, [])
         self.assertFalse(witness.decimal("1\u0661"))
 
     def test_private_final_reports_retain_all_contexts_and_refuse_forged_shapes(self) -> None:

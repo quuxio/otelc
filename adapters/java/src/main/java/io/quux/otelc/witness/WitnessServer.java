@@ -27,19 +27,23 @@ final class WitnessServer {
     } catch (IOException error) {
       listener.close(); throw error;
     }
-    Thread.ofPlatform().daemon().name("otelc-witness-control").start(() -> {
-      try (listener) {
-        while (listener.isOpen()) {
-          try (var channel = listener.accept()) { serve(channel, runtime); }
-          catch (IOException ignored) { /* A disconnected peer does not retire another action. */ }
-        }
-      } catch (IOException ignored) { /* Shutdown closes the owned listener. */ }
-    });
+    Thread.ofPlatform().daemon().name("otelc-witness-control").start(() -> listen(listener, runtime));
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       try { listener.close(); Files.deleteIfExists(socket); }
       catch (IOException ignored) { /* The owning JVM is terminating. */ }
     }, "otelc-witness-cleanup"));
     return listener;
+  }
+
+  private static void listen(ServerSocketChannel listener, WitnessRuntime runtime) {
+    try (listener) {
+      while (listener.isOpen()) serveNext(listener, runtime);
+    } catch (IOException ignored) { /* Shutdown closes the owned listener. */ }
+  }
+
+  private static void serveNext(ServerSocketChannel listener, WitnessRuntime runtime) {
+    try (var channel = listener.accept()) { serve(channel, runtime); }
+    catch (IOException ignored) { /* A disconnected peer does not retire another action. */ }
   }
 
   static void serve(SocketChannel channel, WitnessRuntime runtime) throws IOException {

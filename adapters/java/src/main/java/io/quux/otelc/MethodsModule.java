@@ -30,25 +30,22 @@ public final class MethodsModule extends InstrumentationModule {
   }
 
   @Override public List<TypeInstrumentation> typeInstrumentations() {
-    List<TypeInstrumentation> result = new ArrayList<>();
-    java.util.Map<String, String[]> selections = new java.util.LinkedHashMap<>();
+    java.util.Map<String, List<String>> selections = new java.util.LinkedHashMap<>();
     String selection = System.getProperty("otel.instrumentation.methods.include", "");
     for (String entry : selection.split(";")) {
       if (entry.isEmpty()) continue;
       int bracket = entry.indexOf('[');
       String owner = entry.substring(0, bracket);
-      String[] methods = entry.substring(bracket + 1, entry.length() - 1).split(",");
+      List<String> methods = List.of(entry.substring(bracket + 1, entry.length() - 1).split(","));
       selections.put(owner, methods);
     }
     var witness = io.quux.otelc.witness.WitnessRuntime.get();
-    if (witness != null) for (String owner : witness.owners()) selections.putIfAbsent(owner, new String[0]);
-    for (var selected : selections.entrySet()) {
-      result.add(new Selected(selected.getKey(), selected.getValue(), witness));
-    }
-    return result;
+    if (witness != null) for (String owner : witness.owners()) selections.putIfAbsent(owner, List.of());
+    return selections.entrySet().stream().<TypeInstrumentation>map(selected ->
+        new Selected(selected.getKey(), selected.getValue(), witness)).toList();
   }
 
-  private record Selected(String owner, String[] methods, io.quux.otelc.witness.WitnessRuntime witness)
+  private record Selected(String owner, List<String> methods, io.quux.otelc.witness.WitnessRuntime witness)
       implements TypeInstrumentation {
     @Override public ElementMatcher<TypeDescription> typeMatcher() { return namedOneOf(owner); }
     @Override public void transform(TypeTransformer transformer) {
@@ -57,11 +54,11 @@ public final class MethodsModule extends InstrumentationModule {
       for (var binding : bindings) {
         var matcher = named(binding.declaration().name()).and(hasDescriptor(binding.declaration().descriptor()));
         roleMethods = roleMethods.or(matcher);
-        boolean measured = java.util.Arrays.asList(methods).contains(binding.declaration().name());
+        boolean measured = methods.contains(binding.declaration().name());
         transformer.applyAdviceToMethod(matcher, mapping -> mapping.bind(Probe.class, binding.probeId())
             .bind(Measured.class, measured), RoleAdvice.class.getName());
       }
-      if (methods.length != 0) transformer.applyAdviceToMethod(namedOneOf(methods).and(not(roleMethods)), MethodAdvice.class.getName());
+      if (!methods.isEmpty()) transformer.applyAdviceToMethod(namedOneOf(methods.toArray(String[]::new)).and(not(roleMethods)), MethodAdvice.class.getName());
       if (!bindings.isEmpty()) transformer.applyTransformer((builder, type, loader, module, domain) ->
           builder.visit(new io.quux.otelc.witness.WitnessMethodGuard(bindings, witness::guarded)));
     }

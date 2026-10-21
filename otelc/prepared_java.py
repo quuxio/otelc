@@ -18,6 +18,7 @@ from otelc import java
 from otelc.config import Policy
 
 AMBIENT_OPTIONS = ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")
+EXTENSION_JAR = "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"
 
 
 def file_identity(path: Path) -> dict[str, Any]:
@@ -209,14 +210,28 @@ def _launch_tooling(executable: Path, runtime: Path, plain: bool) -> list[dict[s
     paths = [executable]
     if not plain:
         paths.extend((
-            java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
+            java.agent(), java.parser_patch(), java.ROOT / EXTENSION_JAR,
             runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
         if (runtime / "helpers-extension.jar").exists():
             from otelc import java_helpers
 
             paths.extend(runtime / name for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
-            paths.append(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"))
+            paths.append(java_helpers.tool(java.ROOT / EXTENSION_JAR))
     return [file_identity(path) for path in paths]
+
+
+def _configure_witness(application: PreparedApplication, policy: Policy, runtime: Path,
+                       bindings_file: Path, application_identity: dict[str, Any],
+                       tooling: list[dict[str, Any]], argv: list[str]) -> None:
+    from otelc import java_helpers, witness
+
+    compiler = java_helpers.tool(java.ROOT / EXTENSION_JAR)
+    if not any(item["path"] == str(compiler) for item in tooling):
+        tooling.append(file_identity(compiler))
+    files = witness.configure(application, policy, runtime, bindings_file.resolve(strict=True),
+                              application_identity, tooling)
+    tooling.extend(file_identity(path) for path in files)
+    argv.insert(1, f"-Dotelc.witness.plan={runtime / 'witness.properties'}")
 
 
 def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
@@ -254,15 +269,8 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
                      f"-Dio.opentelemetry.javaagent.slf4j.simpleLogger.logFile={agent_log}"]
     tooling = _launch_tooling(executable, runtime, plain)
     if witness_bindings is not None:
-        from otelc import java_helpers, witness
-
-        compiler = java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")
-        if not any(item["path"] == str(compiler) for item in tooling):
-            tooling.append(file_identity(compiler))
-        files = witness.configure(application, policy, runtime, witness_bindings.resolve(strict=True),
-                                  application_identity, tooling)
-        tooling.extend(file_identity(path) for path in files)
-        argv.insert(1, f"-Dotelc.witness.plan={runtime / 'witness.properties'}")
+        _configure_witness(application, policy, runtime, witness_bindings,
+                           application_identity, tooling, argv)
     identity = {"schema_version": 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
                 "agent_diagnostics": agent_log,
