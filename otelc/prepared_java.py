@@ -240,6 +240,11 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
         tooling.extend(file_identity(path) for path in (
             java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
             runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
+        if (runtime / "helpers-extension.jar").exists():
+            from otelc import java_helpers
+
+            tooling.extend(file_identity(runtime / name) for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
+            tooling.append(file_identity(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")))
     identity = {"schema_version": 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
                 "agent_diagnostics": agent_log,

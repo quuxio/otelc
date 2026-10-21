@@ -1,0 +1,8 @@
+The standalone Java helper relocation tool contains ASM 9.10.1
+(asm, asm-commons and asm-tree), released under BSD-3-Clause.
+Source: https://repo.maven.apache.org/maven2/org/ow2/asm/
+Licence: https://asm.ow2.io/license.html
+
+The licence text is retained from the ASM 9.10.1 ClassReader.java source
+header and reproduced in META-INF/LICENSE.asm in the standalone tool.
+The official OpenTelemetry agent and application inputs are not modified.

@@ -54,6 +54,8 @@ See [measuring object and resource lifetimes](docs/lifetimes.md) for configurati
 
 Use the [prepared Java launcher](docs/prepared-java.md) for an existing compiled application or generated test main. An explicit classpath/main/source-binding manifest drives the same policy without compiling or editing application inputs. Plain and instrumented commands retain launch identities, separate JVM class-origin evidence and the same live controls.
 
+Application-owned helper names are preserved. When names conflict, the launcher generates a private extension with renamed helpers and records its identity; developers do not rename application classes.
+
 Prepared launches keep agent diagnostics in `agent.log`. For exact application stderr comparisons, select `--diagnostic-profile` in both lanes; it disables JVM CDS consistently and retains all application output without filtering. Use the default profile for ordinary JVM/CDS performance measurements and keep the profile label with results.
 
 [Runtime health](docs/runtime-health.md) records PID/policy/selection identity, raw SDK exporter activity and bounded final flush/shutdown outcomes in `health.json`, including while metrics are off. Inspect it with `python -m otelc health --socket ...` or `--report ...`. Queue loss stays unavailable until a supported clean drain establishes it; exporter success still requires separate downstream receipt evidence.
