@@ -9,6 +9,7 @@
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-metrics</artifactId><version>${otel.version}</version><scope>provided</scope></dependency>
     <dependency><groupId>io.opentelemetry.javaagent</groupId><artifactId>opentelemetry-javaagent-extension-api</artifactId><version>${agent.version}</version><scope>provided</scope></dependency>
     <dependency><groupId>io.opentelemetry.instrumentation</groupId><artifactId>opentelemetry-instrumentation-api-incubator</artifactId><version>${agent.version}</version><scope>provided</scope></dependency>
+    <dependency><groupId>io.opentelemetry.instrumentation</groupId><artifactId>opentelemetry-instrumentation-annotations-support</artifactId><version>${agent.version}</version><scope>provided</scope></dependency>
     <dependency><groupId>org.ow2.asm</groupId><artifactId>asm-tree</artifactId><version>9.10.1</version><scope>provided</scope></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-sdk-testing</artifactId><version>${otel.version}</version><scope>test</scope></dependency>
     <dependency><groupId>io.opentelemetry</groupId><artifactId>opentelemetry-exporter-otlp</artifactId><version>${otel.version}</version><scope>test</scope></dependency>

@@ -11,7 +11,7 @@ import io.opentelemetry.instrumentation.api.incubator.instrumenter.InstrumenterC
 import io.opentelemetry.instrumentation.api.incubator.instrumenter.InstrumenterCustomizerProvider;
 import io.opentelemetry.instrumentation.api.instrumenter.OperationListener;
 
-/** Direct metrics attached to official method hooks, independent of sampled spans. */
+/** Direct metrics attached to the official instrumenter, independent of sampled spans. */
 public final class MethodMetrics implements InstrumenterCustomizerProvider {
   @Override public void customize(InstrumenterCustomizer customizer) {
     if (customizer.getInstrumentationName().equals("io.opentelemetry.methods")) {
