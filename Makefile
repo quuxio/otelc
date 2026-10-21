@@ -1,11 +1,11 @@
 PYTHON ?= .venv/bin/python
 MAVEN ?= mvn
 
-.PHONY: help setup check lint test java-build java-check stack-up stack-down stack-check benchmark sonar-policy
+.PHONY: help setup check lint test java-build java-check java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
 
 help:
-	@printf '%s\n' 'setup       Install locked Python and Markdown tools' 'check       Run lint, Java tests/80% coverage and Python tests/80% coverage' 'java-build  Build the official Java-agent extension' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
+	@printf '%s\n' 'setup       Install locked Python and Markdown tools' 'check       Run lint, Java tests/80% coverage and Python tests/80% coverage' 'java-build  Build the official Java-agent extension' 'java-witness-bindings Compile offline diagnostic action bindings (no runtime witness yet)' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
 setup:
 	python3 -m venv .venv
@@ -17,6 +17,16 @@ java-build:
 
 java-check:
 	$(MAVEN) -q -f adapters/java/pom.xml verify
+
+java-witness-bindings: java-build
+	$(MAVEN) -q -f adapters/java/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.11.0:copy-dependencies -DincludeScope=test -DoutputDirectory=target/dependency
+	mkdir -p build/witness/java/classes
+	javac -d build/witness/java/classes examples/java/BenchmarkApp.java examples/java/WitnessHarness.java
+	java -cp 'adapters/java/target/classes:adapters/java/target/dependency/*' io.quux.otelc.witness.WitnessBindings \
+	  build/witness/java/classes/examples/WitnessHarness.class examples/WitnessHarness envelope '(I)J' \
+	  build/witness/java/classes/examples/WitnessHarness.class examples/WitnessHarness rendezvous '()V' \
+	  build/witness/java/classes/examples/WitnessHarness.class examples/WitnessHarness wrapper '(I)J' \
+	  build/witness/java/classes/examples/BenchmarkApp.class examples/BenchmarkApp workload '(I)J' > build/witness/java/bindings.json
 
 lint:
 	ci/markdownlint/node_modules/.bin/markdownlint '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore '**/target/**' --ignore 'build/**'
