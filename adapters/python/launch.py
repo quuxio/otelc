@@ -18,13 +18,19 @@ from quux_otelc_python.telemetry import Runtime
 _APPLICATION_STARTED = False
 
 
-def close_application(monitor: Monitor | None, runtime: Runtime) -> None:
+def close_application(monitor: Monitor | None, runtime: Runtime, witness_control=None) -> None:
     """Flush after application threads and exit callbacks, within the SDK budget."""
     try:
         if monitor is not None:
             monitor.close()
     finally:
-        runtime.close()
+        try:
+            if witness_control is not None:
+                witness_control._unlink()
+            runtime.close()
+        finally:
+            if witness_control is not None:
+                witness_control.close()
 
 
 def application_main(filename: str | None = None, loader: object = BuiltinImporter) -> ModuleType:
@@ -52,7 +58,7 @@ def run_module(name: str) -> None:
     runpy._run_module_as_main(name)
 
 
-def run_script(argument: str) -> None:
+def run_script(argument: str, prepared_code: CodeType | None = None) -> None:
     """Use ordinary script metadata while retaining the caller's argv spelling."""
     filename = argument if os.path.isabs(argument) else os.path.join(os.getcwd(), argument)
     if get_importer(filename) is not None:
@@ -63,8 +69,8 @@ def run_script(argument: str) -> None:
     bytecode = filename.endswith(".pyc")
     loader = (SourcelessFileLoader if bytecode else SourceFileLoader)("__main__", filename)
     module = application_main(filename, loader)
-    code = loader.get_code("__main__") if bytecode else compile(
-        Path(filename).read_bytes(), filename, "exec", dont_inherit=True)
+    code = prepared_code if prepared_code is not None else (loader.get_code("__main__") if bytecode else compile(
+        Path(filename).read_bytes(), filename, "exec", dont_inherit=True))
     execute_main(code, module)
 
 
@@ -88,6 +94,13 @@ def main(args: list[str]) -> int:
         raise ValueError("Python adapter requires an executable Python policy")
     if not hasattr(sys, "monitoring"):
         raise ValueError("Python instrumentation requires CPython 3.12+")
+    witness = plan.get('witness', {}).get('enabled', False)
+    if args[1] == '--witness-freeze':
+        if not witness or len(args) != 3:
+            raise ValueError('witness freeze requires enabled common witness policy and one declaration')
+        from quux_otelc_python.witness_launch import freeze
+        freeze(plan, args[2])
+        return 0
     if args[1] == "--doctor":
         signals = "metrics"
         if plan.get("traces", {}).get("enabled", False):
@@ -123,13 +136,25 @@ def main(args: list[str]) -> int:
         visit(code)
         print(json.dumps({"language": "python", "functions": functions}, indent=2))
         return 0
-    runtime = Runtime(plan)
+    program = code = control = None
+    if witness:
+        if args[1].startswith('-') or not args[1].endswith('.py'):
+            raise ValueError('Python witness currently requires its frozen source script')
+        from quux_otelc_python.witness_launch import prepare
+        program, code = prepare(plan, args[1])
+    runtime = Runtime(plan, witness_state=program.state()) if program is not None else Runtime(plan)
     monitor = None
     deferred = False
     try:
-        monitor = Monitor(plan, runtime)
+        bootstrap = None
+        if program is not None:
+            from quux_otelc_python.witness_bootstrap import WitnessBootstrap
+            from quux_otelc_python.witness_control import WitnessControl
+            bootstrap = WitnessBootstrap(runtime, program, code)
+            control = WitnessControl(plan['witness']['control_socket'], runtime.witness_state)
+        monitor = Monitor(plan, runtime, witness=bootstrap)
         monitor.install()
-        atexit.register(close_application, monitor, runtime)
+        atexit.register(close_application, monitor, runtime, control)
         deferred = True
         _APPLICATION_STARTED = True
         if args[1] == "-m":
@@ -139,10 +164,10 @@ def main(args: list[str]) -> int:
         else:
             sys.argv = args[1:]
             sys.path[0] = str(Path(args[1]).resolve().parent)
-            run_script(args[1])
+            run_script(args[1], code)
     finally:
         if not deferred:
-            close_application(monitor, runtime)
+            close_application(monitor, runtime, control)
     return 0
 
 

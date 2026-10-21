@@ -604,3 +604,60 @@ fn native_typescript_emission_is_opt_in_and_language_specific() {
     )
     .is_err());
 }
+
+#[test]
+fn witness_defaults_preserve_every_existing_adapter_document() {
+    let config = policy();
+    for language in &config.languages {
+        let resolved = config.resolve(*language).unwrap();
+        assert!(!resolved.witness.enabled);
+        assert!(!serde_json::to_value(resolved)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("witness"));
+    }
+}
+
+#[test]
+fn witness_requires_explicit_paths_tracing_and_qualified_language_features() {
+    let mut config = policy();
+    config.witness.enabled = true;
+    assert!(config.validate().is_err());
+    config.traces.enabled = true;
+    assert!(config.validate().is_err());
+    config.witness.manifest = Some("private/manifest.json".into());
+    config.witness.control_socket = Some("private/witness.sock".into());
+    config.validate().unwrap();
+    for language in &config.languages {
+        let resolved = config.resolve(*language).unwrap();
+        assert_eq!(*language == Language::Python, resolved.execution_available);
+        assert!(
+            serde_json::to_value(resolved).unwrap()["witness"]["enabled"]
+                .as_bool()
+                .unwrap()
+        );
+    }
+    config.propagation.tasks = true;
+    assert!(
+        !config
+            .resolve(Language::Python)
+            .unwrap()
+            .execution_available
+    );
+    config.propagation.tasks = false;
+    config.lifetimes.enabled = true;
+    assert!(
+        !config
+            .resolve(Language::Python)
+            .unwrap()
+            .execution_available
+    );
+    config.witness.mode = "unknown".into();
+    assert!(config.validate().is_err());
+    config.witness.mode = "scoped_action_v1".into();
+    for path in ["".to_owned(), "x".repeat(4097)] {
+        config.witness.manifest = Some(path);
+        assert!(config.validate().is_err());
+    }
+}

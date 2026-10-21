@@ -47,6 +47,17 @@ config_section!(Propagation {
     tasks: bool = false,
     http: bool = false
 });
+config_section!(Witness {
+    enabled: bool = false,
+    mode: String = "scoped_action_v1".into(),
+    manifest: Option<String> = None,
+    control_socket: Option<String> = None
+});
+impl Witness {
+    fn is_disabled(&self) -> bool {
+        !self.enabled
+    }
+}
 config_section!(Lifetimes {
     enabled: bool = false,
     boundary: String = "object".into(),
@@ -105,6 +116,8 @@ pub struct CommonConfig {
     #[serde(default)]
     pub propagation: Propagation,
     #[serde(default)]
+    pub witness: Witness,
+    #[serde(default)]
     pub export: Export,
     #[serde(skip)]
     metrics_endpoint_override: Option<String>,
@@ -145,6 +158,8 @@ pub struct ResolvedConfig {
     pub metrics: Metrics,
     pub traces: Traces,
     pub propagation: Propagation,
+    #[serde(skip_serializing_if = "Witness::is_disabled")]
+    pub witness: Witness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub http_integration: Option<String>,
     pub export: Export,
@@ -244,6 +259,24 @@ impl CommonConfig {
         }
     }
     pub fn validate(&self) -> Result<()> {
+        if self.witness.mode != "scoped_action_v1" {
+            bail!("witness.mode must be scoped_action_v1");
+        }
+        if self.witness.enabled
+            && (!self.traces.enabled
+                || self
+                    .witness
+                    .manifest
+                    .as_ref()
+                    .is_none_or(|p| p.is_empty() || p.len() > 4096)
+                || self
+                    .witness
+                    .control_socket
+                    .as_ref()
+                    .is_none_or(|p| p.is_empty() || p.len() > 4096))
+        {
+            bail!("witness requires tracing, a manifest path and a private control_socket");
+        }
         if (self.propagation.tasks || self.propagation.http) && !self.traces.enabled {
             bail!("context propagation requires traces.enabled=true");
         }
@@ -452,6 +485,14 @@ impl CommonConfig {
                 unavailable.push("native spans require the qualified C/C++ LLVM adapter".into());
             }
         }
+        if self.witness.enabled
+            && (language != Language::Python
+                || self.lifetimes.enabled
+                || self.propagation.tasks
+                || self.propagation.http)
+        {
+            unavailable.push("scoped_action_v1 currently requires synchronous Python without task/HTTP/lifetime instrumentation".into());
+        }
         Ok(ResolvedConfig {
             schema_version: 2,
             language,
@@ -474,6 +515,7 @@ impl CommonConfig {
             metrics: self.metrics.clone(),
             traces: self.traces.clone(),
             propagation: self.propagation.clone(),
+            witness: self.witness.clone(),
             http_integration: (self.propagation.http && language == Language::Python)
                 .then(|| adapter.http.unwrap_or_else(|| "stdlib".into())),
             export: self.export.clone(),

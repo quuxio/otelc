@@ -218,6 +218,7 @@ class Frame:
 
 class Runtime:
     def __init__(self, plan: dict, delegate=None, trace_delegate=None, *, witness_state=None):
+        self.witness_root = None
         self.witness_state = witness_state
         if witness_state is not None:
             from .witness_state import WitnessState
@@ -432,12 +433,16 @@ class Runtime:
                     pass
 
     def witness_health(self, *, export_finished=False):
-        """Snapshot actual pending work and losses under the runtime lock."""
+        """Snapshot scoped execution/leases and cumulative losses under the runtime lock."""
         from .witness_state import Health
         with self.lock:
             traces = self.traces
-            return Health(inflight=len(self.pending),
-                          pending=len(traces.leases) if traces else 0,
+            root = self.witness_root
+            inflight = sum(frame.trace is not None and frame.trace.local_root is root
+                           for frame in self.pending.values()) if root is not None else 0
+            pending = sum(context.local_root is root for context in traces.leases.values()) if (
+                root is not None and traces is not None) else 0
+            return Health(inflight=inflight, pending=pending,
                           losses=sum(self.loss.values()) + self.export_loss
                           + (sum(traces.losses.values()) if traces else 0),
                           export_finished=export_finished)

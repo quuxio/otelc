@@ -34,7 +34,7 @@ def digest(value: object) -> str:
 def selection_id(plan: dict) -> str:
     """Bind admission policy without binding ephemeral signal endpoints/resources."""
     selected = {key: value for key, value in plan.items()
-                if key not in ('resource', 'export', 'metrics_endpoint', 'trace_export')}
+                if key not in ('resource', 'export', 'metrics_endpoint', 'trace_export', 'witness')}
     selected['runtime'] = {key: value for key, value in plan['runtime'].items() if key != 'control_socket'}
     selected['export_max_queued_batches'] = plan['export']['max_queued_batches']
     return digest(selected)

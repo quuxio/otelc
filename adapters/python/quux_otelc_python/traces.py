@@ -19,7 +19,7 @@ from opentelemetry.trace import Link, NonRecordingSpan, SpanContext as SDKSpanCo
 from .carrier import Context as WireContext
 from .trace_wire import TraceExporter
 from .telemetry import Session, export_headers
-from .randomness import PrivateIdGenerator, isolate_exporter
+from .randomness import PrivateIdGenerator
 
 
 @dataclass(frozen=True)
@@ -134,8 +134,6 @@ class TraceStore:
             timeout=min(timeout, plan["runtime"]["shutdown_timeout_ms"]) / 1000,
             session=TraceSession(self), compression=Compression.NoCompression,
             max_request_size=16 * 1024 * 1024)
-        if delegate is None:
-            isolate_exporter(self.delegate)
 
     def begin_lifetime(self, name, token, creation, wall):
         links = [Link(creation.context)] if creation is not None and creation.sampled else []

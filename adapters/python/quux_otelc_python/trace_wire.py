@@ -7,6 +7,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from opentelemetry.sdk.trace.export import SpanExportResult
 
 from .carrier import from_sdk
+from .randomness import isolate_exporter
 
 
 MAX_BYTES = 16 * 1024 * 1024
@@ -62,6 +63,7 @@ class TraceExporter(OTLPSpanExporter):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        isolate_exporter(self)
         # The pinned SDK has no encoder argument. Decorate its owned client;
         # never replace the SDK module's global encoder or application exporters.
         self._wire = LinkStateClient(self._client)

@@ -114,7 +114,7 @@ python-check:
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/http_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/http_client_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/trace_wire.py' --fail-under=80
-	@for module in witness_wire witness_state witness_code witness_callsite witness_owner witness_entry witness_sdk witness_manifest witness_bootstrap; do \
+	@for module in witness_wire witness_state witness_code witness_callsite witness_owner witness_entry witness_sdk witness_manifest witness_bootstrap witness_control witness_launch; do \
 		$(PYTHON) -m coverage report --data-file=build/python.coverage --include="*/quux_otelc_python/$$module.py" --fail-under=80 || exit $$?; \
 	done
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/randomness.py' --fail-under=80

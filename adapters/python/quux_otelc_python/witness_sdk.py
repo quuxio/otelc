@@ -1,4 +1,4 @@
-"""Private monitoring/SDK integration; no public manifest or control endpoint yet."""
+"""Private original-code SDK bridge; continuation and consumer qualification remain."""
 from types import CodeType, FrameType
 
 from .witness_code import CodeBindingError, CodeRegistry
@@ -55,6 +55,7 @@ class WitnessSDK:
                         self.claim, context.trace_id, context.span_id, sampled=identity.sampled):
                     state.invalidate()
                     return
+                self.runtime.witness_root = identity.local_root
                 probe = state.bindings.wrapper
             else:
                 if not state.activity(self.claim, event.context, state.bindings.target):
