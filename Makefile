@@ -117,6 +117,7 @@ python-check:
 	@for module in witness_wire witness_state witness_code witness_callsite witness_owner witness_entry witness_sdk witness_manifest witness_bootstrap; do \
 		$(PYTHON) -m coverage report --data-file=build/python.coverage --include="*/quux_otelc_python/$$module.py" --fail-under=80 || exit $$?; \
 	done
+	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/randomness.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/task_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/worker_context.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/python.coverage --include='*/quux_otelc_python/lifetimes.py' --fail-under=80

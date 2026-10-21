@@ -78,6 +78,8 @@ The benchmark uses `examples/apps/python_latency.py` unchanged. It keeps one pla
 
 See the [Collector/Grafana guide](observability-stack.md). Select service `otelc-python-example` or query `otelc_function_calls_total{service_name="otelc-python-example"}` in Prometheus.
 
+Owned Python providers use independent random generators for span/trace IDs, export jitter and reservoir exemplar sampling. They leave the application's module-level `random` state and unrelated SDK providers unchanged. Exemplars and the SDK's random-ID flag remain enabled. This integration depends on the hash-locked SDK's private HTTP-client jitter callback and fixed-size reservoir hook; dependency upgrades must rerun the seeded-output, successful/failed-export and exemplar controls. It does not claim isolation from every form of application global state or timing.
+
 ## Boundaries
 
 This is a function-metrics adapter for CPython 3.12+ on the tested macOS/Linux CI lanes. The [standard-library HTTP binding](python-http.md) separately qualifies distributed client/server spans. C-extension internals, PyPy, subprocess/fork propagation, other HTTP frameworks, annotation injection and automatic destruction lifetimes are unavailable; ordinary-class collection and explicitly bound resource spans are qualified separately in the [collection guide](python-collection.md) and [resource guide](python-resources.md) and requested unsupported capabilities fail configuration resolution. Generator/coroutine timing begins at first execution, not object allocation. Fatal process termination cannot guarantee export. Source/class behaviour is preserved; full debugger/profiler combinations still require qualification, and otelc claims a free monitoring ID rather than replacing another tool.

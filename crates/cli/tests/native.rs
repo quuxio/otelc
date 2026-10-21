@@ -378,11 +378,86 @@ fn compile_link_response_file_and_spaces() {
 }
 #[test]
 fn collector_outage_is_bounded() {
-    let root=setup("[runtime]\nshutdown_timeout_ms=100\n[export]\nendpoint=\"http://127.0.0.1:1\"\ntimeout_ms=50");
+    use std::{process::Stdio, time::Instant};
+    let root = setup("[runtime]\nshutdown_timeout_ms=100\n[export]\nendpoint=\"http://127.0.0.1:1\"\ntimeout_ms=50\ninterval_ms=60000");
+    std::fs::write(
+        root.path().join("main.c"),
+        include_str!("../../../tests/fixtures/outage.c"),
+    )
+    .unwrap();
     compile(root.path(), false);
-    let start = std::time::Instant::now();
-    success(cli(&["run", "./app"], root.path()));
-    assert!(start.elapsed() < Duration::from_secs(2));
+    let ready = root.path().join("ready");
+    let report = root.path().join("report.json");
+    let started = Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_quux-otelc"))
+        .args(["run", "./app", ready.to_str().unwrap()])
+        .current_dir(root.path())
+        .env_remove("OTELC_LANGUAGE")
+        .env_remove("OTELC_CONFIG")
+        .env_remove("OTELC_MANIFEST")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .env_remove("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+        .env("OTELC_REPORT_PATH", &report)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let startup_deadline = started + Duration::from_secs(30);
+    let mut ready_seen = false;
+    while Instant::now() < startup_deadline {
+        if std::fs::read(&ready).is_ok_and(|bytes| bytes == b"ready\n") {
+            ready_seen = true;
+            break;
+        }
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    if !ready_seen {
+        let _ = child.kill();
+        let output = child.wait_with_output().unwrap();
+        panic!(
+            "application never became ready: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    // Deliberately exceed the old whole-launch bound. The unchanged progress
+    // guard below starts only after startup/verification and application work.
+    let startup_elapsed = started.elapsed();
+    let shutdown_started = Instant::now();
+    child.stdin.take().unwrap().write_all(b"release\n").unwrap();
+    let shutdown_deadline = shutdown_started + Duration::from_secs(2);
+    let mut exited = false;
+    while Instant::now() < shutdown_deadline {
+        if child.try_wait().unwrap().is_some() {
+            exited = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    if !exited {
+        let _ = child.kill();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        exited,
+        "collector outage delayed application shutdown: {:?}",
+        output.stderr
+    );
+    let output = success(output);
+    assert!(startup_elapsed >= Duration::from_secs(2));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "result=42\n");
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+    assert!(
+        report["export_dropped_batches"].as_u64().unwrap() > 0
+            || report["export_finished"] == false
+    );
+    if report["drained"] == true {
+        assert_eq!(report["function_calls"], 1);
+    }
 }
 
 #[test]
