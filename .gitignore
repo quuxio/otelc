@@ -1,12 +1,10 @@
 .venv/
-.coverage
-htmlcov/
 build/
 target/
-.scannerwork/
+node_modules/
 __pycache__/
 *.pyc
-.DS_Store
+.coverage
+.scannerwork/
 .env
-.env.*
-node_modules/
+.DS_Store

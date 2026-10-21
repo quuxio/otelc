@@ -1,37 +1,28 @@
-name: otelc
+name: otelc-rebuild
 services:
-  tempo:
-    image: grafana/tempo:2.10.8
-    command: ["-config.file=/etc/tempo/config.yaml"]
-    ports:
-      - "127.0.0.1:3200:3200"
-    volumes:
-      - ./deploy/tempo.yaml:/etc/tempo/config.yaml:ro
-      - tempo-data:/var/tempo
-    restart: unless-stopped
   collector:
     image: otel/opentelemetry-collector:0.162.0
     command: ["--config=/etc/otelcol/config.yaml"]
-    ports:
-      - "127.0.0.1:4318:4318"
-    volumes:
-      - ./deploy/collector.yaml:/etc/otelcol/config.yaml:ro
+    ports: ["127.0.0.1:4320:4318"]
+    volumes: ["./deploy/collector.yaml:/etc/otelcol/config.yaml:ro"]
     depends_on: [tempo]
-    restart: unless-stopped
   prometheus:
     image: prom/prometheus:v3.15.0
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d"]
-    ports:
-      - "127.0.0.1:9090:9090"
+    ports: ["127.0.0.1:9091:9090"]
     volumes:
       - ./deploy/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-    depends_on: [collector]
-    restart: unless-stopped
+  tempo:
+    image: grafana/tempo:2.10.8
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    ports: ["127.0.0.1:3201:3200"]
+    volumes:
+      - ./deploy/tempo.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
   grafana:
     image: grafana/grafana:13.2.3
-    ports:
-      - "127.0.0.1:3000:3000"
+    ports: ["127.0.0.1:3001:3000"]
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
@@ -42,14 +33,12 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/otelc.json
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/comparison.json
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    depends_on: [prometheus, tempo]
-    restart: unless-stopped
 volumes:
   prometheus-data:
-  grafana-data:
   tempo-data:
+  grafana-data:

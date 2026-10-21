@@ -1,40 +1,40 @@
-# Callback configuration. Adjust source and function rules for your application.
-schema_version = 1
+# One unchanged policy for every equivalent language example.
+schema_version = 3
+languages = ["java", "typescript", "javascript", "python", "go", "c", "cpp", "rust"]
 
-[build]
-backend = "callbacks"
-include = ["src/**/*.c", "src/**/*.cpp"]
-exclude = ["third_party/**", "vendor/**", "generated/**"]
+[resource]
+service_name = "otelc-examples"
+
+[export]
+endpoint = "http://127.0.0.1:4320"
+interval_ms = 1000
+timeout_ms = 1000
+
+[sources]
+include = ["examples/**"]
+exclude = ["**/generated/**"]
 
 [functions]
-include = ["Trading::*", "OrderBook::*", "FixSession::*"]
-exclude = ["std::*", "otelc_*", "__cyg_profile_*", "*::operator*"]
-
-[runtime]
-max_functions = 4096
-max_threads = 128
-stack_depth = 256
-queue_capacity = 4096
-shutdown_timeout_ms = 2000
+include = ["*workload*"]
+exclude = ["*excluded*"]
 
 [metrics]
-enabled = true
+collection = true
+emission = true
 histogram_boundaries_seconds = [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.1, 1.0]
 
 [traces]
-# Requires the later LLVM backend; callbacks reject enabled tracing.
-enabled = false
-root_sample_ratio = 0.01
-max_active_traces = 512
-max_spans_per_trace = 1024
+enabled = true
+sample_ratio = 0.01
 
-[export]
-protocol = "http/protobuf"
-endpoint = "http://localhost:4318"
-interval_ms = 5000
-timeout_ms = 1000
-max_queued_batches = 8
+[lifetimes]
+enabled = true
+include = ["*WorkItem", "*work_item"]
+exclude = []
+release_methods = ["close"]
+max_live = 1000000
 
-[resource]
-service_name = "matching-engine"
-service_version = "development"
+[benchmark]
+iterations = 10000
+warmup = 5
+samples = 15

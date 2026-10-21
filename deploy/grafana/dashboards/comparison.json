@@ -1,0 +1,248 @@
+{
+  "uid": "otelc-comparison",
+  "title": "otelc language performance comparison",
+  "schemaVersion": 42,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "comparison_id",
+        "label": "Comparison run",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "query_result(sort_desc(max by(comparison_id)(otelc_benchmark_run_timestamp_seconds)))",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "regex": "/comparison_id=\"([^\"]+)\"/",
+        "sort": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Equivalent workload and measured states",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Same seeded integer128-v1 workload and validated checksums. Compare Java, C++, Rust, C, Python, JavaScript, Go and Microsoft TypeScript as each adapter is delivered. **plain** has no agent/probes. **both_off**, **collection_only**, **emission_only** and **both_on** share one instrumented process per language. Startup/control/pipe time is excluded. Lifetime observation and trace configuration are recorded in each raw report. Select one comparison run to avoid combining different runs."
+      }
+    },
+    {
+      "id": 2,
+      "title": "Mean nanoseconds per operation, by language and state",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ns"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum by(language, mode) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})) * 1e9",
+          "legendFormat": "{{language}} {{mode}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 3,
+      "title": "Overhead relative to the same language plain baseline",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((sum by(language, mode) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})) / on(language) group_left() (sum by(language) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\",mode=\"plain\"}) / sum by(language) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\",mode=\"plain\"})) - 1) * 100",
+          "legendFormat": "{{language}} {{mode}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 4,
+      "title": "Throughput: operations per second",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "1 / (sum by(language, mode) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"}))",
+          "legendFormat": "{{language}} {{mode}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 5,
+      "title": "Retained measured batches",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(language,mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})",
+          "legendFormat": "{{language}} {{mode}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 6,
+      "title": "Runtime and workload identity",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by(language,runtime,build,workload,mode,comparison_id) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})",
+          "legendFormat": "{{language}} {{mode}}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ]
+}
