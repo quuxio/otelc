@@ -93,7 +93,9 @@ public final class MethodsModule extends InstrumentationModule {
         @Advice.Origin("#d") String descriptor,
         @Advice.Return(readOnly = false, typing = Assigner.Typing.DYNAMIC) Object result,
         @Advice.Thrown Throwable error) {
-      try { result = io.quux.otelc.methods.Observer.exit(function, descriptor, result, error); }
+      try {
+        if (function != null) result = io.quux.otelc.methods.Observer.exit(function, descriptor, result, error);
+      }
       finally { io.quux.otelc.witness.probe.Observer.exit(token, error); }
     }
   }

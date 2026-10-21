@@ -34,6 +34,33 @@ import org.objectweb.asm.Opcodes;
 class WitnessRuntimeTests {
   @TempDir Path root;
 
+  @Test void unmeasuredControlAdviceDoesNotLoadTheFunctionObserver() throws Exception {
+    String owner = "io/quux/otelc/witness/UnmeasuredControl";
+    byte[] original = fixture(owner);
+    try (var locator = new ClassFileLocator.Compound(ClassFileLocator.Simple.of(owner.replace('/', '.'), original),
+        ClassFileLocator.ForClassLoader.ofSystemLoader())) {
+      byte[] transformed = new ByteBuddy().redefine(TypePool.Default.of(locator).describe(owner.replace('/', '.')).resolve(), locator)
+          .visit(Advice.withCustomMapping().bind(MethodsModule.Probe.class, "0".repeat(64))
+              .bind(MethodsModule.Measured.class, false).to(MethodsModule.RoleAdvice.class)
+              .on(named("target"))).make().getBytes();
+      class Loader extends ClassLoader {
+        int observerLookups;
+        Loader() { super(WitnessRuntimeTests.class.getClassLoader()); }
+        @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+          if (name.equals("io.quux.otelc.methods.Observer")) {
+            observerLookups++;
+            throw new ClassNotFoundException("an unmeasured control has no function observer");
+          }
+          return super.loadClass(name, resolve);
+        }
+        Class<?> define(byte[] bytes) { return defineClass(null, bytes, 0, bytes.length); }
+      }
+      Loader loader = new Loader();
+      assertEquals(8, loader.define(transformed).getMethod("target", int.class).invoke(null, 7));
+      assertEquals(0, loader.observerLookups);
+    }
+  }
+
   private static final class Exporter implements SpanExporter {
     final List<SpanData> spans = new ArrayList<>();
     final List<CompletableResultCode> pending = new ArrayList<>();
