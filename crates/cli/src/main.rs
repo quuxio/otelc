@@ -1,6 +1,7 @@
 mod compiler;
 mod control;
 mod managed;
+mod object_command;
 use anyhow::{bail, Context, Result};
 use quux_otelc_config::{
     common::{CommonConfig, Language},
@@ -26,7 +27,7 @@ fn main() {
 fn run() -> Result<i32> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
-        println!("quux-otelc [--config PATH] [--language ID] status|enable|disable --socket PATH | config [--json] [--require-supported]|doctor|inspect BINARY [--all|--json]|run BINARY [ARGS...]|clang [ARGS...]|clang++ [ARGS...]\nNative function timing and interim opt-in lifetime metrics. Python 3.12+ function timing is available with python SCRIPT or python -m MODULE; JavaScript function timing is available with node SCRIPT; TypeScript function timing is available with ts SCRIPT; Java function timing is available with java CLASS, SOURCE.java or -jar JAR; Go function timing is available with go SOURCE.go or PACKAGE; Rust function timing is available with rust SOURCE.rs or Cargo.toml. Standalone Rust supports rust --build SOURCE.rs --output-dir DIRECTORY and rust --run DIRECTORY [ARGS...] for separate build/application channels. LLVM backend supports C++ exceptions; callbacks require existing -fno-exceptions.\nBuild the CLI and static runtime together with make build.");
+        println!("quux-otelc [--config PATH] [--language ID] status|enable|disable --socket PATH | config [--json] [--require-supported]|doctor|inspect BINARY [--all|--json]|run BINARY [ARGS...]|clang [ARGS...]|clang++ [ARGS...]|object rename-main INPUT.o --output NEW.o --symbol NEW_MAIN\nNative function timing and interim opt-in lifetime metrics. Python 3.12+ function timing is available with python SCRIPT or python -m MODULE; JavaScript function timing is available with node SCRIPT; TypeScript function timing is available with ts SCRIPT; Java function timing is available with java CLASS, SOURCE.java or -jar JAR; Go function timing is available with go SOURCE.go or PACKAGE; Rust function timing is available with rust SOURCE.rs or Cargo.toml. Standalone Rust supports rust --build SOURCE.rs --output-dir DIRECTORY and rust --run DIRECTORY [ARGS...] for separate build/application channels. LLVM backend supports C++ exceptions; callbacks require existing -fno-exceptions.\nBuild the CLI and static runtime together with make build.");
         return Ok(0);
     }
     let mut config_path = PathBuf::from("otelc.toml");
@@ -52,6 +53,12 @@ fn run() -> Result<i32> {
     let command = args.remove(0);
     match command.as_str() {
         "status" | "enable" | "disable" => control::run(&command, &args),
+        "object" => {
+            if language.is_some_and(|value| !matches!(value, Language::C | Language::Cpp)) {
+                bail!("object operations require native C/C++ objects");
+            }
+            object_command::run(&args)
+        }
         "config" => {
             if args
                 .iter()

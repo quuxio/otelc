@@ -2957,3 +2957,6 @@ fn native_selection_matches_equivalent_source_paths_in_both_schemas() {
         }
     }
 }
+
+#[path = "native/object_transform.rs"]
+mod object_transform;

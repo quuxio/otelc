@@ -6,6 +6,18 @@ The local implementation provides a Rust CLI, strict shared TOML configuration, 
 
 The runtime archive and CLI are built together. Selected application source is rebuilt with Clang callbacks or the matched LLVM pass, and the runtime is linked into the final executable. Compile-only output has an adjacent `.otelc-object.json` marker containing its digest and function inventory. Link-time wrapping verifies these markers; a raw instrumented object without a marker is rejected. Combined compile/link invocations retain intermediate objects in a temporary directory long enough to identify functions that actually received probes. Temporary files are removed after the build. Uninstrumented inputs and runtime dependencies are not admitted merely because their names match a function rule.
 
+For a test harness that needs its own entry point, the SDK can rename `main` in an already compiled native object:
+
+```sh
+./target/debug/quux-otelc --config otelc.toml clang -c original.c -o original.o
+./target/debug/quux-otelc object rename-main original.o --output worker.o --symbol __oteleq_original_main
+./target/debug/quux-otelc --config otelc.toml clang worker.o driver.o -o worker
+```
+
+Compile `driver.o` separately with the same qualified Clang toolchain. Its real `main` calls `__oteleq_original_main` using the original entry point's signature; a C++ driver declares that function with C linkage. Compiling the application as `main` first preserves its implicit zero return. This operation does not recompile source or require source annotations. It uses the matched LLVM 22 `llvm-objcopy`, validates the original object and adjacent SDK marker, checks ordinary section bytes and decoded symbol/relocation structure, and writes a new object and digest-bound marker. Both original files remain unchanged. The receipt records original object/marker digests and tool identity; it is local build provenance, not a signed attestation.
+
+The narrow operation accepts relocatable Mach-O and ELF objects only; runtime execution has been checked on macOS ARM64. It rejects chained transformations, invalid or colliding target symbols, stale or missing markers, and existing output files. Apply it to each application translation unit: units without `main` are validated and copied, while references to `main` are renamed consistently. Selected or annotated `main` keeps its original policy name, with a linkage-qualified telemetry label. It does not support executable rewriting, archives, LTO, arbitrary symbol transforms or a general binary patching interface.
+
 A `.otelc.json` manifest is generated next to the executable before stripping. It records compiler identity, image identity, architecture, function names and selection reasons. Selected symbols with ambiguous names or addresses are rejected. Source file/line extraction is not implemented; no invented source metadata is emitted. `inspect --all` lists excluded symbols, and `inspect --json` returns the retained inventory.
 
 The runtime validates the manifest, relocates addresses under ASLR and allocates fixed per-thread stacks and queues before admission begins. Native TLS caches thread slots and prevents callback re-entry. The shim preserves `errno`. Entry records a monotonic timestamp; a supported normal or exceptional exit publishes one complete observation. A worker owns cumulative count/histogram aggregation. A separate exporter owns bounded HTTP calls and retries. Admission, stack, queue, invalid-exit and incomplete-frame losses are exported independently of the completion queue.

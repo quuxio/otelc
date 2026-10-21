@@ -91,6 +91,7 @@ class CoverageTests(unittest.TestCase):
                     report += "SF:/tmp/crates/rust-adapter/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_mir_profile.rs\nDA:1,1\n"
                     report += "SF:/tmp/crates/rust-adapter/src/declarations.rs\nDA:1,1\n"
                     report += "SF:/tmp/crates/export/src/carrier.rs\nDA:1,1\n"
+                    report += "SF:/tmp/crates/symbols/src/object_transform.rs\nDA:1,1\nSF:/tmp/crates/cli/src/object_command.rs\nDA:1,1\n"
                 with patch.object(rust_coverage.subprocess, "run"), patch.object(Path, "write_text"):
                     def export_map(command, **_):
                         # LLVM can select a zero-hit library map when exported C
@@ -160,6 +161,7 @@ class CoverageTests(unittest.TestCase):
         good += "SF:/tmp/crates/rust-adapter/src/compiler_mir.rs\nDA:1,1\nSF:/tmp/crates/rust-adapter/src/compiler_mir_profile.rs\nDA:1,1\n"
         good += "SF:/tmp/crates/rust-adapter/src/declarations.rs\nDA:1,1\n"
         good += "SF:/tmp/crates/export/src/carrier.rs\nDA:1,1\n"
+        good += "SF:/tmp/crates/symbols/src/object_transform.rs\nDA:1,1\nSF:/tmp/crates/cli/src/object_command.rs\nDA:1,1\n"
         rust_coverage.enforce_rust_file_coverage(good)
         no_hits = good.replace("DA:1,1", "DA:1,0")
         with self.assertRaisesRegex(ValueError, "trace context"):
@@ -180,7 +182,9 @@ class CoverageTests(unittest.TestCase):
                             ("/crates/rust-adapter/src/compiler_mir_profile.rs", "Rust stable compiler profile"),
                             ("/crates/rust-adapter/src/declarations.rs", "Rust original declaration parser"),
                             ("/crates/rust-probes/src/recording.rs", "Rust SDK recording suppression"),
-                            ("/crates/export/src/carrier.rs", "Shared trace carrier")):
+                            ("/crates/export/src/carrier.rs", "Shared trace carrier"),
+                            ("/crates/symbols/src/object_transform.rs", "Native object transforms"),
+                            ("/crates/cli/src/object_command.rs", "Native object operation")):
             missing_component = good.replace(path + "\nDA:1,1", path + "\nDA:1,0")
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, label):
                 rust_coverage.enforce_rust_file_coverage(missing_component)

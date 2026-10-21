@@ -4,6 +4,7 @@ use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget, SymbolKind};
 use quux_otelc_config::Config;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+pub mod object_transform;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +28,8 @@ pub struct Manifest {
     pub architecture: String,
     pub compiler: String,
     pub functions: Vec<Function>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub main_renames: std::collections::BTreeMap<String, String>,
 }
 fn identity(file: &object::File<'_>) -> Result<String> {
     let bytes = if let Some(uuid) = file.mach_uuid()? {
@@ -109,18 +112,26 @@ pub fn create(
         } else {
             raw
         };
-        let display = cpp_demangle::Symbol::new(linkage)
+        let compiled_display = cpp_demangle::Symbol::new(linkage)
             .ok()
             .and_then(|s| s.demangle().ok())
             .unwrap_or_else(|| linkage.into());
+        let original = probed.main_renames.get(linkage);
+        let selection_name = original.map(String::as_str).unwrap_or(&compiled_display);
+        let display = if original.is_some() {
+            format!("{selection_name} [linkage={linkage}]")
+        } else {
+            compiled_display.clone()
+        };
         let annotated = probed.annotated.contains(linkage);
         let selected = probed.functions.contains(linkage)
-            && selection.accepts_with_annotation(&display, config.read_annotations && annotated);
+            && selection
+                .accepts_with_annotation(selection_name, config.read_annotations && annotated);
         functions.push(Function {
             address: symbol.address(),
             linkage_name: linkage.into(),
             display_name: display.clone(),
-            selection_name: None,
+            selection_name: original.cloned(),
             selected,
             annotated,
             reason: if !probed.functions.contains(linkage) {
@@ -128,7 +139,7 @@ pub fn create(
             } else if selected && config.read_annotations && annotated {
                 "included by annotation"
             } else {
-                selection.reason(&display)
+                selection.reason(selection_name)
             }
             .into(),
         });
@@ -153,6 +164,7 @@ pub fn create(
         architecture: format!("{:?}", file.architecture()),
         compiler,
         functions,
+        main_renames: probed.main_renames.clone(),
     };
     manifest.save(&manifest_path(binary))?;
     Ok(manifest)
@@ -171,6 +183,16 @@ impl Manifest {
         {
             bail!("unsupported manifest");
         }
+        if value.main_renames.iter().any(|(current, original)| {
+            original != "main"
+                || !object_transform::valid_target(current)
+                || !value.functions.iter().any(|function| {
+                    function.linkage_name == *current
+                        && function.selection_name.as_ref() == Some(original)
+                })
+        }) {
+            bail!("invalid main rename inventory");
+        }
         if value
             .functions
             .windows(2)
@@ -182,11 +204,12 @@ impl Manifest {
                     || f.selection_name.as_ref().is_some_and(|name| {
                         name.is_empty()
                             || name.len() > 4096
-                            || cpp_demangle::Symbol::new(&f.linkage_name)
-                                .ok()
-                                .and_then(|symbol| symbol.demangle().ok())
-                                .as_ref()
-                                != Some(name)
+                            || (value.main_renames.get(&f.linkage_name) != Some(name)
+                                && cpp_demangle::Symbol::new(&f.linkage_name)
+                                    .ok()
+                                    .and_then(|symbol| symbol.demangle().ok())
+                                    .as_ref()
+                                    != Some(name))
                             || f.display_name != format!("{name} [linkage={}]", f.linkage_name)
                     })
             })
@@ -219,16 +242,20 @@ struct ObjectMarker {
     functions: Vec<String>,
     #[serde(default)]
     annotated: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    transformation: Option<object_transform::MainRenameRecord>,
 }
 #[derive(Default)]
 pub struct Probes {
     pub functions: std::collections::HashSet<String>,
     pub annotated: std::collections::HashSet<String>,
+    pub main_renames: std::collections::BTreeMap<String, String>,
 }
 impl Probes {
     pub fn extend(&mut self, other: Self) {
         self.functions.extend(other.functions);
         self.annotated.extend(other.annotated);
+        self.main_renames.extend(other.main_renames);
     }
 }
 struct ObjectInventory {
@@ -244,9 +271,11 @@ fn object_marker(path: &Path) -> PathBuf {
     value.into()
 }
 fn object_inventory(path: &Path) -> Result<ObjectInventory> {
+    object_inventory_bytes(&std::fs::read(path)?)
+}
+fn object_inventory_bytes(bytes: &[u8]) -> Result<ObjectInventory> {
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path)?;
-    let file = object::File::parse(bytes.as_slice())?;
+    let file = object::File::parse(bytes)?;
     let mut functions = Vec::new();
     let mut hooks = false;
     let mut annotated = Vec::new();
@@ -322,7 +351,7 @@ fn object_inventory(path: &Path) -> Result<ObjectInventory> {
         }
     }
     Ok(ObjectInventory {
-        digest: Sha256::digest(&bytes)
+        digest: Sha256::digest(bytes)
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>(),
@@ -351,11 +380,13 @@ pub fn mark_object(path: &Path, instrumented: bool, backend: &str) -> Result<Pro
             backend: backend.into(),
             functions: functions.clone(),
             annotated: annotated.clone(),
+            transformation: None,
         })?,
     )?;
     Ok(Probes {
         functions: functions.into_iter().collect(),
         annotated: annotated.into_iter().collect(),
+        main_renames: Default::default(),
     })
 }
 pub fn object_probes(path: &Path, backend: &str) -> Result<Probes> {
@@ -368,6 +399,13 @@ pub fn object_probes(path: &Path, backend: &str) -> Result<Probes> {
         return Ok(Probes::default());
     }
     let value: ObjectMarker = serde_json::from_slice(&std::fs::read(marker)?)?;
+    validated_probes(&inventory, &value, backend)
+}
+fn validated_probes(
+    inventory: &ObjectInventory,
+    value: &ObjectMarker,
+    backend: &str,
+) -> Result<Probes> {
     if !value.functions.is_empty() && value.backend != backend {
         bail!("object instrumentation backend does not match link configuration");
     }
@@ -382,7 +420,8 @@ pub fn object_probes(path: &Path, backend: &str) -> Result<Probes> {
         bail!("annotation metadata has no compiled probes");
     }
     Ok(Probes {
-        functions: value.functions.into_iter().collect(),
-        annotated: value.annotated.into_iter().collect(),
+        functions: value.functions.iter().cloned().collect(),
+        annotated: value.annotated.iter().cloned().collect(),
+        main_renames: object_transform::marker_renames(value)?,
     })
 }
