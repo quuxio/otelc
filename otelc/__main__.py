@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from otelc import benchmark, control, java, prepared_java
+from otelc import benchmark, control, health, java, prepared_java
 from otelc.config import LANGUAGES, Policy
 
 
@@ -35,10 +35,18 @@ def main() -> int:
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--socket", type=Path, required=True)
     metrics.add_argument("operation", nargs="+", choices=("on", "off", "collection", "emission", "status", "flush"))
+    report = commands.add_parser("health", help="inspect SDK pipeline evidence, without claiming downstream receipt")
+    source = report.add_mutually_exclusive_group(required=True)
+    source.add_argument("--socket", type=Path)
+    source.add_argument("--report", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "metrics":
             print(json.dumps(control.request(args.socket, " ".join(args.operation)), indent=2))
+            return 0
+        if args.command == "health":
+            value = control.request(args.socket, "health") if args.socket else health.read(args.report)
+            print(json.dumps(value, indent=2))
             return 0
         policy = Policy.load(args.config)
         if args.command == "java":

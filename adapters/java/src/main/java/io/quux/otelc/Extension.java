@@ -17,7 +17,13 @@ import java.util.Arrays;
 public final class Extension implements AutoConfigurationCustomizerProvider, AgentListener {
   @Override public void customize(AutoConfigurationCustomizer customizer) {
     LiveState state = LiveState.instance();
-    customizer.addMetricExporterCustomizer((exporter, config) -> new EmissionGate(exporter, state.emission));
+    if (state.health != null) {
+      state.health.install(customizer);
+      customizer.addSpanExporterCustomizer((exporter, config) -> ExportHealth.spans(exporter, state.health));
+      customizer.addSpanProcessorCustomizer((processor, config) -> new HealthSpanProcessor(processor, state.health));
+    }
+    customizer.addMetricExporterCustomizer((exporter, config) -> new EmissionGate(
+        state.health == null ? exporter : ExportHealth.metrics(exporter, state.health), state.emission));
     customizer.addMeterProviderCustomizer((builder, config) -> {
       SdkMeterProviderUtil.setMeterConfigurator(builder, scope -> state.collecting() ? MeterConfig.enabled() : MeterConfig.disabled());
       String buckets = state.property("metrics.buckets");
@@ -33,6 +39,7 @@ public final class Extension implements AutoConfigurationCustomizerProvider, Age
   @Override public void afterAgent(AutoConfiguredOpenTelemetrySdk configured) {
     LiveState state = LiveState.instance();
     state.attach(configured.getOpenTelemetrySdk().getSdkMeterProvider());
+    if (state.health != null) state.health.attach(configured.getOpenTelemetrySdk());
     try {
       ControlServer.start(Path.of(state.property("control.socket")), state);
     } catch (IOException error) {

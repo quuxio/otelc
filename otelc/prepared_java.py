@@ -239,10 +239,13 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
     if not plain:
         tooling.extend(file_identity(path) for path in (
             java.agent(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
-            runtime / "agent.properties", runtime / "plan.properties"))
+            runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
     identity = {"schema_version": 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
                 "agent_diagnostics": agent_log,
+                "health_report": None if plain else str(runtime / "health.json"),
+                "selection_sha256": None if plain else hashlib.sha256(
+                    (runtime / "selection.json").read_bytes().rstrip(b"\n")).hexdigest(),
                 "argv": argv, "main_class": application.main_class,
                 "ordered_classpath": list(map(str, application.classpath)),
                 "application": application_identity, "tooling": tooling,

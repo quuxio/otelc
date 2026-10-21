@@ -29,11 +29,13 @@ public final class LiveState {
   private volatile boolean collection;
   final EmissionGate.State emission;
   final AtomicLong completed = new AtomicLong();
+  final RuntimeHealth health;
   private SdkMeterProvider provider;
   private final Properties plan;
 
   LiveState(Properties plan) {
     this.plan = plan;
+    health = plan.getProperty("health.report") == null ? null : new RuntimeHealth(plan);
     collection = Boolean.parseBoolean(plan.getProperty("metrics.collection", "true"));
     emission = new EmissionGate.State(Boolean.parseBoolean(plan.getProperty("metrics.emission", "true")));
   }
@@ -65,6 +67,9 @@ public final class LiveState {
   }
 
   synchronized String command(String command) {
+    if ("health".equals(command)) {
+      return health == null ? "{\"error\":\"runtime health unavailable\"}\n" : health.snapshot();
+    }
     switch (command) {
       case "on" -> { updateCollection(true); emission.set(true); }
       case "off" -> { updateCollection(false); emission.set(false); }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -141,8 +142,12 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
     if not extension.is_file():
         raise ValueError("build the Java extension with make java-build first")
     selected, types, resources = resolve_bindings(classpath, bindings, policy)
+    selection = json.dumps({"methods": selected, "types": types, "resources": resources}, sort_keys=True)
+    (runtime / "selection.json").write_text(selection + "\n")
     data = policy.data
     values = {
+        "otel.javaagent.enabled": "true",
+        "otel.sdk.disabled": "false",
         "otel.service.name": data["resource"]["service_name"],
         "otel.resource.attributes": "otelc.language=java",
         "otel.exporter.otlp.endpoint": data["export"]["endpoint"],
@@ -168,6 +173,10 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
         "metrics.collection": str(data["metrics"]["collection"]).lower(),
         "metrics.emission": str(data["metrics"]["emission"]).lower(),
         "metrics.buckets": ",".join(map(str, data["metrics"]["histogram_boundaries_seconds"])),
+        "health.report": str(runtime / "health.json"),
+        "health.policy-sha256": hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest(),
+        "health.selection-sha256": hashlib.sha256(selection.encode()).hexdigest(),
+        "health.shutdown-timeout-ms": str(data["export"]["shutdown_timeout_ms"]),
     }))
     launch += [f"-javaagent:{agent()}", f"-Dotel.javaagent.extensions={extension}",
                f"-Dotel.javaagent.configuration-file={configuration}", f"-Dotelc.plan={plan}",

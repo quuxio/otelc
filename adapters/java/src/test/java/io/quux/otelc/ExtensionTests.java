@@ -231,7 +231,9 @@ class ExtensionTests {
     assertTrue(state.command("status").contains("\"lifetime_lost\":0"),
         "an empty resolved selection cannot report an unavailable observer");
     long deadline = System.nanoTime() + 5_000_000_000L;
-    while (count("otelc.lifetime.completed") < 3 && System.nanoTime() < deadline) {
+    // GC completion and missing-release accounting are separate observer updates.
+    while ((count("otelc.lifetime.completed") < 3 || count("otelc.lifetime.incomplete") < 1)
+        && System.nanoTime() < deadline) {
       System.gc();
       collected.remove(20);
     }

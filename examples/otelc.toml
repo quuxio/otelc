@@ -9,6 +9,7 @@ service_name = "otelc-examples"
 endpoint = "http://127.0.0.1:4320"
 interval_ms = 1000
 timeout_ms = 1000
+shutdown_timeout_ms = 10000
 
 [sources]
 include = ["examples/**"]
