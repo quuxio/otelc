@@ -9,6 +9,36 @@ from opentelemetry.trace import INVALID_SPAN_CONTEXT, SpanContext, TraceFlags, T
 
 
 class PythonCarrierTests(unittest.TestCase):
+    def test_invalid_sdk_cached_validity_is_not_converted_to_application_boolean(self):
+        class Validity:
+            armed = False
+
+            def __bool__(self):
+                if self.armed:
+                    raise AssertionError('application validity boolean was invoked')
+                return True
+
+        validity = Validity()
+
+        class SpanId(int):
+            def __le__(self, _other):
+                return validity
+
+        context = SpanContext(1, SpanId(2), False)
+        validity.armed = True
+        self.assertIsNone(from_sdk(context))
+
+    def test_sdk_state_namespace_subclass_is_not_iterated(self):
+        class Namespace(dict):
+            def items(self):
+                raise AssertionError('application namespace method was invoked')
+
+        state = TraceState([('vendor', 'valid')])
+        state.__dict__ = Namespace(state.__dict__)
+        context = from_sdk(SpanContext(1, 2, False, TraceFlags(1), state))
+        self.assertIsNotNone(context)
+        self.assertIsNone(context.tracestate)
+
     def test_shared_language_vectors_do_not_log_header_payloads(self):
         fixture = json.loads((Path(__file__).parent / 'fixtures/trace-context.json').read_text())
         self.assertEqual(1, fixture['schema_version'])

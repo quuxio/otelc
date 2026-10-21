@@ -97,6 +97,8 @@ def extract(parents: Sequence[str], states: Sequence[str] = ()) -> Context | Non
 def _sdk_state(state: TraceState) -> str | None:
     """Copy bounded builtin storage without dispatching SDK instance overrides."""
     namespace = _STATE_NAMESPACE.__get__(state, TraceState)
+    if type(namespace) is not dict:
+        return None
     pairs = None
     for index, (key, value) in enumerate(namespace.items()):
         if index >= 32:
@@ -117,7 +119,7 @@ def _sdk_state(state: TraceState) -> str | None:
 
 def from_sdk(context: SpanContext) -> Context | None:
     """Copy a concrete SDK identity into the validated wire representation."""
-    if (type(context) is not SpanContext or not context.is_valid
+    if (type(context) is not SpanContext or context.is_valid is not True
             or type(context.trace_id) is not int or type(context.span_id) is not int
             or type(context.trace_flags) is not int and type(context.trace_flags) is not TraceFlags
             or not 0 <= context.trace_flags <= 255
