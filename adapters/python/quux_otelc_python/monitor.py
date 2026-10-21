@@ -162,7 +162,8 @@ class Monitor:
             key = id(sys._getframe(1))
             if self.context is not None:
                 self.context.suspend(key)
-            self.runtime.exit(key, True, isinstance(exception, (GeneratorExit, asyncio.CancelledError)))
+            # isinstance may consult an application's exception.__class__ getter.
+            self.runtime.exit(key, True, issubclass(type(exception), (GeneratorExit, asyncio.CancelledError)))
 
     def yielded(self, code, _, value):
         if self.context is not None:
