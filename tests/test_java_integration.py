@@ -14,6 +14,7 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
@@ -23,10 +24,23 @@ from otelc import control, java
 from otelc.config import Policy
 
 
+def wait_for_count(observed: Callable[[], int], expected: int, timeout: float = 5.) -> int:
+    """Await actual decoded receipt, not the completion of a flush request."""
+    deadline = time.monotonic() + timeout
+    value = observed()
+    while value < expected and time.monotonic() < deadline:
+        time.sleep(.02)
+        value = observed()
+    return value
+
+
 class Capture:
     def __init__(self) -> None:
         self.metrics: list[ExportMetricsServiceRequest] = []
         self.traces: list[ExportTraceServiceRequest] = []
+        self.metric_response_gate = threading.Event()
+        self.metric_response_gate.set()
+        self.metric_request_seen = threading.Event()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -38,6 +52,8 @@ class Capture:
                     message = ExportMetricsServiceRequest()
                     message.ParseFromString(payload)
                     owner.metrics.append(message)
+                    owner.metric_request_seen.set()
+                    owner.metric_response_gate.wait(timeout=10)
                 elif self.path.endswith("/traces"):
                     message = ExportTraceServiceRequest()
                     message.ParseFromString(payload)
@@ -58,6 +74,7 @@ class Capture:
         self.worker.start()
 
     def close(self) -> None:
+        self.metric_response_gate.set()
         self.server.shutdown()
         self.server.server_close()
         self.worker.join(2)
@@ -92,6 +109,43 @@ def batch(process: subprocess.Popen[str], count: int | str) -> dict[str, Any]:
 
 
 class JavaIntegrationTests(unittest.TestCase):
+    def test_receiver_wait_handles_an_export_already_in_flight(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        data = copy.deepcopy(Policy.load(Path("examples/otelc.toml")).data)
+        data["lifetimes"]["enabled"] = False
+        data["traces"]["enabled"] = False
+        data["export"].update(endpoint=f"http://127.0.0.1:{capture.server.server_port}",
+                              interval_ms=2000, timeout_ms=10000)
+        with tempfile.TemporaryDirectory(prefix="otelc-busy-", dir="/tmp") as directory:
+            runtime = Path(directory)
+            with subprocess.Popen(java.command(Policy.parse(data), runtime), stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as process:
+                try:
+                    socket = runtime / "control.sock"
+                    control.wait_ready(socket, process.pid)
+                    capture.metric_response_gate.clear()
+                    self.assertEqual(batch(process, 10)["checksum"], 41284864)
+                    control.request(socket, "flush")
+                    self.assertTrue(capture.metric_request_seen.wait(timeout=2))
+                    self.assertEqual(capture.calls(), 10)
+                    self.assertEqual(batch(process, 10)["checksum"], 41284864)
+                    state = control.request(socket, "flush")
+                    self.assertEqual(state["completed"], 20)
+                    self.assertGreater(state["in_flight_exports"], 0)
+                    self.assertEqual(capture.calls(), 10,
+                                     "a flush reply can still refer to the older blocked export")
+                    capture.metric_response_gate.set()
+                    control.request(socket, "flush")
+                    self.assertEqual(wait_for_count(capture.calls, 20), 20)
+                    process.communicate("quit\n", timeout=15)
+                    self.assertEqual(process.returncode, 0)
+                finally:
+                    capture.metric_response_gate.set()
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+
     def test_official_agent_metrics_lifetimes_and_live_controls(self) -> None:
         capture = Capture()
         self.addCleanup(capture.close)
@@ -122,7 +176,7 @@ class JavaIntegrationTests(unittest.TestCase):
                     self.assertEqual(batch(process, 10)["checksum"], initial["checksum"])
                     self.assertEqual(batch(process, "throw"), {"exception": "IllegalArgumentException", "message": "negative seed"})
                     control.request(socket, "flush")
-                    self.assertEqual(capture.calls(), 11)
+                    self.assertEqual(wait_for_count(capture.calls, 11), 11)
 
                     control.request(socket, "collection off")
                     batch(process, 10)
@@ -141,7 +195,7 @@ class JavaIntegrationTests(unittest.TestCase):
 
                     control.request(socket, "emission on")
                     control.request(socket, "flush")
-                    self.assertEqual(capture.calls(), 21)
+                    self.assertEqual(wait_for_count(capture.calls, 21), 21)
                     self.assertEqual(control.request(socket, "status")["pid"], process.pid)
                     batch(process, "gc")
                     deadline = time.monotonic() + 10

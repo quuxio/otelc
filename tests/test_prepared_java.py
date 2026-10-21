@@ -14,9 +14,9 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from otelc import control, java, prepared_java
+from otelc import benchmark, control, java, prepared_java
 from otelc.config import Policy, Selection
-from test_java_integration import Capture, batch
+from test_java_integration import Capture, batch, wait_for_count
 
 APPLICATION_STDERR = "[otel.javaagent] application-owned text\nOpenJDK application-owned warning\n"
 
@@ -228,24 +228,33 @@ public final class Driver {
                         if not plain:
                             first = control.wait_ready(runtime / "control.sock", process.pid)
                             self.assertFalse(first["collection"])
-                        states = ((False, False), (True, True), (True, False),
-                                  (False, True), (False, False), (True, True))
-                        for index, (collection, emission) in enumerate(states):
+                        states = (("both_off", False, False), ("both_on", True, True),
+                                  ("collection_only", True, False), ("emission_only", False, True),
+                                  ("both_off", False, False), ("both_on", True, True))
+                        for index, (mode, collection, emission) in enumerate(states):
                             if not plain:
-                                control.request(runtime / "control.sock", "collection " + ("on" if collection else "off"))
-                                current = control.request(runtime / "control.sock", "emission " + ("on" if emission else "off"))
+                                current = benchmark.switch_state(runtime / "control.sock", process, mode)
                                 self.assertEqual(current["pid"], process.pid)
+                                self.assertEqual(current["collection"], collection)
+                                self.assertEqual(current["emission"], emission)
+                                received_before = len(capture.metrics)
                             self.assertEqual(batch(process, 2), {"checksum": 3, "calls": 2, "argument": "argument with spaces"})
                             if not plain:
                                 health = control.request(runtime / "control.sock", "flush")
                                 self.assertEqual(health["completed"], (0, 2, 4, 4, 4, 6)[index])
-                                # Disabled SDK meters do not collect/export their retained values.
-                                # Re-enabling both later must recover collection-only observations.
-                                self.assertEqual(capture.calls(), (0, 2, 2, 2, 2, 6)[index])
+                                expected = (0, 2, 4, 4, 4, 6)[index]
+                                if collection and emission:
+                                    self.assertEqual(wait_for_count(capture.calls, expected), expected)
+                                else:
+                                    # A collection already started before a toggle may finish later.
+                                    self.assertLessEqual(capture.calls(), expected)
+                                if not emission:
+                                    self.assertEqual(len(capture.metrics), received_before)
                         if not plain:
                             control.request(runtime / "control.sock", "flush")
-                            self.assertEqual(capture.calls(), 6)
-                            self.assertEqual(capture.lifetime_count("otelc.lifetime.completed", "resource", "external.Driver$WorkItem"), 6)
+                            self.assertEqual(wait_for_count(capture.calls, 6), 6)
+                            resource_count = lambda: capture.lifetime_count("otelc.lifetime.completed", "resource", "external.Driver$WorkItem")
+                            self.assertEqual(wait_for_count(resource_count, 6), 6)
                         process.stdin.write("quit\n")
                         process.stdin.flush()
                         self.assertEqual(process.wait(timeout=15), 0)
@@ -318,7 +327,7 @@ public final class Driver {
                     control.request(runtime / "control.sock", "on")
                     self.assertEqual(batch(process, 2)["checksum"], 3)
                     control.request(runtime / "control.sock", "flush")
-                    self.assertEqual(jar_capture.calls(), 2)
+                    self.assertEqual(wait_for_count(jar_capture.calls, 2), 2)
                     output, errors = process.communicate("quit\n", timeout=15)
                     self.assertEqual(process.returncode, 0, errors)
                     self.assertEqual(errors, APPLICATION_STDERR)

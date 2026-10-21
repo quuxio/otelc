@@ -70,6 +70,8 @@ From another terminal, use `python -m otelc metrics --socket /tmp/otelc-java-SHE
 
 ## Consumer API and evidence
 
+`flush` requests SDK collection/export; its control reply is not a downstream receipt fence. A periodic collection already in progress can finish around a toggle. Check the receiver's exact decoded cumulative counts with a deadline, and use raw `completed` for admission evidence. For emission-off, first wait for `effective_emission_off` (no in-flight exports), then verify no new metric requests. Do not infer a particular snapshot schedule from a control reply or accept missing/extra observations as timing noise.
+
 ```python
 import subprocess
 from pathlib import Path
