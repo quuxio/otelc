@@ -219,6 +219,17 @@ class ExtensionTests {
 
   @Test void weakLifetimesDoNotCallApplicationHashCodeAndReportCapacity() throws Exception {
     ReferenceQueue<TestResource> collected = observeResources();
+    LiveState state = new LiveState(new Properties());
+    System.setProperty("otelc.lifetime.types", TestResource.class.getName());
+    try {
+      state.command("off");
+      assertTrue(state.command("status").contains("\"lifetime_lost\":1"),
+          "capacity health must remain visible while metric collection and emission are off");
+    } finally {
+      System.clearProperty("otelc.lifetime.types");
+    }
+    assertTrue(state.command("status").contains("\"lifetime_lost\":0"),
+        "an empty resolved selection cannot report an unavailable observer");
     long deadline = System.nanoTime() + 5_000_000_000L;
     while (count("otelc.lifetime.completed") < 3 && System.nanoTime() < deadline) {
       System.gc();
