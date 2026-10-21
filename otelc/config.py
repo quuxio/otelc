@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 LANGUAGES = ("java", "typescript", "javascript", "python", "go", "c", "cpp", "rust")
 SECTIONS = {
     "resource": {"service_name"},
-    "export": {"endpoint", "interval_ms", "timeout_ms"},
+    "export": {"endpoint", "interval_ms", "timeout_ms", "shutdown_timeout_ms"},
     "sources": {"include", "exclude"},
     "functions": {"include", "exclude"},
     "metrics": {"collection", "emission", "histogram_boundaries_seconds"},
@@ -83,7 +83,7 @@ def validate_selectors_and_flags(data: dict[str, Any]) -> None:
 
 def validate_limits(data: dict[str, Any]) -> None:
     """Bound intervals, benchmark work and lifecycle bookkeeping."""
-    limits = (("export", ("interval_ms", "timeout_ms")),
+    limits = (("export", ("interval_ms", "timeout_ms", "shutdown_timeout_ms")),
               ("benchmark", ("iterations", "samples", "warmup")),
               ("lifetimes", ("max_live",)))
     for section, keys in limits:
@@ -145,7 +145,8 @@ class Policy:
             raise ValueError("languages must contain unique supported language IDs")
         defaults: dict[str, dict[str, Any]] = {
             "resource": {"service_name": "otelc-example"},
-            "export": {"endpoint": "http://127.0.0.1:4320", "interval_ms": 1000, "timeout_ms": 1000},
+            "export": {"endpoint": "http://127.0.0.1:4320", "interval_ms": 1000, "timeout_ms": 1000,
+                       "shutdown_timeout_ms": 10000},
             "sources": {"include": [], "exclude": []},
             "functions": {"include": [], "exclude": []},
             "metrics": {"collection": True, "emission": True, "histogram_boundaries_seconds": [1e-6, 1e-5, 1e-4, .001, .01, .1, 1.]},

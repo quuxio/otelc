@@ -33,6 +33,11 @@ class CliTests(unittest.TestCase):
         with patch("otelc.control.request", return_value=state) as request:
             self.assertEqual(json.loads(self.invoke(["metrics", "--socket", "/tmp/example.sock", "off"])), state)
             self.assertEqual(request.call_args.args[1], "off")
+            self.assertEqual(json.loads(self.invoke(["health", "--socket", "/tmp/example.sock"])), state)
+            self.assertEqual(request.call_args.args[1], "health")
+        with patch("otelc.health.read", return_value={"phase": "final"}) as read:
+            self.assertEqual(json.loads(self.invoke(["health", "--report", "/tmp/health.json"])), {"phase": "final"})
+            self.assertEqual(str(read.call_args.args[0]), "/tmp/health.json")
         with patch("otelc.java.command", return_value=["java", "app"]), patch("subprocess.call", return_value=0) as call:
             self.invoke(["example", "java", "--plain"])
             call.assert_called_once_with(["java", "app"])

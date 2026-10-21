@@ -40,3 +40,5 @@ Collector batches have a hard maximum of 512 items and send at 256 items or afte
 ## Focused failure cases
 
 Test stale/invalid policy, unsupported selectors, overloads and exclusions; cached and newly-created instruments; observable callbacks while collection is off; outstanding calls and GC/release around a toggle; SDK export retries and shutdown with an open control connection; module/loader/compiler differences; constructor failure, duplicate close, address/identity reuse and incomplete lifetimes. Preserve source/module hashes, application values and exceptions. Record unsupported boundaries explicitly.
+
+Java's [runtime health boundary](runtime-health.md) records raw exporter API activity and a bounded final SDK checkpoint. Queue/drop counts remain unavailable until a supported clean drain establishes them. This is separate from downstream receipt, lifetime completeness and per-invocation attribution; broader oteleq consumer qualification still needs those checks.

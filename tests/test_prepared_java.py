@@ -112,6 +112,8 @@ class ManifestTests(unittest.TestCase):
         launch.verify_inputs()
         self.assertIsNone(launch.identity["control_socket"])
         self.assertIsNone(launch.identity["agent_diagnostics"])
+        self.assertIsNone(launch.identity["health_report"])
+        self.assertIsNone(launch.identity["selection_sha256"])
         self.assertEqual(launch.identity["jvm_profile"], "default")
         self.assertNotIn("-Xshare:off", launch.argv)
         self.assertTrue((runtime / "launch.json").is_file())

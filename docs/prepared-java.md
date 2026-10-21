@@ -72,6 +72,8 @@ From another terminal, use `python -m otelc metrics --socket /tmp/otelc-java-SHE
 
 `flush` requests SDK collection/export; its control reply is not a downstream receipt fence. A periodic collection already in progress can finish around a toggle. Check the receiver's exact decoded cumulative counts with a deadline, and use raw `completed` for admission evidence. For emission-off, first wait for `effective_emission_off` (no in-flight exports), then verify no new metric requests. Do not infer a particular snapshot schedule from a control reply or accept missing/extra observations as timing noise.
 
+Use the separate [runtime health report](runtime-health.md) for raw SDK span/export accounting and final flush/shutdown evidence. `health_report` and `selection_sha256` in the launch identity bind its path and resolved selection; plain launches record null for both. Preserve the final report, match its PID/policy/selection digests to the launch and inspect failure/pending/loss values. Missing or non-final evidence must not be promoted to success. This does not replace receiver checks or per-invocation attribution.
+
 ```python
 import subprocess
 from pathlib import Path

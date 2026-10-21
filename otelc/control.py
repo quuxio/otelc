@@ -10,13 +10,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+from otelc import health
+
 
 def request(path: Path, command: str) -> dict[str, Any]:
     """Send one framed command to a private socket and validate the reply."""
     metadata = path.lstat()
     if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_mode & 0o077 or metadata.st_uid != os.getuid():
         raise ValueError("expected a private control socket")
-    if command not in ("status", "on", "off", "collection on", "collection off", "emission on", "emission off", "flush"):
+    if command not in ("status", "on", "off", "collection on", "collection off", "emission on", "emission off", "flush", "health"):
         raise ValueError("unsupported control command")
     with socket.socket(socket.AF_UNIX) as client:
         client.settimeout(3)
@@ -34,6 +36,8 @@ def request(path: Path, command: str) -> dict[str, Any]:
                 raise ValueError("incomplete or oversized control response")
             data.extend(piece)
     value = json.loads(data)
+    if command == "health":
+        return health.validate(value)
     if value.get("schema_version") != 1 or "error" in value or type(value.get("pid")) is not int:
         raise ValueError("runtime rejected control request")
     if type(value.get("collection")) is not bool or type(value.get("emission")) is not bool:

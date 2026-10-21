@@ -47,6 +47,7 @@ class PolicyTests(unittest.TestCase):
             {"sources": {"include": [""]}}, {"functions": {"include": "*"}},
             {"functions": {"exlcude": []}}, {"metrics": {"collection": 1}},
             {"export": {"interval_ms": 0}}, {"benchmark": {"samples": True}},
+            {"export": {"shutdown_timeout_ms": 0}},
             {"lifetimes": {"max_live": 0}}, {"resource": {"service_name": ""}},
             {"resource": {"service_name": "bad\nname"}}, {"export": {"endpoint": 123}},
             {"export": {"endpoint": "file:///tmp/metrics"}},
