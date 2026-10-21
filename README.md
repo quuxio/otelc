@@ -1,132 +1,63 @@
-<p align="center">
-  <img src="docs/assets/quux-mark.png" width="160" alt="quux">
-</p>
-
 # otelc
 
-**Compiler-assisted observability for native applications. A [quux](https://quux.io) project.**
+<!-- markdownlint-disable MD013 -->
 
-[![CI](https://github.com/quuxio/otelc/actions/workflows/ci.yml/badge.svg)](https://github.com/quuxio/otelc/actions/workflows/ci.yml)
-[![Status](https://img.shields.io/badge/status-local%20prototype-blue)](docs/roadmap.md)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+One configuration for source-free instrumentation across languages, using official OpenTelemetry tools wherever possible. Metric collection and emission switch independently inside the running application. Developers do not add imports, annotations, probes or bootstrap code.
 
----
+This rebuild starts with **Java**. TypeScript/JavaScript, Python, Go, the LLVM backend, C, C++ and Rust follow in that order. The shared policy lists all targets; that does not mean each adapter is implemented. The [previous implementation](https://github.com/quuxio/otelc/tree/archive/pre-rebuild-2026-10-21) is retained for reuse and comparison. See the [rebuild plan and acceptance criteria](docs/rebuild-plan.md).
 
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=bugs)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=code_smells)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=coverage)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Lines of Code](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=ncloc)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=quuxio_otelc&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=quuxio_otelc)
-[![Repo Traffic](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fquuxio%2Fotelc%2Ftraffic-data%2F.badges%2Ftraffic.json&cacheSeconds=3600)](https://github.com/quuxio/otelc)
+## Java example and Grafana
 
----
-
-## What is otelc?
-
-otelc provides a local native timing prototype for automatic function telemetry in native applications. Rebuild selected application code with compiler probes, link a bounded Rust runtime, and export function timing through OpenTelemetry Protocol (OTLP). C/C++, Rust, Python, Java, JavaScript, TypeScript and Go also support sampled function spans; see [C spans](docs/c-spans.md), [C++ spans](docs/cpp-spans.md), [Rust spans](docs/rust-spans.md), [Python spans](docs/python-spans.md), [Java method spans](docs/java-spans.md), [JavaScript spans](docs/javascript-spans.md) and [TypeScript spans](docs/typescript-spans.md) and [Go spans](docs/go-spans.md). The product goal is instrumentation without application source edits across C, C++, Rust, TypeScript/JavaScript, Java, Python and Go. C/C++, Python, JavaScript, TypeScript, Java, Go and Rust function timing follow this model; the current opt-in C++ lifetime guard requires source edits and does not yet meet the automatic lifetime requirement. Rebuilding/linking or changing the launch command may be required. See the [source-free contract](docs/design.md#source-free-instrumentation-contract).
-
-The first target is synchronous C and C++ on macOS ARM64 and Linux x86-64/ARM64. The architecture separates compiler integration, a language-neutral probe ABI, a bounded runtime, and telemetry export so additional native languages can be added through validated adapters.
-
-**Current status: local native prototype, validated on macOS ARM64.** The compiler wrapper, manifest inspection, bounded runtime, OTLP/HTTP metrics, exception-aware LLVM pass and explicit C++ object lifetime guard are implemented locally. Existing Clang function annotations, live LLVM metrics on/off controls and unchanged-source Python function timing are also implemented. Python uses CPython 3.12+ monitoring and the Python OpenTelemetry SDK. JavaScript uses an in-memory Node module transform and the JavaScript SDK; see its [101 guide](docs/javascript.md). TypeScript uses compiler emission, original source maps and the same SDK, with an opt-in [TypeScript 7 native emitter](docs/typescript-native.md); see its [101 guide](docs/typescript.md). Java uses a JDK agent and bytecode body probes; see its [101 guide](docs/java.md). Go uses compiler overlays and the Go SDK; see its [101 guide](docs/go.md). Rust uses original-source compiler probes and a Cargo wrapper with the Rust SDK, including qualified async completion and cancellation timing; see its [101 guide](docs/rust.md). An explicit [Rust LLVM profile](docs/rust-compiler.md) preserves tested original source locations for synchronous standalone inputs and remains under qualification. See the [language adapters](docs/languages.md). Live filter changes and additional platform qualification remain planned. Published quality badges cover the repository-tooling SonarQube analysis; native coverage is enforced separately by the product quality gate. See the [local implementation and validation](docs/local-implementation.md).
-
-## How it will work
-
-Dependabot alerts and security updates are enabled separately from weekly dependency-update proposals. Run `make github-security-check` to verify the live settings and open-alert count as quuxio; see the [security policy](SECURITY.md#dependabot-alerts-and-security-updates).
-
-```mermaid
-flowchart LR
-    Source[Selected C/C++ source] --> Compiler[Clang + compiler probes]
-    Compiler --> App[Native executable]
-    App --> Runtime[Rust runtime: bounded thread buffers]
-    Runtime --> Worker[Aggregate metrics / sample traces]
-    Worker --> Collector[OTLP Collector]
-    Collector --> Backend[Your observability backend]
-```
-
-The callback backend provides normal-return function timing using Clang's `-finstrument-functions`. The matched LLVM 22 backend provides compile-time function selection and C++ exceptional-exit timing. Sampled C/C++ function-body traces are available with the LLVM backend. Timing, symbol resolution, error semantics, and data loss are explicit parts of the [design](docs/design.md).
-
-## Local workflow
-
-The proposed executable name is `quux-otelc`, avoiding a command collision with OpenTelemetry's existing Go `otelc`. Go builds [refuse SDK resolution that changes application language or existing dependencies](docs/go.md#build-and-runtime-boundaries); older/incompatible module graphs require separate dependency isolation. Build the CLI and runtime together, then use the supplied local fixture configuration:
+Requirements: Python 3.12+, a full JDK 21+, Maven, Node/npm for Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
 
 ```sh
-make build
-mkdir -p build/native
-./target/debug/quux-otelc --config examples/local.toml doctor
-./target/debug/quux-otelc --config examples/local.toml clang -O2 -g \
-  tests/fixtures/timing.c -o build/native/timing
-./target/debug/quux-otelc inspect build/native/timing
-./target/debug/quux-otelc --config examples/local.toml run ./build/native/timing
+make setup java-build
+make stack-up
+.venv/bin/python -m otelc plan
+.venv/bin/python -m otelc example java
 ```
 
-For exception-enabled C++, use the LLVM backend in `examples/exceptions.toml`; `make examples` builds internal C, C++, exception and object lifetime apps. The legacy callback backend requires selected C++ translation units to already use `-fno-exceptions`. Start the [Docker Collector, Prometheus and Grafana stack](docs/observability-stack.md) with `make stack-up` to view metrics. See [compiler integration](docs/instrumentation.md) and [support boundaries](docs/support.md).
+Enter `10` to run ten operations, `gc` to request collection from the test application, or `quit` to exit. The ten-operation checksum is `41284864`. The [ordinary application](examples/java/BenchmarkApp.java) has no telemetry dependency. otelc generates official-agent configuration and loads its own small extension; it does not modify application source or classes on disk.
 
-## Design documentation
-
-Start with the [documentation index](docs/README.md) or [system design](docs/design.md).
-
-| Document | Contents |
-| --- | --- |
-| [System design](docs/design.md) | Scope, architecture, components, and invariants |
-| [Compiler integration](docs/instrumentation.md) | Callback prototype, metadata, build integration, and LLVM pass |
-| [Probe ABI](docs/abi.md) | Draft C interface, descriptors, lifecycle, and compatibility |
-| [Runtime](docs/runtime.md) | Thread buffers, recursion, memory bounds, overload, and shutdown |
-| [Configuration](docs/configuration.md) | TOML schema, selection rules, defaults, and planned CLI |
-| [Telemetry](docs/telemetry.md) | Metric semantics, trace construction, timestamps, and OTLP |
-| [Support matrix](docs/support.md) | Planned languages, platforms, and unsupported execution models |
-| [Roadmap and validation](docs/roadmap.md) | Milestones, acceptance criteria, tests, and performance evidence |
-| [Design decisions](docs/decisions.md) | Decisions and alternatives |
-| [Related work and compiler checks](docs/research.md) | Primary sources and reproducible feasibility checks |
-| [Repository quality](docs/quality.md) | Local checks, CI, SonarQube, and badge maintenance |
-
-## Working on this repository
-
-The implementation uses Rust, a small C shim and a C++ LLVM pass. Install Rust 1.98.1 with its matching `rustc-dev` component, matched LLVM 22/Clang (`brew install llvm@22` on this Mac), Python 3.12+, Node.js 24.11+ and Make. The full quality gate also requires the [pinned experimental Rust compiler profile](docs/rust-compiler.md#build-the-pinned-profile), including its separate nightly and LLVM 23 tools:
+Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/otelc-comparison) or [function metrics and object lifetimes](http://localhost:3001/d/otelc-lifetimes):
 
 ```sh
-make setup
-rustup component add --toolchain 1.98.1 rustc-dev
-rustup toolchain install nightly-2026-09-28 --profile minimal
-brew install llvm@23
-OTELC_RUSTC="$(rustup which --toolchain nightly-2026-09-28 rustc)" make rust-llvm-build
+make benchmark
+```
+
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. Select one comparison run in Grafana. Later language examples will use this same workload and policy so Java can be compared with C++, Rust, C, Python, JavaScript, Go and Microsoft TypeScript. Only delivered adapters produce data; missing languages are not fabricated.
+
+## Collection, emission and lifetimes
+
+The new policy is schema 3: it separates `metrics.collection` from `metrics.emission` and replaces the archived schemas. Generated tool configuration is not user-maintained. Both live switches are installed at initial launch, including when the policy starts off. Traces keep their launch-time configuration.
+
+```toml
+[metrics]
+collection = true
+emission = true
+```
+
+The benchmark changes these states in one instrumented PID. For manual control, the generated private runtime directory contains `control.sock`:
+
+```sh
+.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock status
+.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock off
+.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock collection on
+.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock emission on
+```
+
+Off/on controls both together; the separate controls change only their named state. Emission-off starts no new exports. Status reports in-flight requests that must settle before a strict off barrier is effective. Collection-off suppresses cached SDK instruments and observable callbacks. Cumulative values remain available after re-enable; emission-only suppression can include the silent interval in a later cumulative point. Installed hooks, enabled tracing and lifecycle bookkeeping can retain overhead while metrics are off.
+
+Java observes selected final classes with one constructor. It measures successful construction to **observed GC** and, when an existing synchronous zero-argument void release method matches, construction to **resource release**. Failed or duplicate releases do not invent completion. The observer uses bounded weak identity metadata, does not call application `hashCode`/`equals`, and never requests production GC. The explicit `gc` command is part of the test fixture. Capacity losses invalidate benchmark publication. These boundaries differ from C++ destruction and Rust drop; dashboards keep their labels separate.
+
+See [measuring object and resource lifetimes](docs/lifetimes.md) for configuration, metrics, spans, failure cases and the language delivery plan.
+
+## Validation and limits
+
+```sh
 make check
-make help
 ```
 
-`make check` lints Markdown, tests repository tooling with a minimum 90% line coverage, and runs Rust formatting, Clippy, unit tests, native integration tests, queue model checking and 80% native, Python and Node product line-coverage gates. `make scan` verifies the remote new-code policy and scans a clean Git commit when `SONAR_TOKEN` is available. See [quality setup](docs/quality.md) for the current analysis scope and local Rust coverage workflow.
+Checks include policy validation, source/checksum preservation, decoded OTLP, exceptions, all four same-process metric states, cached instruments, trace continuity, lifetime observation and coverage. Java requires the exact pinned official agent and matching SDK extension API. Dynamic meter configuration currently uses a pinned internal SDK bridge; incompatible upgrades must fail validation.
 
-## Contributing
-
-Design feedback and implementation proposals are welcome through [issues](https://github.com/quuxio/otelc/issues) and [discussions](https://github.com/quuxio/otelc/discussions). Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [milestones](docs/roadmap.md) before starting a change. Report vulnerabilities through the process in [SECURITY.md](SECURITY.md).
-
-## License
-
-Released under [AGPL-3.0](LICENSE). No separate runtime linking exception is granted by this repository.
-
-## Local metrics, lifetimes and benchmarks
-
-Start with the [developer 101](docs/developer-101.md) for source examples, configuration, annotations and live metrics controls.
-
-| Task | Command |
-| --- | --- |
-| [Start the Collector, Prometheus and Grafana](docs/observability-stack.md) | `make stack-up` |
-| [Build the internal C/C++ examples](docs/local-implementation.md) | `make examples` |
-| [Compare plain, probes-disabled and metrics-enabled builds](docs/benchmarks.md) | `make benchmark` |
-| [Measure metrics off/on in the same process](docs/benchmarks.md#live-metrics-latency-in-one-process) | `make benchmark-live` |
-| [Reuse ordinary and instrumented Go executables](docs/go-builds.md) | `go --build`, then `go --run-baseline` / `go --run` through the CLI |
-| [Verify stored function and worker traces](docs/traces.md) | `make trace-check`; add `TRACE_CHECK_ARGS='--workload tasks'` for Python/Java workers |
-
-Open the [Grafana dashboard](http://localhost:3000/d/otelc-local) after starting the stack. For exception-enabled C++, select `examples/exceptions.toml` with the matched LLVM backend. Benchmark reports retain raw samples and telemetry-loss evidence.
-
-- [Common configuration](docs/common-configuration.md): one schema-2 policy for C, C++, Rust, Python, Java, JavaScript, TypeScript and Go.
-- [Language guides](docs/languages.md): adapter setup and current support. See the [roadmap](docs/roadmap.md#todo-language-adapters) for remaining work.
-- [Rust compiler inspection](docs/rust-compiler.md): the experimental LLVM backend reports the actual build inventory without running the application.
-- [Context and lifetime spans](docs/context-and-lifetime-plan.md): the all-language delivery plan, with [Python task and worker context](docs/python-task-context.md) and [Java executor qualification](docs/java-task-context.md).
-- [Shared trace-context carrier](docs/trace-context-carrier.md): bounded Rust/Python wire parsing and common vectors; HTTP hooks remain unavailable.
-- [Object lifetimes](docs/object-lifetimes.md): source-free Python [collection spans](docs/python-collection.md) and [explicit resource boundaries](docs/python-resources.md), JavaScript [collection spans](docs/javascript-collection.md) and TypeScript [collection spans](docs/typescript-collection.md), plus the C++ metric guard; automatic destruction remains planned.
+The current launcher runs the internal Java example. General application discovery, arbitrary classloaders/inheritance/delegating constructors, more precise overloaded-method selection, other languages and further platform qualification remain work. Stock Java selection is used only when all selected overloads can be honoured; partial overload exclusions fail before launch. The stack is local, with anonymous Grafana viewing bound to loopback. Stop its containers with `make stack-down`; data volumes remain.

@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: otelc
+    folder: otelc
+    type: file
+    # Poll bind mounts: macOS filesystem events do not always reach the container.
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

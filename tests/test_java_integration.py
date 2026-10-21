@@ -1,0 +1,216 @@
+"""Actual upstream-agent execution, decoded OTLP and same-process switching."""
+
+from __future__ import annotations
+
+import copy
+import gzip
+import json
+import os
+import select
+import subprocess
+import tempfile
+import threading
+import time
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+from otelc import control, java
+from otelc.config import Policy
+
+
+class Capture:
+    def __init__(self) -> None:
+        self.metrics: list[ExportMetricsServiceRequest] = []
+        self.traces: list[ExportTraceServiceRequest] = []
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                payload = self.rfile.read(int(self.headers["Content-Length"]))
+                if self.headers.get("Content-Encoding") == "gzip":
+                    payload = gzip.decompress(payload)
+                if self.path.endswith("/metrics"):
+                    message = ExportMetricsServiceRequest()
+                    message.ParseFromString(payload)
+                    owner.metrics.append(message)
+                elif self.path.endswith("/traces"):
+                    message = ExportTraceServiceRequest()
+                    message.ParseFromString(payload)
+                    owner.traces.append(message)
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-protobuf")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *_: object) -> None:
+                """Keep the actual application stdout channel untouched."""
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.worker.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.worker.join(2)
+
+    def points(self, name: str) -> list[Any]:
+        return [point for request in self.metrics for resource in request.resource_metrics
+                for scope in resource.scope_metrics for metric in scope.metrics if metric.name == name
+                for point in (metric.sum.data_points if metric.HasField("sum") else metric.histogram.data_points if metric.HasField("histogram") else metric.gauge.data_points)]
+
+    def calls(self) -> int:
+        return max((point.as_int for point in self.points("otelc.function.calls")), default=0)
+
+    def lifetime_count(self, name: str, boundary: str, type_name: str) -> int:
+        """Read the latest cumulative value for one lifecycle boundary/type."""
+        values = []
+        for point in self.points(name):
+            attributes = {item.key: item.value.string_value for item in point.attributes}
+            if attributes.get("boundary") == boundary and attributes.get("type") == type_name:
+                values.append(point.as_int)
+        return max(values, default=0)
+
+
+def batch(process: subprocess.Popen[str], count: int | str) -> dict[str, Any]:
+    if process.stdin is None or process.stdout is None:
+        raise AssertionError("missing application pipes")
+    process.stdin.write(f"{count}\n")
+    process.stdin.flush()
+    ready, _, _ = select.select([process.stdout], [], [], 20)
+    if not ready:
+        raise AssertionError("application batch timed out")
+    return json.loads(process.stdout.readline())
+
+
+class JavaIntegrationTests(unittest.TestCase):
+    def test_official_agent_metrics_lifetimes_and_live_controls(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        source = Path("examples/java/BenchmarkApp.java")
+        before = source.read_bytes()
+        data = copy.deepcopy(Policy.load(Path("examples/otelc.toml")).data)
+        data["export"]["endpoint"] = f"http://127.0.0.1:{capture.server.server_port}"
+        data["traces"]["sample_ratio"] = 1.
+        data["metrics"]["collection"] = False
+        data["metrics"]["emission"] = False
+        policy = Policy.parse(data)
+        with tempfile.TemporaryDirectory(prefix="otelc-test-", dir="/tmp") as temporary:
+            runtime = Path(temporary)
+            with (runtime / "stderr.log").open("w+") as errors:
+                environment = os.environ | {"OTEL_INSTRUMENTATION_METHODS_INCLUDE": "examples.BenchmarkApp[excluded]", "OTEL_METRICS_EXPORTER": "none"}
+                process = subprocess.Popen(java.command(policy, runtime), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True, env=environment)
+                try:
+                    socket = runtime / "control.sock"
+                    first = control.wait_ready(socket, process.pid)
+                    self.assertFalse(first["collection"])
+                    self.assertFalse(first["emission"])
+                    initial = batch(process, 10)
+                    self.assertEqual(initial["checksum"], 41284864)
+                    self.assertEqual(capture.calls(), 0)
+
+                    enabled = control.request(socket, "on")
+                    self.assertEqual(enabled["pid"], process.pid)
+                    self.assertEqual(batch(process, 10)["checksum"], initial["checksum"])
+                    self.assertEqual(batch(process, "throw"), {"exception": "IllegalArgumentException", "message": "negative seed"})
+                    control.request(socket, "flush")
+                    self.assertEqual(capture.calls(), 11)
+
+                    control.request(socket, "collection off")
+                    batch(process, 10)
+                    control.request(socket, "flush")
+                    self.assertEqual(capture.calls(), 11)
+
+                    control.request(socket, "emission off")
+                    deadline = time.monotonic() + 3
+                    while control.request(socket, "status")["in_flight_exports"] and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    received = len(capture.metrics)
+                    control.request(socket, "collection on")
+                    batch(process, 10)
+                    control.request(socket, "flush")
+                    self.assertEqual(len(capture.metrics), received)
+
+                    control.request(socket, "emission on")
+                    control.request(socket, "flush")
+                    self.assertEqual(capture.calls(), 21)
+                    self.assertEqual(control.request(socket, "status")["pid"], process.pid)
+                    batch(process, "gc")
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline:
+                        control.request(socket, "flush")
+                        lifetime = capture.points("otelc.lifetime.completed")
+                        boundaries = {attribute.value.string_value for point in lifetime for attribute in point.attributes if attribute.key == "boundary"}
+                        gc_values = [point.as_int for point in lifetime if any(attribute.key == "boundary" and attribute.value.string_value == "observed_gc" for attribute in point.attributes)]
+                        if {"resource", "observed_gc"} <= boundaries and max(gc_values, default=0) >= 20:
+                            break
+                        time.sleep(.05)
+                    self.assertTrue({"resource", "observed_gc"} <= boundaries, f"missing lifecycle telemetry: {boundaries}")
+                    gc_completed = [point.as_int for point in lifetime if any(attribute.key == "boundary" and attribute.value.string_value == "observed_gc" for attribute in point.attributes)]
+                    self.assertEqual(max(gc_completed), 20, "off-state constructions cannot become retroactive metric observations")
+                    labels = {attribute.value.string_value for point in capture.points("otelc.function.calls") for attribute in point.attributes if attribute.key == "function"}
+                    self.assertFalse(any("excluded" in label for label in labels))
+                    self.assertNotIn("unknown", labels)
+
+                    self.assertEqual(batch(process, "lifecycle"),
+                                     {"construction_failed": True, "close_failed": True})
+                    batch(process, "gc")
+                    lifecycle_type = "examples.BenchmarkApp$LifecycleWorkItem"
+                    deadline = time.monotonic() + 10
+                    while time.monotonic() < deadline:
+                        control.request(socket, "flush")
+                        if (capture.lifetime_count("otelc.lifetime.completed", "observed_gc", lifecycle_type) == 2
+                                and capture.lifetime_count("otelc.lifetime.incomplete", "resource", lifecycle_type) == 1):
+                            break
+                        time.sleep(.05)
+                    self.assertEqual(capture.lifetime_count("otelc.lifetime.admitted", "observed_gc", lifecycle_type), 2,
+                                     "a throwing constructor cannot start a lifetime")
+                    self.assertEqual(capture.lifetime_count("otelc.lifetime.completed", "observed_gc", lifecycle_type), 2)
+                    self.assertEqual(capture.lifetime_count("otelc.lifetime.completed", "resource", lifecycle_type), 1,
+                                     "failed and duplicate close cannot complete extra lifetimes")
+                    self.assertEqual(capture.lifetime_count("otelc.lifetime.incomplete", "resource", lifecycle_type), 1)
+
+                    control.request(socket, "off")
+                    process.stdin.write("quit\n")
+                    process.stdin.flush()
+                    self.assertEqual(process.wait(timeout=10), 0)
+                    self.assertTrue(capture.traces, "metrics switching must not disable trace export")
+                    spans = [span for request in capture.traces for resource in request.resource_spans for scope in resource.scope_spans for span in scope.spans]
+                    self.assertEqual(sum("workload" in span.name for span in spans), 41,
+                                     "function spans must include calls made while metric collection/emission were off")
+                    lifetime_spans = [span for span in spans if span.name.endswith(" lifetime")]
+                    fixture_spans = [span for span in lifetime_spans if span.name == lifecycle_type + " lifetime"]
+                    self.assertEqual(len(fixture_spans), 3, "two observed collections and one successful release")
+                    for span in lifetime_spans:
+                        attributes = {item.key: item.value.string_value for item in span.attributes}
+                        self.assertIn(attributes["boundary"], {"observed_gc", "resource"})
+                        self.assertGreaterEqual(span.end_time_unix_nano, span.start_time_unix_nano)
+                        self.assertFalse(span.parent_span_id, "lifetimes use links instead of extending a completed parent")
+                    workload_ids = {span.span_id for span in spans if "workload" in span.name}
+                    self.assertTrue(any(link.span_id in workload_ids for span in lifetime_spans for link in span.links),
+                                    "construction within a function must link to that function's span")
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+                    if process.stdin:
+                        process.stdin.close()
+                    if process.stdout:
+                        process.stdout.close()
+                    errors.seek(0)
+                    diagnostics = errors.read()
+                    if "ERROR" in diagnostics:
+                        self.fail(diagnostics[-6000:])
+        self.assertEqual(source.read_bytes(), before)
+
+
+if __name__ == "__main__":
+    unittest.main()

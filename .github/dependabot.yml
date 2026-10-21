@@ -1,40 +1,18 @@
 version: 2
 updates:
-  - package-ecosystem: github-actions
+  - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
-  - package-ecosystem: pip
-    directory: /
+  - package-ecosystem: maven
+    directory: /adapters/java
     schedule:
       interval: weekly
   - package-ecosystem: npm
     directory: /ci/markdownlint
     schedule:
       interval: weekly
-  - package-ecosystem: npm
-    directory: /adapters/node
-    schedule:
-      interval: weekly
-  - package-ecosystem: cargo
-    directories:
-      - /
-      - /native/rust/frontend
-      - /native/rust/mir
-    schedule:
-      interval: weekly
-    groups:
-      rust-dependencies:
-        patterns: ["*"]
-  - package-ecosystem: maven
-    directory: /adapters/java
-    schedule:
-      interval: weekly
-  - package-ecosystem: gomod
-    directory: /adapters/go
-    schedule:
-      interval: weekly
-  - package-ecosystem: gomod
-    directory: /ci/go-tools
+  - package-ecosystem: github-actions
+    directory: /
     schedule:
       interval: weekly
