@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 PACKAGES = ("io.quux.otelc.methods.", "io.quux.otelc.lifecycle.", "io.quux.otelc.witness.probe.")
+CLASS_SUFFIX = ".class"
 
 
 def class_names(classpath: list[Path]) -> set[str]:
@@ -17,11 +18,12 @@ def class_names(classpath: list[Path]) -> set[str]:
     names: set[str] = set()
     for entry in classpath:
         if entry.is_dir():
-            names.update(path.relative_to(entry).as_posix()[:-6].replace("/", ".")
-                         for path in entry.rglob("*.class"))
+            names.update(path.relative_to(entry).as_posix().removesuffix(CLASS_SUFFIX).replace("/", ".")
+                         for path in entry.rglob("*" + CLASS_SUFFIX))
         else:
             with zipfile.ZipFile(entry) as archive:
-                names.update(name[:-6].replace("/", ".") for name in archive.namelist() if name.endswith(".class"))
+                names.update(name.removesuffix(CLASS_SUFFIX).replace("/", ".")
+                             for name in archive.namelist() if name.endswith(CLASS_SUFFIX))
     return names
 
 
@@ -42,7 +44,7 @@ def extension(classpath: list[Path], template: Path, runtime: Path) -> Path:
     except zipfile.BadZipFile as error:
         raise ValueError("invalid Java extension archive") from error
     active = [package for package in PACKAGES
-              if any(entry.startswith(package.replace(".", "/")) and entry.endswith(".class") for entry in entries)]
+              if any(entry.startswith(package.replace(".", "/")) and entry.endswith(CLASS_SUFFIX) for entry in entries)]
     if not any(name.startswith(tuple(active)) for name in names):
         return template
     compiler = tool(template)
@@ -50,7 +52,7 @@ def extension(classpath: list[Path], template: Path, runtime: Path) -> Path:
         raise ValueError("build the helper relocation tool with make java-build")
     template_sha = hashlib.sha256(original).hexdigest()
     tool_sha = hashlib.sha256(compiler.read_bytes()).hexdigest()
-    names.update(entry[:-6].replace("/", ".") for entry in entries if entry.endswith(".class"))
+    names.update(entry.removesuffix(CLASS_SUFFIX).replace("/", ".") for entry in entries if entry.endswith(CLASS_SUFFIX))
     sequence = 0
     while True:
         prefix = f"io.quux.otelc.generated.h{template_sha[:16]}x{sequence}."

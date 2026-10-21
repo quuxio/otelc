@@ -53,7 +53,7 @@ public final class HelperRelocator {
     Map<String, String> packages = new LinkedHashMap<>();
     for (String key : properties.stringPropertyNames().stream().sorted().toList()) {
       String value = properties.getProperty(key);
-      if (!PACKAGES.contains(key) || !value.matches("io\\.quux\\.otelc\\.generated\\.h[0-9a-f]{16}x[0-9]+\\.(methods|lifecycle|probe)\\.")) {
+      if (!PACKAGES.contains(key) || !value.matches("io\\.quux\\.otelc\\.generated\\.h[0-9a-f]{16}x\\d+\\.(methods|lifecycle|probe)\\.")) {
         throw new IllegalArgumentException("invalid private helper mapping");
       }
       packages.put(key, value);
