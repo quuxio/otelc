@@ -57,6 +57,10 @@ def validate(value: Any) -> dict[str, Any]:
     outcomes = ("not_started", "pending", "succeeded", "failed", "timed_out", "unavailable")
     if not isinstance(lifecycle, dict) or any(lifecycle.get(key) not in outcomes for key in ("flush", "shutdown")):
         raise ValueError("invalid runtime health lifecycle")
+    flush = value.get("metric_flush")
+    if (not isinstance(flush, dict) or any(not isinstance(flush.get(key), str) or not _counter(flush[key])
+                                          for key in ("attempts", "failed_attempts"))):
+        raise ValueError("invalid runtime health flush accounting")
     _span_accounting(value.get("span_accounting"))
     _exports(value.get("trace_exports"), "spans")
     _exports(value.get("metric_exports"), "metric_points")

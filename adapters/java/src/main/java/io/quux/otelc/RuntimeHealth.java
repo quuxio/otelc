@@ -54,6 +54,8 @@ final class RuntimeHealth {
   private int closedProcessors;
   private long started;
   private long ended;
+  private long metricFlushAttempts;
+  private long metricFlushFailures;
   private String flushOutcome = "not_started";
   private String shutdownOutcome = "not_started";
   private String finalSnapshot;
@@ -145,6 +147,8 @@ final class RuntimeHealth {
         + ",\"scope\":\"sdk_pipeline\",\"phase\":\"" + (finished ? "final" : "running") + "\""
         + ",\"sdk_attached\":" + (sdk != null)
         + ",\"lifecycle\":{\"flush\":\"" + flushOutcome + "\",\"shutdown\":\"" + shutdownOutcome + "\"}"
+        + ",\"metric_flush\":{\"attempts\":" + decimal(metricFlushAttempts)
+        + ",\"failed_attempts\":" + decimal(metricFlushFailures) + "}"
         + ",\"span_accounting\":{\"processors_observed\":" + processors
         + ",\"batch_processors_observed\":" + batchProcessors
         + ",\"sampled_started\":" + (processors == 0 ? "null" : decimal(started))
@@ -163,13 +167,41 @@ final class RuntimeHealth {
     return !result.isDone() ? "timed_out" : result.isSuccess() ? "succeeded" : "failed";
   }
 
-  private static String flush(OpenTelemetrySdk value, long deadline) {
+  private static CompletableResultCode flushTraces(OpenTelemetrySdk value) {
     try {
-      return await(CompletableResultCode.ofAll(List.of(
-          value.getSdkTracerProvider().forceFlush(), value.getSdkMeterProvider().forceFlush())), deadline);
+      return value.getSdkTracerProvider().forceFlush();
     } catch (RuntimeException failure) {
-      return "failed";
+      return CompletableResultCode.ofFailure();
     }
+  }
+
+  private String flushMetrics(OpenTelemetrySdk value, long deadline) throws InterruptedException {
+    while (true) {
+      synchronized (this) { metricFlushAttempts++; }
+      String outcome;
+      try { outcome = await(value.getSdkMeterProvider().forceFlush(), deadline); }
+      catch (RuntimeException failure) {
+        synchronized (this) { metricFlushFailures++; }
+        return "failed";
+      }
+      if (!"failed".equals(outcome)) return outcome;
+      synchronized (this) {
+        metricFlushFailures++;
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) return "failed";
+        // PeriodicMetricReader rejects concurrent flushes. A retry must make a
+        // real SDK call; preserve every failed attempt instead of relabelling it.
+        TimeUnit.NANOSECONDS.timedWait(this, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10)));
+      }
+    }
+  }
+
+  private String flush(OpenTelemetrySdk value, long deadline) throws InterruptedException {
+    CompletableResultCode tracesResult = flushTraces(value);
+    String metricsOutcome = flushMetrics(value, deadline);
+    String tracesOutcome = await(tracesResult, deadline);
+    if ("timed_out".equals(tracesOutcome) || "timed_out".equals(metricsOutcome)) return "timed_out";
+    return "failed".equals(tracesOutcome) || "failed".equals(metricsOutcome) ? "failed" : "succeeded";
   }
 
   private static String shutdown(OpenTelemetrySdk value, long deadline) {

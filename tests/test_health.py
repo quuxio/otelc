@@ -26,6 +26,7 @@ def report() -> dict[str, Any]:
             "pid": os.getpid(), "policy_sha256": "a" * 64, "selection_sha256": "b" * 64,
             "scope": "sdk_pipeline", "phase": "running", "sdk_attached": True,
             "lifecycle": {"flush": "not_started", "shutdown": "not_started"},
+            "metric_flush": {"attempts": "0", "failed_attempts": "0"},
             "span_accounting": {"processors_observed": 1, "batch_processors_observed": 1,
                                 "sampled_started": "0", "sampled_ended": "0", "sampled_active": "0",
                                 "queue_pending": None, "queue_dropped": None, "queue_evidence": "unavailable"},
@@ -41,6 +42,7 @@ class HealthShapeTests(unittest.TestCase):
         cases = [None, [], good | {"schema_version": True}, good | {"pid": True},
                  good | {"phase": "complete"}, good | {"policy_sha256": "stale"},
                  good | {"selection_sha256": None}, good | {"lifecycle": {}},
+                 good | {"metric_flush": {}}, good | {"metric_flush": {"attempts": None, "failed_attempts": "0"}},
                  good | {"span_accounting": None}, good | {"trace_exports": []},
                  good | {"downstream_receipt": "succeeded"}]
         for candidate in cases:
@@ -120,7 +122,7 @@ class JavaHealthTests(unittest.TestCase):
             final = health.read(runtime / "health.json")
             self.assertEqual(final["phase"], "final")
             self.assertEqual(final["pid"], value["pid"])
-            self.assertEqual(final["lifecycle"], {"flush": "succeeded", "shutdown": "succeeded"})
+            self.assertEqual(final["lifecycle"], {"flush": "succeeded", "shutdown": "succeeded"}, json.dumps(final))
             self.assertEqual(final["span_accounting"]["queue_pending"], "0")
             self.assertEqual(final["span_accounting"]["queue_dropped"], "0")
             self.assertEqual(final["trace_exports"]["units_succeeded"], "4")

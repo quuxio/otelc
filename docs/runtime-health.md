@@ -21,6 +21,7 @@ The response to the separate `health` command and the retained file use the same
 | Field | Meaning |
 | --- | --- |
 | `lifecycle.flush`, `lifecycle.shutdown` | Outcomes of the final SDK drain: `not_started`, `pending`, `succeeded`, `failed`, `timed_out`, or `unavailable` |
+| `metric_flush.attempts`, `metric_flush.failed_attempts` | Decimal-string counts of actual final-drain metric flush calls and failed results/exceptions; retries retain earlier failures |
 | `span_accounting.processors_observed`, `batch_processors_observed` | Numeric counts of installed processor observers and supported batch processors |
 | `span_accounting.sampled_started`, `sampled_ended`, `sampled_active` | Sampled SDK spans observed at processor entry; active is started minus ended |
 | `span_accounting.queue_pending`, `queue_dropped` | Unknown while running; derived only under the clean-shutdown conditions below |
@@ -37,6 +38,8 @@ All activity counters are decimal strings, preserving integer precision for Java
 ## Shutdown and queue evidence
 
 The extension replaces the SDK's default JVM hook through its [public pinned builder API](https://github.com/open-telemetry/opentelemetry-java/blob/v1.66.0/sdk-extensions/autoconfigure/src/main/java/io/opentelemetry/sdk/autoconfigure/AutoConfiguredOpenTelemetrySdkBuilder.java). It performs a real tracer/meter force-flush and tracer/meter/logger shutdown, with one total `[export].shutdown_timeout_ms` budget (default 10000, valid range 1..1000000). A daemon drain worker also bounds a provider that blocks before returning its async result. Outstanding observer callbacks are awaited within that same budget.
+
+The pinned periodic reader can reject a metric flush when an earlier export is still active. Failed metric flush results are retried through real SDK calls within the same total deadline, with a bounded wait between attempts. Every failed attempt remains explicit in `metric_flush`; a later successful result does not erase it or any exporter failures. A synchronous exception stops those retries. Tracer flush failures are not retried or relabelled. The aggregate `lifecycle.flush` is successful only when the tracer flush and a metric flush actually succeed. Exhausted or blocked operations cannot establish a clean drain.
 
 Queue accounting requires successful flush/shutdown, exactly one supported batch processor and one observed trace exporter, successful processor closure, no pending trace export callbacks, no active sampled spans, and consistent counters. Only then is pending zero and `queue_dropped = sampled_ended - trace_exports.units_started`. This counts ended spans that never reached the exporter, including processor-closed rejections; it does not distinguish their individual drop causes. Failed exported spans remain in `units_failed`; they are not counted twice as queue drops. Other processor/exporter combinations, timeout/failure, open spans and inconsistent counts retain `null` queue values.
 

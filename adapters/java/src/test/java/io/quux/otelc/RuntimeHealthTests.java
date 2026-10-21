@@ -12,6 +12,7 @@ import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.metrics.data.AggregationTemporality;
 import io.opentelemetry.sdk.metrics.data.MetricData;
 import io.opentelemetry.sdk.metrics.export.MetricExporter;
+import io.opentelemetry.sdk.metrics.export.PeriodicMetricReader;
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.ReadWriteSpan;
@@ -310,5 +311,44 @@ class RuntimeHealthTests {
     assertTrue(health.snapshot().contains("\"shutdown\":\"succeeded\""));
     assertTrue(health.snapshot().contains("\"queue_dropped\":null"));
     sdk.close();
+  }
+
+  @Test void shutdownRetriesFlushRejectedByAnExistingMetricExport() throws Exception {
+    busyMetricFlush(true);
+    busyMetricFlush(false);
+  }
+
+  private void busyMetricFlush(boolean exportSuccess) throws Exception {
+    RuntimeHealth health = new RuntimeHealth(plan(2000));
+    CompletableResultCode pending = new CompletableResultCode();
+    CountDownLatch busyFlush = new CountDownLatch(1);
+    MetricExporter delegate = new MetricExporter() {
+      public CompletableResultCode export(Collection<MetricData> values) { return pending; }
+      public CompletableResultCode flush() { busyFlush.countDown(); return CompletableResultCode.ofSuccess(); }
+      public CompletableResultCode shutdown() { return CompletableResultCode.ofSuccess(); }
+      public AggregationTemporality getAggregationTemporality(InstrumentType type) { return AggregationTemporality.CUMULATIVE; }
+    };
+    var reader = PeriodicMetricReader.builder(ExportHealth.metrics(delegate, health))
+        .setInterval(Duration.ofHours(1)).build();
+    var sdk = OpenTelemetrySdk.builder().setMeterProvider(SdkMeterProvider.builder()
+        .registerMetricReader(reader).build()).build();
+    health.attach(sdk);
+    sdk.getMeter("busy").counterBuilder("calls").build().add(1);
+    CompletableResultCode first = sdk.getSdkMeterProvider().forceFlush();
+    assertFalse(first.isDone());
+    Thread finisher = Thread.ofPlatform().start(health::finish);
+    try {
+      assertTrue(busyFlush.await(1, TimeUnit.SECONDS), "the concurrent SDK flush must actually be attempted");
+    } finally {
+      if (exportSuccess) pending.succeed(); else pending.fail();
+    }
+    finisher.join(3000);
+    assertFalse(finisher.isAlive());
+    assertTrue(health.snapshot().contains("\"flush\":\"succeeded\""), health.snapshot());
+    assertTrue(health.snapshot().contains("\"shutdown\":\"succeeded\""), health.snapshot());
+    assertTrue(count(health.snapshot(), "attempts") >= 2);
+    assertTrue(count(health.snapshot(), "failed_attempts") >= 1);
+    assertEquals(exportSuccess, count(health.snapshot(), "units_failed") == 0,
+        "a successful retry cannot erase failed export units");
   }
 }
