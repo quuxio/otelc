@@ -138,15 +138,21 @@ class ExtensionTests {
   }
 
   @Test void safeMethodObserverPreservesValuesAndClosesSyncAndAsyncScopes() {
-    assertEquals("unchanged", io.quux.otelc.methods.Observer.exit(null, String.class, "unchanged", null));
+    assertEquals("unchanged", io.quux.otelc.methods.Observer.exit(null, "()Ljava/lang/String;", "unchanged", null));
     var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "run");
     assertNotNull(call);
-    assertEquals(3, io.quux.otelc.methods.Observer.exit(call, int.class, 3, null));
+    assertEquals(3, io.quux.otelc.methods.Observer.exit(call, "()I", 3, null));
     var errorCall = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "fail");
-    assertNull(io.quux.otelc.methods.Observer.exit(errorCall, void.class, null, new IllegalArgumentException()));
+    assertNull(io.quux.otelc.methods.Observer.exit(errorCall, "()V", null, new IllegalArgumentException()));
+    var primitiveError = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "primitiveFail");
+    assertEquals(0, io.quux.otelc.methods.Observer.exit(primitiveError, "()I", 0, new IllegalStateException()));
+    Context previous = Context.current();
+    var absent = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "absent");
+    assertNull(io.quux.otelc.methods.Observer.exit(absent, "()Lunavailable/Optional;", null, null));
+    assertSame(previous, Context.current());
     var future = new java.util.concurrent.CompletableFuture<Integer>();
     var async = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "async");
-    assertSame(future, io.quux.otelc.methods.Observer.exit(async, future.getClass(), future, null));
+    assertSame(future, io.quux.otelc.methods.Observer.exit(async, "()Ljava/util/concurrent/CompletableFuture;", future, null));
     future.complete(7);
     assertEquals(7, future.join());
   }

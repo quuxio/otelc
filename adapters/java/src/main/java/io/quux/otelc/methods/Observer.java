@@ -12,6 +12,7 @@ import io.opentelemetry.instrumentation.api.incubator.semconv.code.CodeAttribute
 import io.opentelemetry.instrumentation.api.incubator.semconv.code.CodeAttributesGetter;
 import io.opentelemetry.instrumentation.api.incubator.semconv.code.CodeSpanNameExtractor;
 import java.util.concurrent.CompletionStage;
+import java.lang.invoke.MethodType;
 
 /** Only exception identity is observed; no application throwable methods are called. */
 public final class Observer {
@@ -42,9 +43,16 @@ public final class Observer {
     return new Call(request, context, context.makeCurrent());
   }
 
-  public static Object exit(Call call, Class<?> returnType, Object result, Throwable error) {
+  public static Object exit(Call call, String descriptor, Object result, Throwable error) {
     if (call == null) return result;
     call.scope().close();
+    if (result == null || error != null) {
+      INSTRUMENTER.end(call.context(), call.request(), null, error);
+      return result;
+    }
+    // Resolve only this return type. Reflecting a Method resolves unrelated declarations too.
+    Class<?> returnType = MethodType.fromMethodDescriptorString(
+        "()" + descriptor.substring(descriptor.indexOf(')') + 1), call.request().owner().getClassLoader()).returnType();
     Object observed = AsyncOperationEndSupport.create(INSTRUMENTER, Void.class, returnType)
         .asyncEnd(call.context(), call.request(), result, error);
     // Stage completion callbacks are installed eagerly; the application keeps its original future.
