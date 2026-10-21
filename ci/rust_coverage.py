@@ -148,7 +148,9 @@ def enforce_rust_file_coverage(report):
                         ("/crates/rust-adapter/src/compiler_mir_profile.rs", "Rust stable compiler profile"),
                         ("/crates/rust-adapter/src/declarations.rs", "Rust original declaration parser"),
                         ("/crates/rust-adapter/src/compiler_inventory.rs", "Rust compiler inventory"),
-                        ("/crates/export/src/carrier.rs", "Shared trace carrier")):
+                        ("/crates/export/src/carrier.rs", "Shared trace carrier"),
+                        ("/crates/symbols/src/object_transform.rs", "Native object transforms"),
+                        ("/crates/cli/src/object_command.rs", "Native object operation")):
         selected = []
         include = False
         for line in report.splitlines():
