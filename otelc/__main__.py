@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from otelc import benchmark, control, java
+from otelc import benchmark, control, java, prepared_java
 from otelc.config import LANGUAGES, Policy
 
 
@@ -25,6 +25,12 @@ def main() -> int:
     example = commands.add_parser("example")
     example.add_argument("language", choices=LANGUAGES)
     example.add_argument("--plain", action="store_true")
+    prepared = commands.add_parser("java", help="launch a prepared classpath with verified source bindings")
+    prepared.add_argument("--manifest", type=Path, required=True)
+    prepared.add_argument("--runtime", type=Path, required=True, help="new private directory with a short path")
+    prepared.add_argument("--plain", action="store_true")
+    prepared.add_argument("--prepare-only", action="store_true", help="emit JSON launch identity without starting Java")
+    prepared.add_argument("arguments", nargs=argparse.REMAINDER)
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--socket", type=Path, required=True)
     metrics.add_argument("operation", nargs="+", choices=("on", "off", "collection", "emission", "status", "flush"))
@@ -34,6 +40,10 @@ def main() -> int:
             print(json.dumps(control.request(args.socket, " ".join(args.operation)), indent=2))
             return 0
         policy = Policy.load(args.config)
+        if args.command == "java":
+            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            return prepared_java.run(args.manifest, policy, args.runtime, plain=args.plain,
+                                     prepare_only=args.prepare_only, arguments=tuple(arguments))
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"], "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0

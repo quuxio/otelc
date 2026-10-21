@@ -96,16 +96,16 @@ def has_release_method(output: str, methods: list[str]) -> bool:
     return False
 
 
-def resolve_selections(classes: Path, policy: Policy) -> tuple[dict[str, list[str]], list[str], list[str]]:
-    """Resolve policy intent against compiled identities before loading the agent."""
+def resolve_bindings(classpath: list[Path], bindings: dict[str, str], policy: Policy
+                     ) -> tuple[dict[str, list[str]], list[str], list[str]]:
+    """Apply common selectors only to classes with original-source bindings."""
     selected: dict[str, list[str]] = {}
     types: list[str] = []
     resources: list[str] = []
-    if not policy.selection("sources").accepts("examples/java/BenchmarkApp.java"):
-        return selected, types, resources
-    for path in sorted(classes.rglob("*.class")):
-        name = str(path.relative_to(classes).with_suffix("")).replace(os.sep, ".")
-        output = subprocess.check_output([executable("javap"), "-p", "-classpath", str(classes), name], text=True)
+    for name, source in sorted(bindings.items()):
+        if not policy.selection("sources").accepts(source):
+            continue
+        output = subprocess.check_output([executable("javap"), "-p", "-classpath", os.pathsep.join(map(str, classpath)), name], text=True)
         methods = selected_methods(name, output, policy.selection("functions"))
         if methods:
             selected[name] = methods
@@ -118,17 +118,29 @@ def resolve_selections(classes: Path, policy: Policy) -> tuple[dict[str, list[st
 
 
 def command(policy: Policy, runtime: Path, *, plain: bool = False) -> list[str]:
-    """Lower one policy into the official agent and extension launch arguments."""
+    """Build the internal example and lower its common policy."""
     if "java" not in policy.data["languages"]:
         raise ValueError("java is not enabled by this policy")
     classes = build()
+    bindings = {str(path.relative_to(classes).with_suffix("")).replace(os.sep, "."):
+                "examples/java/BenchmarkApp.java" for path in classes.rglob("*.class")}
+    return launch_command(policy, runtime, [classes], "examples.BenchmarkApp", bindings, plain=plain)
+
+
+def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_class: str,
+                   bindings: dict[str, str], *, plain: bool = False,
+                   arguments: tuple[str, ...] = ()) -> list[str]:
+    """Translate one policy without compiling or changing application inputs."""
+    if "java" not in policy.data["languages"]:
+        raise ValueError("java is not enabled by this policy")
     launch = [executable("java")]
+    application = ["-cp", os.pathsep.join(map(str, classpath)), main_class, *arguments]
     if plain:
-        return launch + ["-cp", str(classes), "examples.BenchmarkApp"]
+        return launch + application
     extension = ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"
     if not extension.is_file():
         raise ValueError("build the Java extension with make java-build first")
-    selected, types, resources = resolve_selections(classes, policy)
+    selected, types, resources = resolve_bindings(classpath, bindings, policy)
     data = policy.data
     values = {
         "otel.service.name": data["resource"]["service_name"],
@@ -167,4 +179,4 @@ def command(policy: Policy, runtime: Path, *, plain: bool = False) -> list[str]:
     # The common policy owns these settings; ambient agent variables cannot
     # replace the chosen functions or remove the pipeline needed for live enable.
     launch.extend(f"-D{key}={value}" for key, value in sorted(values.items()))
-    return launch + ["-cp", str(classes), "examples.BenchmarkApp"]
+    return launch + application
