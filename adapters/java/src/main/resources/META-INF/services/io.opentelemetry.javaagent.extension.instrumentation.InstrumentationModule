@@ -1,1 +1,2 @@
 io.quux.otelc.LifetimeModule
+io.quux.otelc.MethodsModule
