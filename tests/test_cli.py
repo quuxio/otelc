@@ -37,8 +37,9 @@ class CliTests(unittest.TestCase):
             self.invoke(["example", "java", "--plain"])
             call.assert_called_once_with(["java", "app"])
         with patch("otelc.prepared_java.run", return_value=0) as run:
-            self.invoke(["java", "--manifest", "app.json", "--runtime", "/tmp/otelc-run", "--plain", "--", "--argument"])
+            self.invoke(["java", "--manifest", "app.json", "--runtime", "/tmp/otelc-run", "--plain", "--diagnostic-profile", "--", "--argument"])
             self.assertTrue(run.call_args.kwargs["plain"])
+            self.assertTrue(run.call_args.kwargs["diagnostic_profile"])
             self.assertEqual(run.call_args.kwargs["arguments"], ("--argument",))
         report = {"run_id": "test", "median_ns_per_operation": {"plain": 10}}
         with patch("otelc.benchmark.run", return_value=report) as run:

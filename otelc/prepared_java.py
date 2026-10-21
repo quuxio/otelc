@@ -206,7 +206,8 @@ class PreparedLaunch:
 
 
 def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
-            plain: bool = False, arguments: tuple[str, ...] = ()) -> PreparedLaunch:
+            plain: bool = False, arguments: tuple[str, ...] = (),
+            diagnostic_profile: bool = False) -> PreparedLaunch:
     """Create a launch plan in a fresh private directory, without compiling."""
     runtime = runtime.resolve(strict=True)
     metadata = runtime.stat()
@@ -226,12 +227,22 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
     # JVM origin diagnostics go to a separate file in both plain and instrumented runs.
     argv[0] = str(executable)
     argv.insert(1, f"-Xlog:class+load=info:file={log_path}")
+    if diagnostic_profile:
+        argv.insert(1, "-Xshare:off")
+    agent_log = None if plain else str(runtime / "agent.log")
+    if agent_log:
+        # This is the pinned agent's isolated, shaded SLF4J backend, not an
+        # application logger and not a redirection/filter of System.err.
+        argv[1:1] = ["-Dotel.javaagent.logging=simple",
+                     f"-Dio.opentelemetry.javaagent.slf4j.simpleLogger.logFile={agent_log}"]
     tooling = [file_identity(executable)]
     if not plain:
         tooling.extend(file_identity(path) for path in (
             java.agent(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
             runtime / "agent.properties", runtime / "plan.properties"))
     identity = {"schema_version": 1, "language": "java", "plain": plain,
+                "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
+                "agent_diagnostics": agent_log,
                 "argv": argv, "main_class": application.main_class,
                 "ordered_classpath": list(map(str, application.classpath)),
                 "application": application_identity, "tooling": tooling,
@@ -246,11 +257,13 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
 
 
 def run(manifest: Path, policy: Policy, runtime: Path, *, plain: bool = False,
-        prepare_only: bool = False, arguments: tuple[str, ...] = ()) -> int:
+        prepare_only: bool = False, arguments: tuple[str, ...] = (),
+        diagnostic_profile: bool = False) -> int:
     """Run the public CLI profile, retaining PID and post-run input verification."""
     application = PreparedApplication.load(manifest)
     runtime.mkdir(mode=0o700)
-    launch = prepare(application, policy, runtime, plain=plain, arguments=arguments)
+    launch = prepare(application, policy, runtime, plain=plain, arguments=arguments,
+                     diagnostic_profile=diagnostic_profile)
     if prepare_only:
         print(json.dumps(launch.identity))
         return 0
