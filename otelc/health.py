@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -11,7 +12,7 @@ from typing import Any
 
 
 def _counter(value: object) -> bool:
-    return value is None or isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value) is not None
+    return value is None or isinstance(value, str) and re.fullmatch(r"0|[1-9]\d*", value, re.ASCII) is not None
 
 
 def _observers(value: object) -> bool:
@@ -71,12 +72,32 @@ def validate(value: Any) -> dict[str, Any]:
 
 def read(path: Path) -> dict[str, Any]:
     """Read a bounded private report, including the retained post-exit checkpoint."""
-    metadata = path.lstat()
-    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
-            or metadata.st_uid != os.getuid() or metadata.st_size > 4096):
-        raise ValueError("expected a bounded private runtime health report")
-    with path.open("rb") as stream:
-        data = stream.read(4097)
+    if path.name != "health.json":
+        raise ValueError("expected the generated health.json report")
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parent = os.fstat(directory)
+        if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700:
+            raise ValueError("runtime health directory must be owned and private (0700)")
+        data = _read_report(directory)
+    finally:
+        os.close(directory)
     if len(data) > 4096:
         raise ValueError("oversized runtime health report")
     return validate(json.loads(data))
+
+
+def _read_report(directory: int) -> bytes:
+    """Use a fixed basename and check the opened object, avoiding lstat/open races."""
+    try:
+        descriptor = os.open("health.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise ValueError("runtime health report cannot be a symlink") from error
+        raise
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
+                or metadata.st_uid != os.getuid() or metadata.st_size > 4096):
+            raise ValueError("expected a bounded private runtime health report")
+        return stream.read(4097)

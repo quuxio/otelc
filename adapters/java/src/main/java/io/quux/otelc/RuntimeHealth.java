@@ -17,6 +17,13 @@ import java.util.concurrent.TimeUnit;
 final class RuntimeHealth {
   enum Signal { TRACES, METRICS }
 
+  private static final String NOT_STARTED = "not_started";
+  private static final String PENDING = "pending";
+  private static final String SUCCEEDED = "succeeded";
+  private static final String FAILED = "failed";
+  private static final String TIMED_OUT = "timed_out";
+  private static final String UNAVAILABLE = "unavailable";
+
   private static final class Exports {
     int observers;
     long batches;
@@ -56,8 +63,8 @@ final class RuntimeHealth {
   private long ended;
   private long metricFlushAttempts;
   private long metricFlushFailures;
-  private String flushOutcome = "not_started";
-  private String shutdownOutcome = "not_started";
+  private String flushOutcome = NOT_STARTED;
+  private String shutdownOutcome = NOT_STARTED;
   private String finalSnapshot;
 
   RuntimeHealth(Properties plan) {
@@ -137,8 +144,8 @@ final class RuntimeHealth {
   }
 
   private String encode(boolean finished) {
-    boolean drained = finished && "succeeded".equals(flushOutcome)
-        && "succeeded".equals(shutdownOutcome) && processors == 1 && batchProcessors == 1
+    boolean drained = finished && SUCCEEDED.equals(flushOutcome)
+        && SUCCEEDED.equals(shutdownOutcome) && processors == 1 && batchProcessors == 1
         && closedProcessors == 1 && traces.observers == 1 && traces.pending() == 0
         && started == ended && ended >= traces.units;
     return "{\"schema_version\":1,\"kind\":\"otelc.runtime-health\",\"language\":\"java\""
@@ -156,7 +163,7 @@ final class RuntimeHealth {
         + ",\"sampled_active\":" + (processors == 0 ? "null" : decimal(started - ended))
         + ",\"queue_pending\":" + (drained ? "\"0\"" : "null")
         + ",\"queue_dropped\":" + (drained ? decimal(ended - traces.units) : "null")
-        + ",\"queue_evidence\":\"" + (drained ? "derived_after_shutdown" : "unavailable") + "\"}"
+        + ",\"queue_evidence\":\"" + (drained ? "derived_after_shutdown" : UNAVAILABLE) + "\"}"
         + ",\"trace_exports\":" + traces.json("spans")
         + ",\"metric_exports\":" + metrics.json("metric_points")
         + ",\"downstream_receipt\":\"unavailable\",\"otlp_partial_rejection\":\"unavailable\"}\n";
@@ -164,7 +171,8 @@ final class RuntimeHealth {
 
   private static String await(CompletableResultCode result, long deadline) {
     result.join(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
-    return !result.isDone() ? "timed_out" : result.isSuccess() ? "succeeded" : "failed";
+    if (!result.isDone()) return TIMED_OUT;
+    return result.isSuccess() ? SUCCEEDED : FAILED;
   }
 
   private static CompletableResultCode flushTraces(OpenTelemetrySdk value) {
@@ -182,13 +190,13 @@ final class RuntimeHealth {
       try { outcome = await(value.getSdkMeterProvider().forceFlush(), deadline); }
       catch (RuntimeException failure) {
         synchronized (this) { metricFlushFailures++; }
-        return "failed";
+        return FAILED;
       }
-      if (!"failed".equals(outcome)) return outcome;
+      if (!FAILED.equals(outcome)) return outcome;
       synchronized (this) {
         metricFlushFailures++;
         long remaining = deadline - System.nanoTime();
-        if (remaining <= 0) return "failed";
+        if (remaining <= 0) return FAILED;
         // PeriodicMetricReader rejects concurrent flushes. A retry must make a
         // real SDK call; preserve every failed attempt instead of relabelling it.
         TimeUnit.NANOSECONDS.timedWait(this, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10)));
@@ -200,8 +208,8 @@ final class RuntimeHealth {
     CompletableResultCode tracesResult = flushTraces(value);
     String metricsOutcome = flushMetrics(value, deadline);
     String tracesOutcome = await(tracesResult, deadline);
-    if ("timed_out".equals(tracesOutcome) || "timed_out".equals(metricsOutcome)) return "timed_out";
-    return "failed".equals(tracesOutcome) || "failed".equals(metricsOutcome) ? "failed" : "succeeded";
+    if (TIMED_OUT.equals(tracesOutcome) || TIMED_OUT.equals(metricsOutcome)) return TIMED_OUT;
+    return FAILED.equals(tracesOutcome) || FAILED.equals(metricsOutcome) ? FAILED : SUCCEEDED;
   }
 
   private static String shutdown(OpenTelemetrySdk value, long deadline) {
@@ -209,15 +217,15 @@ final class RuntimeHealth {
       return await(CompletableResultCode.ofAll(List.of(value.getSdkTracerProvider().shutdown(),
           value.getSdkMeterProvider().shutdown(), value.getSdkLoggerProvider().shutdown())), deadline);
     } catch (RuntimeException failure) {
-      return "failed";
+      return FAILED;
     }
   }
 
   private void drain(OpenTelemetrySdk value, long deadline) {
     try {
-      synchronized (this) { flushOutcome = "pending"; }
+      synchronized (this) { flushOutcome = PENDING; }
       String flushed = flush(value, deadline);
-      synchronized (this) { flushOutcome = flushed; shutdownOutcome = "pending"; }
+      synchronized (this) { flushOutcome = flushed; shutdownOutcome = PENDING; }
       String closed = shutdown(value, deadline);
       synchronized (this) {
         shutdownOutcome = closed;
@@ -250,10 +258,10 @@ final class RuntimeHealth {
     }
     String result;
     synchronized (this) {
-      if (value == null) { flushOutcome = "unavailable"; shutdownOutcome = "unavailable"; }
+      if (value == null) { flushOutcome = UNAVAILABLE; shutdownOutcome = UNAVAILABLE; }
       else {
-        if ("pending".equals(flushOutcome) || "not_started".equals(flushOutcome)) flushOutcome = "timed_out";
-        if ("pending".equals(shutdownOutcome) || "not_started".equals(shutdownOutcome)) shutdownOutcome = "timed_out";
+        if (PENDING.equals(flushOutcome) || NOT_STARTED.equals(flushOutcome)) flushOutcome = TIMED_OUT;
+        if (PENDING.equals(shutdownOutcome) || NOT_STARTED.equals(shutdownOutcome)) shutdownOutcome = TIMED_OUT;
       }
       finalSnapshot = encode(true);
       result = finalSnapshot;

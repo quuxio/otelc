@@ -51,6 +51,7 @@ class HealthShapeTests(unittest.TestCase):
         for section, field, value in (("span_accounting", "sampled_started", -1),
                                       ("span_accounting", "queue_pending", "00"),
                                       ("span_accounting", "queue_dropped", "-1"),
+                                      ("span_accounting", "sampled_started", "1\u0662"),
                                       ("span_accounting", "processors_observed", True),
                                       ("trace_exports", "units_started", 0),
                                       ("metric_exports", "unit", "observations")):
@@ -74,6 +75,25 @@ class HealthShapeTests(unittest.TestCase):
             link.symlink_to(path)
             with self.assertRaises(ValueError):
                 health.read(link)
+            linked_directory = Path(directory) / "linked"
+            linked_directory.mkdir(mode=0o700)
+            (linked_directory / "health.json").symlink_to(path)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                health.read(linked_directory / "health.json")
+            fifo_directory = Path(directory) / "fifo"
+            fifo_directory.mkdir(mode=0o700)
+            os.mkfifo(fifo_directory / "health.json", 0o600)
+            with self.assertRaises(ValueError):
+                health.read(fifo_directory / "health.json")
+            private = Path(directory) / "private.json"
+            private.write_text(json.dumps(report()))
+            private.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "generated health.json"):
+                health.read(private)
+            Path(directory).chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "directory"):
+                health.read(path)
+            Path(directory).chmod(0o700)
             path.chmod(0o644)
             with self.assertRaises(ValueError):
                 health.read(path)
