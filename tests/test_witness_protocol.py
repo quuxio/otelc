@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from otelc import witness
+from otelc.config import Policy
 
 
 def reply() -> dict:
@@ -19,7 +20,8 @@ def reply() -> dict:
              "request_id": "b" * 32, "error": None, "rejected_probes": "0",
              "max_scopes": 64, "max_spans_per_scope": 1024}
     value.update({key: "c" * 64 for key in ("build_sha256", "selection_sha256", "policy_sha256",
-                                           "tooling_sha256", "wrapper_probe_id")})
+                                           "tooling_sha256", "wrapper_probe_id", "envelope_probe_id",
+                                           "rendezvous_probe_id", "target_probe_id")})
     value["scope"] = {"cookie": "d" * 32, "sequence": "1", "scope_id": "e" * 32,
         "case_id": "f" * 64, "attempt_id": "0" * 64, "phase": "complete", "failure": None,
         "trace_id": "1" * 32, "root_span_id": "2" * 16, "target_span_id": "3" * 16,
@@ -32,6 +34,14 @@ def reply() -> dict:
 
 
 class WitnessProtocolTests(unittest.TestCase):
+    def test_only_explicit_full_tracing_can_request_the_profile(self) -> None:
+        for tracing in ({"enabled": False, "sample_ratio": 1.0},
+                        {"enabled": True, "sample_ratio": 0.999999999999}):
+            policy = Policy.parse({"schema_version": 3, "languages": ["java"], "traces": tracing})
+            with self.subTest(tracing=tracing), self.assertRaisesRegex(ValueError, "sample_ratio=1"):
+                witness.configure(SimpleNamespace(), policy, Path("unused"), Path("unused"), {}, [])
+        self.assertFalse(witness.decimal("1\u0661"))
+
     def test_private_final_reports_retain_all_contexts_and_refuse_forged_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -64,7 +74,7 @@ class WitnessProtocolTests(unittest.TestCase):
     def test_closed_header_and_scope_shapes_and_exact_identity_types(self) -> None:
         valid = reply()
         self.assertIs(witness.validate_reply(valid, "b" * 32), valid)
-        self.assertEqual(witness.validate_reply(valid | {"scope": None}, "b" * 32)["scope"], None)
+        self.assertIsNone(witness.validate_reply(valid | {"scope": None}, "b" * 32)["scope"])
         outer = [("schema_version", True), ("profile", "other"), ("runtime_id", "invalid"),
                  ("request_id", "c" * 32), ("error", []), ("rejected_probes", 0),
                  ("max_scopes", True), ("max_spans_per_scope", 1), ("build_sha256", "0")]
@@ -87,7 +97,7 @@ class WitnessProtocolTests(unittest.TestCase):
         mutations = [("exported_ids", []), ("ended_ids", []), ("started_ids", []),
                      ("pending_exports", "1"), ("checkpoint", False), ("root_exited", False),
                      ("envelope_exited", False), ("target_exited", False), ("failure", "cancelled"),
-                     ("target_entries", "0"), ("root_span_id", "4" * 16), ("scope_id", None),
+                     ("target_entries", "0"), ("phase", "exited"), ("root_span_id", "4" * 16), ("scope_id", None),
                      ("exported_ids", ["4" * 16]), ("started_ids", ["2" * 16] * 2),
                      ("started_ids", [[]]), ("started_ids", ["2" * 16] * 1025)]
         for key, value in mutations:
@@ -97,6 +107,9 @@ class WitnessProtocolTests(unittest.TestCase):
         pending["scope"].update(producer_complete=False, checkpoint=False, exported_ids=[], pending_exports="2")
         pending["error"] = "incomplete"
         self.assertFalse(witness.validate_reply(pending, "b" * 32)["scope"]["producer_complete"])
+        for key in ("ended_ids", "exported_ids"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                witness.validate_reply(pending | {"scope": pending["scope"] | {key: ["4" * 16]}}, "b" * 32)
 
     def test_binding_documents_reject_unknown_missing_duplicate_and_forged_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

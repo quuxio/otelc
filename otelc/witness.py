@@ -27,6 +27,7 @@ ROLES = ("envelope", "rendezvous", "wrapper", "target")
 FIELDS = {"owner", "name", "descriptor", "class_sha256", "method_sha256", "probe_id"}
 REPLY_FIELDS = {"schema_version", "profile", "runtime_id", "request_id", "error", "build_sha256",
                 "selection_sha256", "policy_sha256", "tooling_sha256", "wrapper_probe_id",
+                "envelope_probe_id", "rendezvous_probe_id", "target_probe_id",
                 "rejected_probes", "max_scopes", "max_spans_per_scope", "scope"}
 SCOPE_FIELDS = {"cookie", "sequence", "scope_id", "case_id", "attempt_id", "phase", "failure",
                 "trace_id", "root_span_id", "target_span_id", "root_exited", "envelope_exited",
@@ -42,7 +43,7 @@ def hexadecimal(value: object, size: int, *, nullable: bool = False) -> bool:
 
 def decimal(value: object) -> bool:
     """Keep counters exact and bounded across language JSON implementations."""
-    return isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]{0,18}", value) is not None
+    return isinstance(value, str) and re.fullmatch(r"0|[1-9]\d{0,18}", value, re.ASCII) is not None
 
 
 def validate_reply(result: object, request_id: str | None) -> dict[str, Any]:
@@ -55,7 +56,8 @@ def validate_reply(result: object, request_id: str | None) -> dict[str, Any]:
             or type(result["max_scopes"]) is not int or result["max_scopes"] != 64
             or type(result["max_spans_per_scope"]) is not int or result["max_spans_per_scope"] != 1024
             or any(not hexadecimal(result[key], 64) for key in
-                   ("build_sha256", "selection_sha256", "policy_sha256", "tooling_sha256", "wrapper_probe_id"))
+                   ("build_sha256", "selection_sha256", "policy_sha256", "tooling_sha256",
+                    "wrapper_probe_id", "envelope_probe_id", "rendezvous_probe_id", "target_probe_id"))
             or result["error"] is not None and (not isinstance(result["error"], str)
                 or not re.fullmatch(r"[a-z][a-z_]{0,63}", result["error"]))):
         raise ValueError("invalid or uncorrelated witness response")
@@ -98,13 +100,14 @@ def _span_sets(scope: dict[str, Any]) -> list[set[str]]:
                 or any(not hexadecimal(value, 16) for value in values) or len(set(values)) != len(values)):
             raise ValueError("invalid witness span IDs")
         ids.append(set(values))
-    if not ids[1] <= ids[0] or not ids[2] <= ids[0]:
+    if not ids[1].issubset(ids[0]) or not ids[2].issubset(ids[0]):
         raise ValueError("witness span accounting is inconsistent")
     return ids
 
 
 def _validate_completion(scope: dict[str, Any], ids: list[set[str]]) -> None:
-    if scope["producer_complete"] and (scope["failure"] is not None or not ids[0] or ids[0] != ids[1] or ids[0] != ids[2]
+    if scope["producer_complete"] and (scope["phase"] != "complete" or scope["failure"] is not None
+            or not ids[0] or ids[0] != ids[1] or ids[0] != ids[2]
             or any(scope[key] is not True for key in ("checkpoint", "root_exited", "envelope_exited", "target_exited"))
             or scope["pending_exports"] != "0" or scope["queue_dropped"] not in (None, "0") or scope["target_entries"] == "0"
             or scope["root_span_id"] not in ids[0] or scope["target_span_id"] not in ids[0]
@@ -190,7 +193,7 @@ def compile_bindings(application: PreparedApplication,
     if any(not path.is_file() for path in (extension, compiler)):
         raise ValueError("build the offline compiler with make java-build")
     before = application.input_identity()
-    with tempfile.TemporaryDirectory(prefix="otelc-witness-", dir="/tmp") as directory:
+    with tempfile.TemporaryDirectory(prefix="otelc-witness-") as directory:
         command = [java.executable("java"), "-cp", os.pathsep.join(map(str, (extension, compiler))),
                    "io.quux.otelc.witness.WitnessBindings"]
         for index, role in enumerate(ROLES):
@@ -249,23 +252,27 @@ def load_bindings(path: Path, application: PreparedApplication) -> dict[str, Any
             or set(document["bindings"]) != set(ROLES)):
         raise ValueError("expected complete Java witness bindings schema 1")
     for role, binding in document["bindings"].items():
-        if (not isinstance(binding, dict) or set(binding) != FIELDS
-                or any(not isinstance(value, str) or not value or "\n" in value
-                       for value in binding.values())):
-            raise ValueError("invalid witness method binding")
-        owner = binding["owner"].replace("/", ".")
-        if owner not in application.bindings:
-            raise ValueError("every witness owner requires an original source binding")
-        if binding["class_sha256"] != application.bindings[owner]["class_sha256"]:
-            raise ValueError("witness class digest disagrees with prepared inputs")
-        if any(not re.fullmatch(r"[0-9a-f]{64}", binding[key])
-               for key in ("class_sha256", "method_sha256", "probe_id")):
-            raise ValueError("invalid witness digest")
-        fields = [PROFILE, role, binding["owner"], binding["name"], binding["descriptor"],
-                  binding["class_sha256"], binding["method_sha256"]]
-        if hashlib.sha256("\n".join(fields).encode()).hexdigest() != binding["probe_id"]:
-            raise ValueError("witness probe ID disagrees with binding")
+        _validate_binding(role, binding, application)
     return document
+
+
+def _validate_binding(role: str, binding: object, application: PreparedApplication) -> None:
+    if (not isinstance(binding, dict) or set(binding) != FIELDS
+            or any(not isinstance(value, str) or not value or "\n" in value
+                   for value in binding.values())):
+        raise ValueError("invalid witness method binding")
+    owner = binding["owner"].replace("/", ".")
+    if owner not in application.bindings:
+        raise ValueError("every witness owner requires an original source binding")
+    if binding["class_sha256"] != application.bindings[owner]["class_sha256"]:
+        raise ValueError("witness class digest disagrees with prepared inputs")
+    if any(not re.fullmatch(r"[0-9a-f]{64}", binding[key])
+           for key in ("class_sha256", "method_sha256", "probe_id")):
+        raise ValueError("invalid witness digest")
+    fields = [PROFILE, role, binding["owner"], binding["name"], binding["descriptor"],
+              binding["class_sha256"], binding["method_sha256"]]
+    if hashlib.sha256("\n".join(fields).encode()).hexdigest() != binding["probe_id"]:
+        raise ValueError("witness probe ID disagrees with binding")
 
 
 def origin(application: PreparedApplication, owner: str) -> str:
@@ -287,17 +294,19 @@ def configure(application: PreparedApplication, policy: Policy, runtime: Path,
               bindings_file: Path, application_identity: dict[str, Any],
               tooling: list[dict[str, Any]]) -> list[Path]:
     """Generate a private producer plan without compiling or changing application files."""
-    if not policy.data["traces"]["enabled"] or policy.data["traces"]["sample_ratio"] != 1.0:
+    if not policy.data["traces"]["enabled"] or policy.data["traces"]["sample_ratio"] < 1.0:
         raise ValueError("the witness profile requires explicit tracing with sample_ratio=1")
     document = load_bindings(bindings_file, application)
     selected = json.loads((runtime / "selection.json").read_text())
     target = document["bindings"]["target"]
     if target["name"] not in selected["methods"].get(target["owner"].replace("/", "."), []):
         raise ValueError("witness target is not selected by the common policy")
+    from otelc.prepared_java import file_identity
+
     values = {"schema_version": "1", "profile": PROFILE,
               "socket": str(runtime / "witness.sock"), "build": digest(application_identity),
               "selection": hashlib.sha256((runtime / "selection.json").read_bytes().rstrip(b"\n")).hexdigest(),
-              "policy": digest(policy.data), "tooling": digest(tooling)}
+              "policy": digest(policy.data), "tooling": digest([*tooling, file_identity(bindings_file)])}
     for role, binding in document["bindings"].items():
         values.update({f"{role}.{key}": value for key, value in binding.items()})
         values[f"{role}.origin"] = origin(application, binding["owner"])

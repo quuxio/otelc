@@ -16,7 +16,7 @@ import java.time.Duration;
 final class WitnessServer {
   private WitnessServer() {}
 
-  static void start(Path socket, WitnessRuntime runtime) throws IOException {
+  static ServerSocketChannel start(Path socket, WitnessRuntime runtime) throws IOException {
     if (!Files.getPosixFilePermissions(socket.getParent()).equals(PosixFilePermissions.fromString("rwx------"))) {
       throw new IOException("witness directory must be private");
     }
@@ -28,15 +28,18 @@ final class WitnessServer {
       listener.close(); throw error;
     }
     Thread.ofPlatform().daemon().name("otelc-witness-control").start(() -> {
-      while (listener.isOpen()) {
-        try (var channel = listener.accept()) { serve(channel, runtime); }
-        catch (IOException ignored) { /* A disconnected peer does not retire another action. */ }
-      }
+      try (listener) {
+        while (listener.isOpen()) {
+          try (var channel = listener.accept()) { serve(channel, runtime); }
+          catch (IOException ignored) { /* A disconnected peer does not retire another action. */ }
+        }
+      } catch (IOException ignored) { /* Shutdown closes the owned listener. */ }
     });
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       try { listener.close(); Files.deleteIfExists(socket); }
       catch (IOException ignored) { /* The owning JVM is terminating. */ }
     }, "otelc-witness-cleanup"));
+    return listener;
   }
 
   static void serve(SocketChannel channel, WitnessRuntime runtime) throws IOException {
@@ -44,13 +47,14 @@ final class WitnessServer {
     ByteBuffer input = ByteBuffer.allocate(2049);
     long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
     String command = null;
-    while (input.hasRemaining() && System.nanoTime() < deadline) {
+    boolean finished = false;
+    while (input.hasRemaining() && System.nanoTime() < deadline && !finished) {
       int count = channel.read(input);
-      if (count < 0) break;
+      finished = count < 0;
       if (count > 0 && input.get(input.position() - 1) == '\n') {
         String value = new String(input.array(), 0, input.position() - 1, StandardCharsets.US_ASCII);
         if (value.matches("[a-z0-9 ]{1,2048}")) command = value;
-        break;
+        finished = true;
       }
       java.util.concurrent.locks.LockSupport.parkNanos(1_000_000);
     }

@@ -86,120 +86,161 @@ class WitnessRuntimeTests {
         try (var provider = SdkTracerProvider.builder().addSpanProcessor(WitnessPipeline.processor(
             SimpleSpanProcessor.create(WitnessPipeline.exporter(exporter, runtime)), runtime)).build()) {
           runtime.attach(OpenTelemetrySdk.builder().setTracerProvider(provider).build());
-          assertTrue(exchange(root.resolve("witness.sock"), "1 " + "0".repeat(32) + " status\n").contains("\"scope\":null"));
-          assertTrue(exchange(root.resolve("witness.sock"), "unfinished").contains("invalid_request"));
-          assertTrue(exchange(root.resolve("witness.sock"), "x".repeat(2049) + "\n").contains("invalid_request"));
-          assertThrows(java.io.IOException.class, () -> WitnessServer.start(root.resolve("witness.sock"), runtime));
-          String identity = property(command(runtime, "status"), "runtime_id");
-          var method = actual.getMethod("envelope", int.class);
-          var callback = actual.getField("CALLBACK");
-          var armed = new ArrayList<String>();
-          Thread ownerThread = Thread.currentThread();
-          var nested = new java.util.concurrent.atomic.AtomicBoolean();
-          callback.set(null, (Runnable) () -> {
-            if (Thread.currentThread() != ownerThread || nested.get()) return;
-            String status = command(runtime, "status");
-            assertTrue(status.contains("\"phase\":\"ready\""), status);
-            String[] arguments = armArguments(status, plan);
-            for (int index : new int[] {0, 1, 2, 5, 6, 7, 8, 9}) {
-              String[] wrong = arguments.clone();
-              wrong[index] = index == 2 ? "999" : "0".repeat(wrong[index].length());
-              assertTrue(command(runtime, "arm " + String.join(" ", wrong)).contains("arm_identity_mismatch"));
-            }
-            String ack = command(runtime, "arm " + String.join(" ", arguments));
-            assertTrue(ack.contains("\"phase\":\"armed\""), ack);
-            armed.add(property(ack, "scope_id"));
-            assertTrue(command(runtime, "arm " + String.join(" ", arguments)).contains("not_ready"));
-            assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("root_active"));
-            // An unrelated reflective wrapper call must not consume or poison this envelope's arm.
-            try { assertEquals(100, actual.getMethod("wrapper", int.class).invoke(null, 99)); }
-            catch (ReflectiveOperationException error) { throw new AssertionError(error); }
-            nested.set(true);
-            try {
-              assertEquals(100, method.invoke(null, 99));
-              var otherFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
-              Thread noise = Thread.ofPlatform().start(() -> {
-                try { assertEquals(101, method.invoke(null, 100)); }
-                catch (ReflectiveOperationException | AssertionError error) { otherFailure.set(error); }
-              });
-              noise.join(2000);
-              assertFalse(noise.isAlive());
-              assertNull(otherFailure.get());
-              assertTrue(command(runtime, "status").contains("\"phase\":\"armed\""));
-            } catch (ReflectiveOperationException | InterruptedException error) { throw new AssertionError(error); }
-            finally { nested.set(false); }
-          });
-          assertEquals(8, method.invoke(null, 7));
-          String first = command(runtime, "end " + identity + " " + armed.getLast());
-          assertTrue(first.contains("\"producer_complete\":true"), first);
-          assertEquals(2, exporter.spans.size());
-          callback.set(null, (Runnable) () -> {
-            String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
-            armed.add(property(ack, "scope_id"));
-          });
-          var error = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> method.invoke(null, -1));
-          assertInstanceOf(IllegalArgumentException.class, error.getCause());
-          assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("\"producer_complete\":true"));
-          assertTrue(exporter.spans.getLast().getStatus().getStatusCode() == io.opentelemetry.api.trace.StatusCode.ERROR);
-          exporter.delay = true;
-          assertEquals(3, method.invoke(null, 2));
-          String pending = command(runtime, "end " + identity + " " + armed.getLast());
-          assertTrue(pending.contains("\"producer_complete\":false"), pending);
-          exporter.pending.forEach(CompletableResultCode::succeed);
-          String recovered = command(runtime, "end " + identity + " " + armed.getLast());
-          assertTrue(recovered.contains("\"producer_complete\":true"), recovered);
-          assertTrue(recovered.contains("\"flush_failures\":\"1\""), recovered);
-          exporter.delay = false; exporter.fail = true;
-          assertEquals(4, method.invoke(null, 3));
-          String failed = command(runtime, "end " + identity + " " + armed.getLast());
-          assertTrue(failed.contains("\"producer_complete\":false"), failed);
-          assertTrue(failed.contains("\"export_failures\":\"2\""), failed);
-          exporter.fail = false;
-          callback.set(null, (Runnable) () -> {
-            String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
-            armed.add(property(ack, "scope_id"));
-            assertTrue(command(runtime, "cancel " + identity + " " + armed.getLast()).contains("cancelled"));
-          });
-          assertEquals(5, method.invoke(null, 4));
-          assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("\"producer_complete\":false"));
-          callback.set(null, (Runnable) () -> {
-            String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
-            armed.add(property(ack, "scope_id"));
-          });
-          assertEquals(13, method.invoke(null, 12));
-          String recursive = command(runtime, "end " + identity + " " + armed.getLast());
-          assertTrue(recursive.contains("\"producer_complete\":true"), recursive);
-          assertTrue(recursive.contains("\"target_entries\":\"3\""), recursive);
-          callback.set(null, (Runnable) () -> {
-            String[] arguments = armArguments(command(runtime, "status"), plan);
-            clock.addAndGet(java.util.concurrent.TimeUnit.SECONDS.toNanos(31));
-            assertTrue(command(runtime, "arm " + String.join(" ", arguments)).contains("not_ready"));
-          });
-          assertEquals(6, method.invoke(null, 5));
-          assertTrue(command(runtime, "status").contains("\"failure\":\"expired\""));
-          assertTrue(runtime.command("invalid").contains("invalid_request"));
-          assertTrue(command(runtime, "status bad id").contains("invalid_request"));
-          assertTrue(command(runtime, "unknown").contains("unknown_operation"));
-          assertTrue(command(runtime, "end " + identity + " " + "0".repeat(32)).contains("unknown_scope"));
-          assertTrue(command(runtime, "cancel " + identity + " " + "0".repeat(32)).contains("unknown_scope"));
-          var previous = io.opentelemetry.api.trace.SpanContext.create(property(first, "trace_id"),
-              property(first, "root_span_id"), io.opentelemetry.api.trace.TraceFlags.getSampled(),
-              io.opentelemetry.api.trace.TraceState.getDefault());
-          provider.get("late-control").spanBuilder("late")
-              .setParent(io.opentelemetry.context.Context.root().with(io.opentelemetry.api.trace.Span.wrap(previous)))
-              .setAttribute(WitnessRuntime.SCOPE, property(first, "scope_id")).startSpan().end();
-          String invalidated = command(runtime, "status " + identity + " " + property(first, "scope_id"));
-          assertTrue(invalidated.contains("\"phase\":\"invalidated\""), invalidated);
-          assertTrue(invalidated.contains("\"failure\":\"late_span\""), invalidated);
-          assertTrue(invalidated.contains("\"producer_complete\":false"), invalidated);
-          capture.transform(null, getClass().getClassLoader(), owner, actual, domain, original);
-          assertTrue(command(runtime, "arm").contains("class_identity_invalid"));
-          runtime.finish(false);
-          assertTrue(java.nio.file.Files.readString(root.resolve("witness-health.json")).contains("class_identity_invalid"));
-          callback.set(null, null);
+          var scenario = new Scenario(actual, plan, runtime, exporter, provider, clock);
+          scenario.control();
+          scenario.ownsArm();
+          scenario.exports();
+          scenario.cancellationAndExpiry();
+          scenario.finalInvalidation(capture, owner, domain, original);
         }
       }
     }
+  }
+
+  private static final class Scenario {
+    final Class<?> actual;
+    final WitnessPlan plan;
+    final WitnessRuntime runtime;
+    final Exporter exporter;
+    final SdkTracerProvider provider;
+    final java.util.concurrent.atomic.AtomicLong clock;
+    final List<String> armed = new ArrayList<>();
+    final String identity;
+    final java.lang.reflect.Method method;
+    final java.lang.reflect.Field callback;
+    String first;
+
+    Scenario(Class<?> actual, WitnessPlan plan, WitnessRuntime runtime, Exporter exporter,
+             SdkTracerProvider provider, java.util.concurrent.atomic.AtomicLong clock) throws Exception {
+      this.actual = actual; this.plan = plan; this.runtime = runtime; this.exporter = exporter;
+      this.provider = provider; this.clock = clock;
+      identity = property(command(runtime, "status"), "runtime_id");
+      method = actual.getMethod("envelope", int.class);
+      callback = actual.getField("CALLBACK");
+    }
+
+    void control() throws Exception {
+    assertTrue(exchange(plan.socket(), "1 " + "0".repeat(32) + " status\n").contains("\"scope\":null"));
+    assertTrue(exchange(plan.socket(), "unfinished").contains("invalid_request"));
+    assertTrue(exchange(plan.socket(), "x".repeat(2049) + "\n").contains("invalid_request"));
+    assertThrows(java.io.IOException.class, () -> WitnessServer.start(plan.socket(), runtime));
+    }
+
+    void ownsArm() throws Exception {
+    Thread ownerThread = Thread.currentThread();
+    var nested = new java.util.concurrent.atomic.AtomicBoolean();
+    callback.set(null, (Runnable) () -> {
+      if (Thread.currentThread() != ownerThread || nested.get()) return;
+      String status = command(runtime, "status");
+      assertTrue(status.contains("\"phase\":\"ready\""), status);
+      String[] arguments = armArguments(status, plan);
+      for (int index : new int[] {0, 1, 2, 5, 6, 7, 8, 9}) {
+        String[] wrong = arguments.clone();
+        wrong[index] = index == 2 ? "999" : "0".repeat(wrong[index].length());
+        assertTrue(command(runtime, "arm " + String.join(" ", wrong)).contains("arm_identity_mismatch"));
+      }
+      String ack = command(runtime, "arm " + String.join(" ", arguments));
+      assertTrue(ack.contains("\"phase\":\"armed\""), ack);
+      armed.add(property(ack, "scope_id"));
+      assertTrue(command(runtime, "arm " + String.join(" ", arguments)).contains("not_ready"));
+      assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("root_active"));
+      // An unrelated reflective wrapper call must not consume or poison this envelope's arm.
+      try { assertEquals(100, actual.getMethod("wrapper", int.class).invoke(null, 99)); }
+      catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+      nested.set(true);
+      try {
+        assertEquals(100, method.invoke(null, 99));
+        var otherFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread noise = Thread.ofPlatform().start(() -> {
+          try { assertEquals(101, method.invoke(null, 100)); }
+          catch (ReflectiveOperationException | AssertionError error) { otherFailure.set(error); }
+        });
+        noise.join(2000);
+        assertFalse(noise.isAlive());
+        assertNull(otherFailure.get());
+        assertTrue(command(runtime, "status").contains("\"phase\":\"armed\""));
+      } catch (ReflectiveOperationException | InterruptedException error) { throw new AssertionError(error); }
+      finally { nested.set(false); }
+    });
+    assertEquals(8, method.invoke(null, 7));
+    first = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(first.contains("\"producer_complete\":true"), first);
+    assertEquals(2, exporter.spans.size());
+    }
+
+    void exports() throws Exception {
+    callback.set(null, (Runnable) () -> {
+      String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
+      armed.add(property(ack, "scope_id"));
+    });
+    var error = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> method.invoke(null, -1));
+    assertInstanceOf(IllegalArgumentException.class, error.getCause());
+    assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("\"producer_complete\":true"));
+    assertSame(io.opentelemetry.api.trace.StatusCode.ERROR, exporter.spans.getLast().getStatus().getStatusCode());
+    exporter.delay = true;
+    assertEquals(3, method.invoke(null, 2));
+    String pending = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(pending.contains("\"producer_complete\":false"), pending);
+    exporter.pending.forEach(CompletableResultCode::succeed);
+    String recovered = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(recovered.contains("\"producer_complete\":true"), recovered);
+    assertTrue(recovered.contains("\"flush_failures\":\"1\""), recovered);
+    exporter.delay = false; exporter.fail = true;
+    assertEquals(4, method.invoke(null, 3));
+    String failed = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(failed.contains("\"producer_complete\":false"), failed);
+    assertTrue(failed.contains("\"export_failures\":\"2\""), failed);
+    exporter.fail = false;
+    }
+
+    void cancellationAndExpiry() throws Exception {
+    callback.set(null, (Runnable) () -> {
+      String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
+      armed.add(property(ack, "scope_id"));
+      assertTrue(command(runtime, "cancel " + identity + " " + armed.getLast()).contains("cancelled"));
+    });
+    assertEquals(5, method.invoke(null, 4));
+    assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("\"producer_complete\":false"));
+    callback.set(null, (Runnable) () -> {
+      String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
+      armed.add(property(ack, "scope_id"));
+    });
+    assertEquals(13, method.invoke(null, 12));
+    String recursive = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(recursive.contains("\"producer_complete\":true"), recursive);
+    assertTrue(recursive.contains("\"target_entries\":\"3\""), recursive);
+    callback.set(null, (Runnable) () -> {
+      String[] arguments = armArguments(command(runtime, "status"), plan);
+      clock.addAndGet(java.util.concurrent.TimeUnit.SECONDS.toNanos(31));
+      assertTrue(command(runtime, "arm " + String.join(" ", arguments)).contains("not_ready"));
+    });
+    assertEquals(6, method.invoke(null, 5));
+    assertTrue(command(runtime, "status").contains("\"failure\":\"expired\""));
+    assertTrue(runtime.command("invalid").contains("invalid_request"));
+    assertTrue(command(runtime, "status bad id").contains("invalid_request"));
+    assertTrue(command(runtime, "unknown").contains("unknown_operation"));
+    assertTrue(command(runtime, "end " + identity + " " + "0".repeat(32)).contains("unknown_scope"));
+    assertTrue(command(runtime, "cancel " + identity + " " + "0".repeat(32)).contains("unknown_scope"));
+    }
+
+    void finalInvalidation(WitnessClassCapture capture, String owner, java.security.ProtectionDomain domain, byte[] original) throws Exception {
+    var previous = io.opentelemetry.api.trace.SpanContext.create(property(first, "trace_id"),
+        property(first, "root_span_id"), io.opentelemetry.api.trace.TraceFlags.getSampled(),
+        io.opentelemetry.api.trace.TraceState.getDefault());
+    provider.get("late-control").spanBuilder("late")
+        .setParent(io.opentelemetry.context.Context.root().with(io.opentelemetry.api.trace.Span.wrap(previous)))
+        .setAttribute(WitnessRuntime.SCOPE, property(first, "scope_id")).startSpan().end();
+    String invalidated = command(runtime, "status " + identity + " " + property(first, "scope_id"));
+    assertTrue(invalidated.contains("\"phase\":\"invalidated\""), invalidated);
+    assertTrue(invalidated.contains("\"failure\":\"late_span\""), invalidated);
+    assertTrue(invalidated.contains("\"producer_complete\":false"), invalidated);
+    capture.transform(null, getClass().getClassLoader(), owner, actual, domain, original);
+    assertTrue(command(runtime, "arm").contains("class_identity_invalid"));
+    runtime.finish(false);
+    assertTrue(java.nio.file.Files.readString(plan.socket().getParent().resolve("witness-health.json")).contains("class_identity_invalid"));
+    callback.set(null, null);
+    }
+
   }
 
   private static String exchange(Path socket, String request) throws Exception {

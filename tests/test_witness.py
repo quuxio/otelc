@@ -158,6 +158,15 @@ final class Work {
                         send(process, "complete")
                         self.assertEqual(read_line(process), "42")
                         if not plain:
+                            deadline = time.monotonic() + 10
+                            while True:
+                                before_end = witness.request(socket, "status", status["runtime_id"], arm["scope"]["scope_id"])
+                                if len(before_end["scope"]["exported_ids"]) == 3 or time.monotonic() >= deadline:
+                                    break
+                                time.sleep(.02)
+                            self.assertEqual(len(before_end["scope"]["exported_ids"]), 3, before_end)
+                            self.assertFalse(before_end["scope"]["producer_complete"], before_end)
+                            self.assertFalse(before_end["scope"]["checkpoint"], before_end)
                             settled = witness.request(socket, "end", status["runtime_id"], arm["scope"]["scope_id"])
                             self.assertTrue(settled["scope"]["producer_complete"], settled)
                             self.assertEqual(settled["scope"]["started_ids"], settled["scope"]["exported_ids"])
@@ -260,6 +269,8 @@ final class Work {
                                 status = witness.request(socket, "status")
                                 self.assertIsNone(status["error"], (runtime / "agent.log").read_text())
                                 self.assertEqual(status["scope"]["phase"], "ready", status)
+                                for role in witness.ROLES:
+                                    self.assertEqual(status[role + "_probe_id"], compiler_result["bindings"][role]["probe_id"])
                                 if index == 3:
                                     stale = witness.request(socket, "arm", "0" * 32,
                                         status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,

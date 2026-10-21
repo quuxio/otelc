@@ -32,13 +32,7 @@ public record WitnessPlan(Path socket, Map<String, WitnessBindings.Binding> bind
     };
     if (Files.size(file) > 32768) throw new IllegalArgumentException("witness plan exceeds its bound");
     try (var reader = Files.newBufferedReader(file)) { values.load(reader); }
-    Set<String> allowed = new HashSet<>(Set.of("schema_version", "profile", "socket", "build",
-        "selection", "policy", "tooling"));
-    for (String role : ROLES) for (String field : FIELDS) allowed.add(role + "." + field);
-    if (!values.stringPropertyNames().equals(allowed) || !"1".equals(values.getProperty("schema_version"))
-        || !WitnessBindings.PROFILE.equals(values.getProperty("profile"))) {
-      throw new IllegalArgumentException("unsupported or incomplete witness plan");
-    }
+    validateShape(values);
     Map<String, WitnessBindings.Binding> bindings = new HashMap<>();
     Map<String, String> origins = new HashMap<>();
     for (String role : ROLES) {
@@ -64,6 +58,16 @@ public record WitnessPlan(Path socket, Map<String, WitnessBindings.Binding> bind
     return new WitnessPlan(Path.of(values.getProperty("socket")), bindings, origins,
         hash(values.getProperty("build")), hash(values.getProperty("selection")),
         hash(values.getProperty("policy")), hash(values.getProperty("tooling")));
+  }
+
+  private static void validateShape(Properties values) {
+    Set<String> allowed = new HashSet<>(Set.of("schema_version", "profile", "socket", "build",
+        "selection", "policy", "tooling"));
+    for (String role : ROLES) for (String field : FIELDS) allowed.add(role + "." + field);
+    if (!values.stringPropertyNames().equals(allowed) || !"1".equals(values.getProperty("schema_version"))
+        || !WitnessBindings.PROFILE.equals(values.getProperty("profile"))) {
+      throw new IllegalArgumentException("unsupported or incomplete witness plan");
+    }
   }
 
   private static String hash(String value) {

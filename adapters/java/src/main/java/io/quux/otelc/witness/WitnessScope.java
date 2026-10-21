@@ -47,6 +47,10 @@ final class WitnessScope {
   }
 
   boolean complete() {
+    return "complete".equals(phase) && canComplete();
+  }
+
+  boolean canComplete() {
     return checkpoint && failure == null && (queueDropped == null || queueDropped == 0)
         && rootExited && envelopeExited && targetExited && targetEntries >= 1
         && root != null && target != null && !spans.isEmpty()

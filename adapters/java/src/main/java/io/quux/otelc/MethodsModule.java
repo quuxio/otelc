@@ -43,27 +43,28 @@ public final class MethodsModule extends InstrumentationModule {
     var witness = io.quux.otelc.witness.WitnessRuntime.get();
     if (witness != null) for (String owner : witness.owners()) selections.putIfAbsent(owner, new String[0]);
     for (var selected : selections.entrySet()) {
-      String owner = selected.getKey();
-      String[] methods = selected.getValue();
-      result.add(new TypeInstrumentation() {
-        @Override public ElementMatcher<TypeDescription> typeMatcher() { return namedOneOf(owner); }
-        @Override public void transform(TypeTransformer transformer) {
-          var bindings = witness == null ? List.<io.quux.otelc.witness.WitnessBindings.Binding>of() : witness.bindings(owner);
-          ElementMatcher.Junction<MethodDescription> roleMethods = none();
-          for (var binding : bindings) {
-            var matcher = named(binding.declaration().name()).and(hasDescriptor(binding.declaration().descriptor()));
-            roleMethods = roleMethods.or(matcher);
-            boolean measured = java.util.Arrays.asList(methods).contains(binding.declaration().name());
-            transformer.applyAdviceToMethod(matcher, mapping -> mapping.bind(Probe.class, binding.probeId())
-                .bind(Measured.class, measured), RoleAdvice.class.getName());
-          }
-          if (methods.length != 0) transformer.applyAdviceToMethod(namedOneOf(methods).and(not(roleMethods)), MethodAdvice.class.getName());
-          if (!bindings.isEmpty()) transformer.applyTransformer((builder, type, loader, module, domain) ->
-              builder.visit(new io.quux.otelc.witness.WitnessMethodGuard(bindings, witness::guarded)));
-        }
-      });
+      result.add(new Selected(selected.getKey(), selected.getValue(), witness));
     }
     return result;
+  }
+
+  private record Selected(String owner, String[] methods, io.quux.otelc.witness.WitnessRuntime witness)
+      implements TypeInstrumentation {
+    @Override public ElementMatcher<TypeDescription> typeMatcher() { return namedOneOf(owner); }
+    @Override public void transform(TypeTransformer transformer) {
+      var bindings = witness == null ? List.<io.quux.otelc.witness.WitnessBindings.Binding>of() : witness.bindings(owner);
+      ElementMatcher.Junction<MethodDescription> roleMethods = none();
+      for (var binding : bindings) {
+        var matcher = named(binding.declaration().name()).and(hasDescriptor(binding.declaration().descriptor()));
+        roleMethods = roleMethods.or(matcher);
+        boolean measured = java.util.Arrays.asList(methods).contains(binding.declaration().name());
+        transformer.applyAdviceToMethod(matcher, mapping -> mapping.bind(Probe.class, binding.probeId())
+            .bind(Measured.class, measured), RoleAdvice.class.getName());
+      }
+      if (methods.length != 0) transformer.applyAdviceToMethod(namedOneOf(methods).and(not(roleMethods)), MethodAdvice.class.getName());
+      if (!bindings.isEmpty()) transformer.applyTransformer((builder, type, loader, module, domain) ->
+          builder.visit(new io.quux.otelc.witness.WitnessMethodGuard(bindings, witness::guarded)));
+    }
   }
 
   @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
@@ -81,6 +82,7 @@ public final class MethodsModule extends InstrumentationModule {
         @Probe String probe, @Measured boolean measured,
         @Advice.Local("otelcFunction") io.quux.otelc.methods.Observer.Call function) {
       Object token = io.quux.otelc.witness.probe.Observer.enter(owner, probe);
+      // ByteBuddy writes this parameter into the shared local read by exit advice.
       if (measured) function = io.quux.otelc.methods.Observer.enter(owner, method);
       return token;
     }

@@ -205,6 +205,20 @@ class PreparedLaunch:
                 raise ValueError("prepared launch tooling or configuration changed")
 
 
+def _launch_tooling(executable: Path, runtime: Path, plain: bool) -> list[dict[str, Any]]:
+    paths = [executable]
+    if not plain:
+        paths.extend((
+            java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
+            runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
+        if (runtime / "helpers-extension.jar").exists():
+            from otelc import java_helpers
+
+            paths.extend(runtime / name for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
+            paths.append(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"))
+    return [file_identity(path) for path in paths]
+
+
 def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
             plain: bool = False, arguments: tuple[str, ...] = (),
             diagnostic_profile: bool = False,
@@ -238,19 +252,13 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
         # application logger and not a redirection/filter of System.err.
         argv[1:1] = ["-Dotel.javaagent.logging=simple",
                      f"-Dio.opentelemetry.javaagent.slf4j.simpleLogger.logFile={agent_log}"]
-    tooling = [file_identity(executable)]
-    if not plain:
-        tooling.extend(file_identity(path) for path in (
-            java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
-            runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
-        if (runtime / "helpers-extension.jar").exists():
-            from otelc import java_helpers
-
-            tooling.extend(file_identity(runtime / name) for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
-            tooling.append(file_identity(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")))
+    tooling = _launch_tooling(executable, runtime, plain)
     if witness_bindings is not None:
-        from otelc import witness
+        from otelc import java_helpers, witness
 
+        compiler = java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")
+        if not any(item["path"] == str(compiler) for item in tooling):
+            tooling.append(file_identity(compiler))
         files = witness.configure(application, policy, runtime, witness_bindings.resolve(strict=True),
                                   application_identity, tooling)
         tooling.extend(file_identity(path) for path in files)

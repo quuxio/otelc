@@ -27,9 +27,21 @@ import java.util.function.BiFunction;
 public final class WitnessRuntime {
   static final String SCOPE = "otelc.witness.scope_id";
   static final String ROLE = "otelc.witness.role";
+  private static final String ENVELOPE = "envelope";
+  private static final String RENDEZVOUS = "rendezvous";
+  private static final String WRAPPER = "wrapper";
+  private static final String TARGET = "target";
+  private static final String ENTERED = "entered";
+  private static final String READY = "ready";
+  private static final String ARMED = "armed";
+  private static final String CONSUMED = "consumed";
+  private static final String INCOMPLETE = "incomplete";
+  private static final String EXPIRED = "expired";
+  private static final String CANCELLED = "cancelled";
   private static final int MAX_SCOPES = 64;
   private static final long LIFE = Duration.ofSeconds(30).toNanos();
-  private static volatile WitnessRuntime instance;
+  private static final java.util.concurrent.atomic.AtomicReference<WitnessRuntime> INSTANCE =
+      new java.util.concurrent.atomic.AtomicReference<>();
   private static final StackWalker WALKER = StackWalker.getInstance(Set.of(Option.RETAIN_CLASS_REFERENCE,
       Option.SHOW_REFLECT_FRAMES, Option.SHOW_HIDDEN_FRAMES));
   private final WitnessPlan plan;
@@ -72,14 +84,14 @@ public final class WitnessRuntime {
     plan.bindings().values().forEach(binding -> probes.put(binding.probeId(), binding));
   }
 
-  public static WitnessRuntime get() { return instance; }
+  public static WitnessRuntime get() { return INSTANCE.get(); }
 
   public static void configure(String file) {
     if (file == null) return;
     try {
       WitnessPlan plan = WitnessPlan.load(Path.of(file));
       var instrumentation = io.opentelemetry.javaagent.bootstrap.InstrumentationHolder.getInstrumentation();
-      instance = new WitnessRuntime(plan, WitnessClassCapture.install(instrumentation, plan.bindings(), plan.origins()));
+      INSTANCE.set(new WitnessRuntime(plan, WitnessClassCapture.install(instrumentation, plan.bindings(), plan.origins())));
     } catch (IOException error) {
       throw new IllegalStateException("cannot read private witness plan", error);
     }
@@ -136,16 +148,22 @@ public final class WitnessRuntime {
       var frames = stream.toList();
       for (int index = 0; index + 1 < frames.size(); index++) {
         if (frames.get(index).getDeclaringClass() != helper || !frames.get(index).getMethodName().equals("enter")) continue;
-        if (!frame(frames.get(index + 1), binding.declaration())) return false;
-        String caller = switch (binding.role()) {
-          case "rendezvous", "wrapper" -> "envelope";
-          case "target" -> recursive ? null : "wrapper";
-          default -> null;
-        };
-        return caller == null || index + 2 < frames.size() && frame(frames.get(index + 2), plan.bindings().get(caller).declaration());
+        return matchesCall(frames, index, binding, recursive);
       }
       return false;
     });
+  }
+
+  private boolean matchesCall(List<StackWalker.StackFrame> frames, int index,
+                              WitnessBindings.Binding binding, boolean recursive) {
+    if (!frame(frames.get(index + 1), binding.declaration())) return false;
+    String caller = switch (binding.role()) {
+      case RENDEZVOUS, WRAPPER -> ENVELOPE;
+      case TARGET -> recursive ? null : WRAPPER;
+      default -> null;
+    };
+    return caller == null || index + 2 < frames.size()
+        && frame(frames.get(index + 2), plan.bindings().get(caller).declaration());
   }
 
   private Object enter(Class<?> owner, String probe) {
@@ -163,7 +181,7 @@ public final class WitnessRuntime {
       if (parent != null && parent.scope != null) entry.attached = Context.root().makeCurrent();
       return entry;
     }
-    if ((binding.role().equals("wrapper") || binding.role().equals("target")) && scope.id != null && scope.failure == null) {
+    if ((binding.role().equals(WRAPPER) || binding.role().equals(TARGET)) && scope.id != null && scope.failure == null) {
       try { startSpan(entry, binding, recursive); }
       catch (RuntimeException | LinkageError unavailable) {
         synchronized (this) { scope.fail("role_span_failed"); }
@@ -174,8 +192,9 @@ public final class WitnessRuntime {
 
   private synchronized WitnessScope selectScope(WitnessBindings.Binding binding, Entry parent, boolean recursive) {
     expire();
-    WitnessScope scope = binding.role().equals("envelope") ? begin() : parent == null ? null : parent.scope;
-    if (scope != null && !binding.role().equals("envelope")) {
+    WitnessScope scope = parent == null ? null : parent.scope;
+    if (binding.role().equals(ENVELOPE)) scope = begin();
+    if (scope != null && !binding.role().equals(ENVELOPE)) {
       if (!ownedParent(binding.role(), parent, recursive)) { rejected++; return null; }
       advance(scope, binding.role(), parent, recursive);
     }
@@ -191,8 +210,8 @@ public final class WitnessRuntime {
 
   private boolean ownedParent(String role, Entry parent, boolean recursive) {
     return switch (role) {
-      case "rendezvous", "wrapper" -> parent.role.equals("envelope");
-      case "target" -> recursive || parent.role.equals("wrapper");
+      case RENDEZVOUS, WRAPPER -> parent.role.equals(ENVELOPE);
+      case TARGET -> recursive || parent.role.equals(WRAPPER);
       default -> false;
     };
   }
@@ -208,16 +227,16 @@ public final class WitnessRuntime {
   private void advance(WitnessScope scope, String role, Entry parent, boolean recursive) {
     if (scope.thread.get() != Thread.currentThread()) { scope.fail("wrong_thread"); return; }
     switch (role) {
-      case "rendezvous" -> {
-        if (!parent.role.equals("envelope") || !scope.phase.equals("entered")) scope.fail("invalid_rendezvous");
-        else scope.phase = "ready";
+      case RENDEZVOUS -> {
+        if (!parent.role.equals(ENVELOPE) || !scope.phase.equals(ENTERED)) scope.fail("invalid_rendezvous");
+        else scope.phase = READY;
       }
-      case "wrapper" -> {
-        if (!parent.role.equals("envelope") || !scope.phase.equals("armed")) scope.fail("unarmed_wrapper");
-        else scope.phase = "consumed";
+      case WRAPPER -> {
+        if (!parent.role.equals(ENVELOPE) || !scope.phase.equals(ARMED)) scope.fail("unarmed_wrapper");
+        else scope.phase = CONSUMED;
       }
-      case "target" -> {
-        if (!recursive && (!parent.role.equals("wrapper") || !scope.phase.equals("consumed"))) scope.fail("invalid_target");
+      case TARGET -> {
+        if (!recursive && (!parent.role.equals(WRAPPER) || !scope.phase.equals(CONSUMED))) scope.fail("invalid_target");
         else scope.targetEntries++;
       }
       default -> throw new IllegalArgumentException("invalid role");
@@ -226,7 +245,7 @@ public final class WitnessRuntime {
 
   private void startSpan(Entry entry, WitnessBindings.Binding binding, boolean recursive) {
     WitnessScope scope = entry.scope;
-    Context parent = binding.role().equals("wrapper") ? Context.root() : Context.current();
+    Context parent = binding.role().equals(WRAPPER) ? Context.root() : Context.current();
     var builder = sdk.getTracer("io.quux.otelc.witness", "1").spanBuilder("otelc.action." + binding.role())
         .setParent(parent).setAllAttributes(attributes(scope)).setAttribute(ROLE, recursive ? "recursive_target" : binding.role())
         .setAttribute("otelc.witness.probe_id", binding.probeId());
@@ -248,20 +267,23 @@ public final class WitnessRuntime {
       if (entry.attached != null) entry.attached.close();
       if (entry.parent == null) current.remove(); else current.set(entry.parent);
     }
-    synchronized (this) {
-      WitnessScope scope = entry.scope;
-      if (scope == null) return;
-      switch (entry.role) {
-        case "target" -> { if (entry.parent != null && entry.parent.role.equals("wrapper")) scope.targetExited = true; }
-        case "wrapper" -> scope.rootExited = true;
-        case "envelope" -> {
-          scope.envelopeExited = true;
-          if (scope.failure == null) scope.phase = "exited";
-          else if (Set.of("entered", "ready", "armed", "consumed").contains(scope.phase)) scope.phase = "incomplete";
-          if (active == scope) active = null;
-        }
-        default -> { /* Rendezvous exit only restores the envelope token. */ }
+    roleExited(entry);
+  }
+
+  private synchronized void roleExited(Entry entry) {
+    WitnessScope scope = entry.scope;
+    if (scope == null) return;
+    switch (entry.role) {
+      case TARGET -> scope.targetExited = scope.targetExited
+          || entry.parent != null && entry.parent.role.equals(WRAPPER);
+      case WRAPPER -> scope.rootExited = true;
+      case ENVELOPE -> {
+        scope.envelopeExited = true;
+        if (scope.failure == null) scope.phase = "exited";
+        else if (Set.of(ENTERED, READY, ARMED, CONSUMED).contains(scope.phase)) scope.phase = INCOMPLETE;
+        if (active == scope) active = null;
       }
+      default -> { /* Rendezvous exit only restores the envelope token. */ }
     }
   }
 
@@ -274,13 +296,12 @@ public final class WitnessRuntime {
   }
 
   public synchronized void spanStarted(ReadWriteSpan span) {
-    Entry entry = current.get();
     String id = span.getAttribute(AttributeKey.stringKey(SCOPE));
-    WitnessScope scope = id == null ? entry == null ? null : entry.scope : find(id);
+    WitnessScope scope = id == null ? currentScope() : find(id);
     if (scope == null || scope.id == null) return;
     String role = span.getAttribute(AttributeKey.stringKey(ROLE));
     String trace = span.getSpanContext().getTraceId();
-    if ("wrapper".equals(role)) {
+    if (WRAPPER.equals(role)) {
       scope.trace = trace; scope.root = span.getSpanContext().getSpanId();
     } else if (!trace.equals(scope.trace)) return; // Lifetime roots with links are separate traces.
     if (scope.checkpoint) { scope.fail("late_span"); scope.phase = "invalidated"; }
@@ -288,14 +309,20 @@ public final class WitnessRuntime {
     span.setAllAttributes(attributes(scope));
     String spanId = span.getSpanContext().getSpanId();
     if (scope.spans.putIfAbsent(spanId, new WitnessScope.SpanState()) != null) scope.fail("duplicate_span");
-    if ("target".equals(role)) scope.target = spanId;
+    if (TARGET.equals(role)) scope.target = spanId;
+  }
+
+  private WitnessScope currentScope() {
+    Entry entry = current.get();
+    return entry == null ? null : entry.scope;
   }
 
   public synchronized void spanEnded(ReadableSpan span) {
     WitnessScope scope = find(span.getAttribute(AttributeKey.stringKey(SCOPE)));
     if (scope == null) return;
     var state = scope.spans.get(span.getSpanContext().getSpanId());
-    if (state == null || state.ended) scope.fail("unmatched_span_end"); else state.ended = true;
+    if (state == null || state.ended) scope.fail("unmatched_span_end");
+    else { state.ended = true; scope.checkpoint = false; }
   }
 
   record Export(String scope, String span) {}
@@ -303,12 +330,15 @@ public final class WitnessRuntime {
     var result = new java.util.ArrayList<Export>();
     for (var span : spans) {
       WitnessScope scope = find(span.getAttributes().get(AttributeKey.stringKey(SCOPE)));
-      if (scope == null) continue;
-      var state = scope.spans.get(span.getSpanId());
-      if (state == null) { scope.fail("unmatched_span_export"); continue; }
-      state.inFlight++;
-      state.attempts++;
-      result.add(new Export(scope.id, span.getSpanId()));
+      if (scope != null) {
+        var state = scope.spans.get(span.getSpanId());
+        if (state == null) scope.fail("unmatched_span_export");
+        else {
+          state.inFlight++;
+          state.attempts++;
+          result.add(new Export(scope.id, span.getSpanId()));
+        }
+      }
     }
     return result;
   }
@@ -328,8 +358,8 @@ public final class WitnessRuntime {
   }
 
   private void expire() {
-    if (active != null && Set.of("entered", "ready", "armed").contains(active.phase)
-        && clock.getAsLong() - active.expires >= 0) { active.fail("expired"); active.phase = "expired"; }
+    if (active != null && Set.of(ENTERED, READY, ARMED).contains(active.phase)
+        && clock.getAsLong() - active.expires >= 0) { active.fail(EXPIRED); active.phase = EXPIRED; }
   }
 
   public String command(String text) {
@@ -341,8 +371,7 @@ public final class WitnessRuntime {
     synchronized (this) {
       expire();
       return switch (words[2]) {
-        case "status" -> words.length == 3 ? reply(request, failure, active == null ? latest : active)
-            : words.length == 5 && words[3].equals(runtime) ? reply(request, failure, find(words[4])) : reply(request, "invalid_request", null);
+        case "status" -> status(words, request);
         case "arm" -> arm(words, request);
         case "cancel" -> cancel(words, request);
         default -> reply(request, "unknown_operation", null);
@@ -350,15 +379,21 @@ public final class WitnessRuntime {
     }
   }
 
+  private String status(String[] words, String request) {
+    if (words.length == 3) return reply(request, failure, active == null ? latest : active);
+    if (words.length == 5 && words[3].equals(runtime)) return reply(request, failure, find(words[4]));
+    return reply(request, "invalid_request", null);
+  }
+
   private String arm(String[] words, String request) {
     if (words.length != 13 || !words[3].equals(runtime) || active == null || !words[4].equals(active.cookie)
         || !words[5].equals(Long.toString(active.sequence)) || !hex(words[6], 64) || !hex(words[7], 64)
         || !words[8].equals(plan.build()) || !words[9].equals(plan.selection()) || !words[10].equals(plan.tooling())
-        || !words[11].equals(plan.bindings().get("wrapper").probeId()) || !words[12].equals(plan.policy())) {
+        || !words[11].equals(plan.bindings().get(WRAPPER).probeId()) || !words[12].equals(plan.policy())) {
       return reply(request, "arm_identity_mismatch", active);
     }
-    if (active.failure != null || !active.phase.equals("ready")) return reply(request, "not_ready", active);
-    active.id = fresh(); active.caseId = words[6]; active.attempt = words[7]; active.phase = "armed";
+    if (active.failure != null || !active.phase.equals(READY)) return reply(request, "not_ready", active);
+    active.id = fresh(); active.caseId = words[6]; active.attempt = words[7]; active.phase = ARMED;
     return reply(request, null, active);
   }
 
@@ -366,7 +401,7 @@ public final class WitnessRuntime {
     WitnessScope scope = words.length == 5 && words[3].equals(runtime) ? find(words[4]) : null;
     if (scope == null) return reply(request, "unknown_scope", null);
     if (scope.phase.equals("complete")) return reply(request, "scope_retired", scope);
-    scope.fail("cancelled"); scope.phase = "cancelled";
+    scope.fail(CANCELLED); scope.phase = CANCELLED;
     return reply(request, null, scope);
   }
 
@@ -379,15 +414,18 @@ public final class WitnessRuntime {
       if (!scope.rootExited || !scope.envelopeExited) return reply(request, "root_active", scope);
       if (scope.targetEntries == 0) {
         scope.fail("target_not_entered");
-        scope.phase = "incomplete";
+        scope.phase = INCOMPLETE;
+      }
+      if (scope.spans.values().stream().anyMatch(span -> !span.ended)) {
+        return reply(request, INCOMPLETE, scope);
       }
     }
     var flushed = sdk.getSdkTracerProvider().forceFlush();
     flushed.join(1500, TimeUnit.MILLISECONDS); // Never hold the scope monitor across SDK callbacks.
     synchronized (this) {
       if (flushed.isDone() && flushed.isSuccess()) scope.checkpoint = true; else scope.flushFailures++;
-      if (scope.complete()) scope.phase = "complete";
-      return reply(request, scope.complete() ? null : "incomplete", scope);
+      if (scope.canComplete()) scope.phase = "complete";
+      return reply(request, scope.complete() ? null : INCOMPLETE, scope);
     }
   }
 
@@ -396,7 +434,10 @@ public final class WitnessRuntime {
         + "\",\"request_id\":" + WitnessScope.value(request) + ",\"error\":" + WitnessScope.value(error)
         + ",\"build_sha256\":\"" + plan.build() + "\",\"selection_sha256\":\"" + plan.selection()
         + "\",\"policy_sha256\":\"" + plan.policy() + "\",\"tooling_sha256\":\"" + plan.tooling()
-        + "\",\"wrapper_probe_id\":\"" + plan.bindings().get("wrapper").probeId()
+        + "\",\"wrapper_probe_id\":\"" + plan.bindings().get(WRAPPER).probeId()
+        + "\",\"envelope_probe_id\":\"" + plan.bindings().get(ENVELOPE).probeId()
+        + "\",\"rendezvous_probe_id\":\"" + plan.bindings().get(RENDEZVOUS).probeId()
+        + "\",\"target_probe_id\":\"" + plan.bindings().get(TARGET).probeId()
         + "\",\"rejected_probes\":\"" + rejected + "\",\"max_scopes\":64,\"max_spans_per_scope\":1024"
         + ",\"scope\":" + (scope == null ? "null" : scope.json()) + "}\n";
   }
@@ -413,7 +454,7 @@ public final class WitnessRuntime {
         }
         if (!scope.complete()) {
           scope.fail("process_exit");
-          if (!Set.of("cancelled", "expired", "invalidated", "incomplete").contains(scope.phase)) scope.phase = "terminated";
+          if (!Set.of(CANCELLED, EXPIRED, "invalidated", INCOMPLETE).contains(scope.phase)) scope.phase = "terminated";
         }
       }
       report = "{\"schema_version\":1,\"kind\":\"otelc.java-witness-final\",\"phase\":\"final\",\"pid\":"

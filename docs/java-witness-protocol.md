@@ -8,7 +8,7 @@ This is the optional `java-sync-action-v1` diagnostic producer protocol. Use it 
 
 `otelc.witness.compile_bindings(application, declarations, output)` runs the offline Java compiler using the extension and its standalone `-helper-tool.jar` ASM dependency. `application` is a validated `PreparedApplication`; `declarations` has exactly `envelope`, `rendezvous`, `wrapper` and `target`, each with `owner` (internal JVM name), `name` and `descriptor`. `output` must not exist. The compiler reads original classes without loading them and checks application input identity before and after compilation.
 
-`prepared_java.prepare(..., witness_bindings=output)` checks the common policy, bindings and original class hashes, then writes `witness.properties` and `witness.json` in the fresh owned 0700 runtime directory. The returned launch identity keeps its existing 16 fields; its tooling list binds these optional files as well. The metadata names the separate `witness.sock` and final `witness-health.json`. Both runtime and receiver confirmation are mandatory. The profile requires tracing enabled with ratio 1 and the target selected by policy; it cannot be requested in the plain lane.
+`prepared_java.prepare(..., witness_bindings=output)` checks the common policy, bindings and original class hashes, then writes `witness.properties` and `witness.json` in the fresh owned 0700 runtime directory. The returned launch identity keeps its existing 16 fields; its tooling list binds these optional files and the standalone compiler dependency as well. The witness tooling digest covers the base tooling identities and frozen bindings file, before adding the generated plan/metadata which contain that digest. The metadata names the separate `witness.sock` and final `witness-health.json`. Both runtime and receiver confirmation are mandatory. The profile requires tracing enabled with ratio 1 and the target selected by policy; it cannot be requested in the plain lane.
 
 The socket is owned by the launch user and mode 0600. Use `otelc.witness.request(socket, operation, *arguments)` for correlated, bounded exchanges. Requests are ASCII, a single LF-terminated line, at most 2048 bytes before LF:
 
@@ -34,7 +34,7 @@ Every response is LF-terminated JSON with exactly these header fields. Unknown o
 | `runtime_id`, `request_id` | Runtime identity; echoed request identity, or null for an invalid uncorrelated request/final header |
 | `error` | Null or a bounded lowercase error code |
 | `build_sha256`, `selection_sha256`, `policy_sha256`, `tooling_sha256` | Frozen launch identities |
-| `wrapper_probe_id` | Exact wrapper binding identity |
+| `envelope_probe_id`, `rendezvous_probe_id`, `wrapper_probe_id`, `target_probe_id` | Exact original role binding identities; compare all four with the frozen launch |
 | `rejected_probes` | Decimal-string rejected-entry counter |
 | `max_scopes`, `max_spans_per_scope` | Integers `64` and `1024` |
 | `scope` | Null or the closed object below |
@@ -54,7 +54,7 @@ Every response is LF-terminated JSON with exactly these header fields. Unknown o
 | `started_ids`, `ended_ids`, `exported_ids` | Unique observed span-ID arrays, each at most 1024 entries |
 | `queue_dropped` | Null until a supported shutdown drain; then a decimal-string count of ended tracked spans with no export attempt |
 
-Producer completion requires a successful flush checkpoint, no sticky failure, root/envelope/target exits, at least one target entry, matching non-empty started/ended/exported sets containing root and target, and no pending export or known queue drop. The client rejects contradictory completion claims. Exporter success means the SDK exporter reported success; independently decoded receipt must match the actual trace/span IDs and expected parent relationships.
+Producer completion requires an explicit successful `end` after all tracked span ends, no sticky failure, root/envelope/target exits, at least one target entry, matching non-empty started/ended/exported sets containing root and target, and no pending export or known queue drop. Ending a previously open span clears an earlier flush checkpoint. Export completion alone cannot promote an exited scope to complete. The client rejects contradictory completion claims. Exporter success means the SDK exporter reported success; independently decoded receipt must match the actual trace/span IDs and expected parent relationships.
 
 The wrapper and target spans carry `otelc.witness.role` and their exact `otelc.witness.probe_id`. All observed child spans in that trace carry `otelc.witness.scope_id`, `runtime_id`, `context_cookie`, `case_id`, `attempt_id`, `build_sha256`, `selection_sha256`, `policy_sha256` and `tooling_sha256` under the same `otelc.witness.` prefix. Recursion uses role `recursive_target`. A separate lifetime trace with a link is not counted as an action child.
 
