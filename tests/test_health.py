@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from otelc import control, health, java
 from otelc.config import Policy
@@ -36,6 +37,25 @@ def report() -> dict[str, Any]:
 
 
 class HealthShapeTests(unittest.TestCase):
+    def test_refused_reports_and_stream_errors_close_all_descriptors(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            path = Path(directory) / "health.json"
+            path.mkdir(mode=0o700)
+            before = len(os.listdir("/dev/fd"))
+            for _ in range(20):
+                with self.assertRaises((ValueError, IsADirectoryError)):
+                    health.read(path)
+            self.assertEqual(len(os.listdir("/dev/fd")), before,
+                             "refusing a directory must not leak its opened descriptor")
+            path.rmdir()
+            path.write_text(json.dumps(report()))
+            path.chmod(0o600)
+            with patch("otelc.health.os.fdopen", side_effect=OSError("stream construction failed")):
+                with self.assertRaisesRegex(OSError, "stream construction"):
+                    health.read(path)
+            self.assertEqual(len(os.listdir("/dev/fd")), before,
+                             "a failed stream wrapper must not leak its input descriptor")
+
     def test_rejects_missing_malformed_and_false_delivery_claims(self) -> None:
         good = report()
         self.assertIs(health.validate(good), good)

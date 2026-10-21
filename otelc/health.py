@@ -95,9 +95,14 @@ def _read_report(directory: int) -> bytes:
         if error.errno == errno.ELOOP:
             raise ValueError("runtime health report cannot be a symlink") from error
         raise
-    with os.fdopen(descriptor, "rb") as stream:
-        metadata = os.fstat(stream.fileno())
+    try:
+        metadata = os.fstat(descriptor)
         if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
                 or metadata.st_uid != os.getuid() or metadata.st_size > 4096):
             raise ValueError("expected a bounded private runtime health report")
-        return stream.read(4097)
+        # Retain ownership until the wrapper has been constructed and closed.
+        # fdopen itself can raise, for example when given a directory descriptor.
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read(4097)
+    finally:
+        os.close(descriptor)
