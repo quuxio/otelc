@@ -17,10 +17,16 @@ import java.util.Arrays;
 public final class Extension implements AutoConfigurationCustomizerProvider, AgentListener {
   @Override public void customize(AutoConfigurationCustomizer customizer) {
     LiveState state = LiveState.instance();
+    io.quux.otelc.witness.WitnessRuntime.configure(System.getProperty("otelc.witness.plan"));
     if (state.health != null) {
       state.health.install(customizer);
       customizer.addSpanExporterCustomizer((exporter, config) -> ExportHealth.spans(exporter, state.health));
       customizer.addSpanProcessorCustomizer((processor, config) -> new HealthSpanProcessor(processor, state.health));
+    }
+    var witness = io.quux.otelc.witness.WitnessRuntime.get();
+    if (witness != null) {
+      customizer.addSpanExporterCustomizer((exporter, config) -> io.quux.otelc.witness.WitnessPipeline.exporter(exporter, witness));
+      customizer.addSpanProcessorCustomizer((processor, config) -> io.quux.otelc.witness.WitnessPipeline.processor(processor, witness));
     }
     customizer.addMetricExporterCustomizer((exporter, config) -> new EmissionGate(
         state.health == null ? exporter : ExportHealth.metrics(exporter, state.health), state.emission));
@@ -42,6 +48,8 @@ public final class Extension implements AutoConfigurationCustomizerProvider, Age
     if (state.health != null) state.health.attach(configured.getOpenTelemetrySdk());
     try {
       ControlServer.start(Path.of(state.property("control.socket")), state);
+      var witness = io.quux.otelc.witness.WitnessRuntime.get();
+      if (witness != null) witness.attach(configured.getOpenTelemetrySdk());
     } catch (IOException error) {
       throw new IllegalStateException("Cannot start private otelc metrics control", error);
     }

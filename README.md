@@ -60,7 +60,7 @@ Prepared launches keep agent diagnostics in `agent.log`. For exact application s
 
 [Runtime health](docs/runtime-health.md) records PID/policy/selection identity, raw SDK exporter activity and bounded final flush/shutdown outcomes in `health.json`, including while metrics are off. Inspect it with `python -m otelc health --socket ...` or `--report ...`. Queue loss stays unavailable until a supported clean drain establishes it; exporter success still requires separate downstream receipt evidence.
 
-[Invocation attribution](docs/action-witness.md) is being implemented separately. The offline Java binding compiler identifies exact compiled envelope/rendezvous/wrapper/target methods and refuses unsafe diagnostic harness shapes. Read-only class capture is tested against the real agent before SDK advice and against actual loaded identities/origins. Runtime scoping and per-action export evidence are still pending; these building blocks do not enable a witness capability.
+[Invocation attribution](docs/action-witness.md) is an explicit diagnostic profile for synchronous Java actions on platform threads. Frozen original-method bindings, actual loaded origins and role probes tie an action to its root, target and observed child spans. A separate private protocol records readiness, arm/consume, exits and export outcomes; decoded downstream receipt is still required. Default launches and the existing metrics/health protocols are unchanged. This profile does not establish arbitrary concurrent, async or cross-service attribution.
 
 ## Validation and limits
 

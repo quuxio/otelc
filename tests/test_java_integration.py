@@ -41,10 +41,15 @@ class Capture:
         self.metric_response_gate = threading.Event()
         self.metric_response_gate.set()
         self.metric_request_seen = threading.Event()
+        self.trace_response_gate = threading.Event()
+        self.trace_response_gate.set()
+        self.trace_request_seen = threading.Event()
+        self.trace_response_code = 200
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
+                response_code = 200
                 payload = self.rfile.read(int(self.headers["Content-Length"]))
                 if self.headers.get("Content-Encoding") == "gzip":
                     payload = gzip.decompress(payload)
@@ -58,10 +63,13 @@ class Capture:
                     message = ExportTraceServiceRequest()
                     message.ParseFromString(payload)
                     owner.traces.append(message)
+                    owner.trace_request_seen.set()
+                    owner.trace_response_gate.wait(timeout=10)
+                    response_code = owner.trace_response_code
                 else:
                     self.send_error(404)
                     return
-                self.send_response(200)
+                self.send_response(response_code)
                 self.send_header("Content-Type", "application/x-protobuf")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -75,6 +83,7 @@ class Capture:
 
     def close(self) -> None:
         self.metric_response_gate.set()
+        self.trace_response_gate.set()
         self.server.shutdown()
         self.server.server_close()
         self.worker.join(2)

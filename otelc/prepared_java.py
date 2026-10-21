@@ -207,7 +207,8 @@ class PreparedLaunch:
 
 def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
             plain: bool = False, arguments: tuple[str, ...] = (),
-            diagnostic_profile: bool = False) -> PreparedLaunch:
+            diagnostic_profile: bool = False,
+            witness_bindings: Path | None = None) -> PreparedLaunch:
     """Create a launch plan in a fresh private directory, without compiling."""
     runtime = runtime.resolve(strict=True)
     metadata = runtime.stat()
@@ -215,6 +216,8 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
         raise ValueError("prepared runtime must be a fresh, owned 0700 directory")
     if any(not isinstance(argument, str) for argument in arguments):
         raise ValueError("application arguments must be strings")
+    if plain and witness_bindings is not None:
+        raise ValueError("witness bindings apply to the instrumented lane; use the ordinary plain launch for comparison")
     log_path = str(runtime / "class-load.log")
     if (any(character in log_path for character in ":,=%") or any(ord(char) < 32 for char in log_path)
             or len(os.fsencode(runtime / "control.sock")) > 100):
@@ -245,6 +248,13 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
 
             tooling.extend(file_identity(runtime / name) for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
             tooling.append(file_identity(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")))
+    if witness_bindings is not None:
+        from otelc import witness
+
+        files = witness.configure(application, policy, runtime, witness_bindings.resolve(strict=True),
+                                  application_identity, tooling)
+        tooling.extend(file_identity(path) for path in files)
+        argv.insert(1, f"-Dotelc.witness.plan={runtime / 'witness.properties'}")
     identity = {"schema_version": 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
                 "agent_diagnostics": agent_log,
@@ -266,12 +276,12 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
 
 def run(manifest: Path, policy: Policy, runtime: Path, *, plain: bool = False,
         prepare_only: bool = False, arguments: tuple[str, ...] = (),
-        diagnostic_profile: bool = False) -> int:
+        diagnostic_profile: bool = False, witness_bindings: Path | None = None) -> int:
     """Run the public CLI profile, retaining PID and post-run input verification."""
     application = PreparedApplication.load(manifest)
     runtime.mkdir(mode=0o700)
     launch = prepare(application, policy, runtime, plain=plain, arguments=arguments,
-                     diagnostic_profile=diagnostic_profile)
+                     diagnostic_profile=diagnostic_profile, witness_bindings=witness_bindings)
     if prepare_only:
         print(json.dumps(launch.identity))
         return 0
