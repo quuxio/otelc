@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,14 @@ from otelc.config import Policy
 
 STATES = {"both_off": (False, False), "collection_only": (True, False),
           "emission_only": (False, True), "both_on": (True, True)}
+
+
+@dataclass
+class Measurements:
+    """Raw measurements and state transitions from this comparison."""
+
+    samples: dict[str, list[float]] = field(default_factory=lambda: {"plain": [], **{mode: [] for mode in STATES}})
+    transitions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def checksum(count: int) -> int:
@@ -96,6 +105,77 @@ def export_result(report: dict[str, Any], endpoint: str) -> None:
         exporter.shutdown(timeout_millis=5000)
 
 
+def switch_state(socket: Path, process: subprocess.Popen[str], mode: str) -> dict[str, Any]:
+    """Apply a live state and wait for the export-off barrier before timing."""
+    collection, emission = STATES[mode]
+    control.request(socket, "collection " + ("on" if collection else "off"))
+    state = control.request(socket, "emission " + ("on" if emission else "off"))
+    deadline = time.monotonic() + 5
+    while not emission and state["in_flight_exports"] and time.monotonic() < deadline:
+        time.sleep(.01)
+        state = control.request(socket, "status")
+    if not emission and state["in_flight_exports"]:
+        raise TimeoutError("old exports did not settle before timing")
+    if state["pid"] != process.pid:
+        raise ValueError("instrumented process changed during live comparison")
+    return state
+
+
+def measure_batches(process: subprocess.Popen[str], policy: Policy, output: Path,
+                    socket: Path, *, plain: bool, expected: int,
+                    records: Measurements) -> None:
+    """Retain raw samples immediately; functional failures never become timings."""
+    configuration = policy.data["benchmark"]
+    count = configuration["iterations"]
+    order = ["plain"] if plain else list(STATES)
+    for sample in range(configuration["samples"]):
+        if not plain:
+            random.Random(sample).shuffle(order)
+        for mode in order:
+            if not plain:
+                records.transitions.append({"sample": sample, "mode": mode, **switch_state(socket, process, mode)})
+            result = batch(process, count)
+            with (output / "raw.jsonl").open("a") as raw:
+                raw.write(json.dumps({"sample": sample, "mode": mode, "pid": process.pid, **result}) + "\n")
+            if result["checksum"] != expected:
+                raise ValueError("plain/instrumented workload checksum differs")
+            records.samples[mode].append(result["elapsed_ns"] / count)
+
+
+def check_health(socket: Path, policy: Policy, output: Path) -> None:
+    """Reject incomplete observer health before any benchmark publication."""
+    control.request(socket, "on")
+    control.request(socket, "flush")
+    health = control.request(socket, "status")
+    (output / "health.json").write_text(json.dumps(health, indent=2) + "\n")
+    if policy.data["lifetimes"]["enabled"] and health["lifetime_lost"] != 0:
+        raise ValueError("lifetime loss is non-zero or unavailable; raw timings retained but not published")
+
+
+def measure_process(policy: Policy, output: Path, runtime: Path, *, plain: bool,
+                    expected: int, records: Measurements) -> int:
+    """Warm one process, measure its supported states and bound its shutdown."""
+    configuration = policy.data["benchmark"]
+    with (output / ("plain.stderr" if plain else "instrumented.stderr")).open("w") as errors:
+        process = subprocess.Popen(java.command(policy, runtime, plain=plain), stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=errors, text=True)
+        try:
+            socket = runtime / "control.sock"
+            if not plain:
+                control.wait_ready(socket, process.pid)
+                control.request(socket, "off")
+            for _ in range(configuration["warmup"]):
+                if batch(process, configuration["iterations"])["checksum"] != expected:
+                    raise ValueError("warmup checksum mismatch")
+            measure_batches(process, policy, output, socket, plain=plain, expected=expected,
+                            records=records)
+            if not plain:
+                check_health(socket, policy, output)
+            return process.pid
+        finally:
+            stop(process)
+
+
 def run(policy: Policy, output: Path, *, publish: bool = True) -> dict[str, Any]:
     """Compare plain and four live states of one unchanged Java application."""
     configuration = policy.data["benchmark"]
@@ -105,56 +185,13 @@ def run(policy: Policy, output: Path, *, publish: bool = True) -> dict[str, Any]
     output.mkdir(parents=True, exist_ok=False)
     source = java.ROOT / "examples/java/BenchmarkApp.java"
     before = hashlib.sha256(source.read_bytes()).hexdigest()
-    samples: dict[str, list[float]] = {"plain": [], **{mode: [] for mode in STATES}}
-    transitions = []
+    records = Measurements()
     pids = {}
     with tempfile.TemporaryDirectory(prefix="otelc-bench-", dir="/tmp") as temporary:
-        runtime = Path(temporary)
         for plain in (True, False):
-            with (output / ("plain.stderr" if plain else "instrumented.stderr")).open("w") as errors:
-                process = subprocess.Popen(java.command(policy, runtime, plain=plain), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
-                pids["plain" if plain else "instrumented"] = process.pid
-                try:
-                    socket = runtime / "control.sock"
-                    if not plain:
-                        control.wait_ready(socket, process.pid)
-                        control.request(socket, "off")
-                    for _ in range(configuration["warmup"]):
-                        if batch(process, count)["checksum"] != expected:
-                            raise ValueError("warmup checksum mismatch")
-                    order = ["plain"] if plain else list(STATES)
-                    for sample in range(configuration["samples"]):
-                        if not plain:
-                            random.Random(sample).shuffle(order)
-                        for mode in order:
-                            if not plain:
-                                collection, emission = STATES[mode]
-                                control.request(socket, "collection " + ("on" if collection else "off"))
-                                state = control.request(socket, "emission " + ("on" if emission else "off"))
-                                deadline = time.monotonic() + 5
-                                while not emission and state["in_flight_exports"] and time.monotonic() < deadline:
-                                    time.sleep(.01)
-                                    state = control.request(socket, "status")
-                                if not emission and state["in_flight_exports"]:
-                                    raise TimeoutError("old exports did not settle before timing")
-                                if state["pid"] != process.pid:
-                                    raise ValueError("instrumented process changed during live comparison")
-                                transitions.append({"sample": sample, "mode": mode, **state})
-                            result = batch(process, count)
-                            with (output / "raw.jsonl").open("a") as raw:
-                                raw.write(json.dumps({"sample": sample, "mode": mode, "pid": process.pid, **result}) + "\n")
-                            if result["checksum"] != expected:
-                                raise ValueError("plain/instrumented workload checksum differs")
-                            samples[mode].append(result["elapsed_ns"] / count)
-                    if not plain:
-                        control.request(socket, "on")
-                        control.request(socket, "flush")
-                        health = control.request(socket, "status")
-                        (output / "health.json").write_text(json.dumps(health, indent=2) + "\n")
-                        if policy.data["lifetimes"]["enabled"] and health["lifetime_lost"] != 0:
-                            raise ValueError("lifetime loss is non-zero or unavailable; raw timings retained but not published")
-                finally:
-                    stop(process)
+            pids["plain" if plain else "instrumented"] = measure_process(
+                policy, output, Path(temporary), plain=plain, expected=expected,
+                records=records)
     after = hashlib.sha256(source.read_bytes()).hexdigest()
     if before != after:
         raise ValueError("application source changed")
@@ -166,9 +203,9 @@ def run(policy: Policy, output: Path, *, publish: bool = True) -> dict[str, Any]
               "build_flags": ["javac default", "JVM default"],
               "host": platform.platform(), "machine": platform.machine(), "workload": "integer128-v1", "iterations": count,
               "warmup": configuration["warmup"], "expected_checksum": expected, "source_sha256": before,
-              "config": policy.data, "pids": pids, "transitions": transitions,
-              "samples_ns_per_operation": samples,
-              "median_ns_per_operation": {mode: statistics.median(values) for mode, values in samples.items()},
+              "config": policy.data, "pids": pids, "transitions": records.transitions,
+              "samples_ns_per_operation": records.samples,
+              "median_ns_per_operation": {mode: statistics.median(values) for mode, values in records.samples.items()},
               "recorded_at_unix_ns": time.time_ns(), "host_pid": os.getpid()}
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     if publish:

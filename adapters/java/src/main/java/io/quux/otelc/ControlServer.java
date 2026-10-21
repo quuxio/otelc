@@ -44,27 +44,25 @@ final class ControlServer {
 
   static void serve(SocketChannel channel, LiveState state) throws IOException {
     channel.configureBlocking(false);
-    long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
-    ByteBuffer input = ByteBuffer.allocate(65);
-    String command = null;
-    while (System.nanoTime() < deadline && input.hasRemaining()) {
-      int count = channel.read(input);
-      if (count < 0) break;
-      if (count == 0) {
-        java.util.concurrent.locks.LockSupport.parkNanos(1_000_000);
-        continue;
-      }
-      for (int i = 0; i < input.position(); i++) {
-        if (input.get(i) == '\n') {
-          if (i == input.position() - 1) command = new String(input.array(), 0, i, StandardCharsets.US_ASCII);
-          break;
-        }
-      }
-      if (command != null) break;
-    }
+    String command = readCommand(channel);
     String response = command == null ? "{\"error\":\"incomplete control request\"}\n" : state.command(command);
     ByteBuffer bytes = StandardCharsets.UTF_8.encode(response);
     long writeDeadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
     while (bytes.hasRemaining() && System.nanoTime() < writeDeadline) channel.write(bytes);
+  }
+
+  private static String readCommand(SocketChannel channel) throws IOException {
+    long deadline = System.nanoTime() + Duration.ofMillis(200).toNanos();
+    ByteBuffer input = ByteBuffer.allocate(65);
+    while (System.nanoTime() < deadline && input.hasRemaining()) {
+      int count = channel.read(input);
+      if (count < 0) return null;
+      if (count > 0 && input.get(input.position() - 1) == '\n') {
+        String value = new String(input.array(), 0, input.position() - 1, StandardCharsets.US_ASCII);
+        return value.indexOf('\n') < 0 ? value : null;
+      }
+      java.util.concurrent.locks.LockSupport.parkNanos(1_000_000);
+    }
+    return null;
   }
 }

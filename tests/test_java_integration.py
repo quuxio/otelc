@@ -153,7 +153,7 @@ class JavaIntegrationTests(unittest.TestCase):
                         if {"resource", "observed_gc"} <= boundaries and max(gc_values, default=0) >= 20:
                             break
                         time.sleep(.05)
-                    self.assertTrue({"resource", "observed_gc"} <= boundaries, f"missing lifecycle telemetry: {boundaries}")
+                    self.assertLessEqual({"resource", "observed_gc"}, boundaries, f"missing lifecycle telemetry: {boundaries}")
                     gc_completed = [point.as_int for point in lifetime if any(attribute.key == "boundary" and attribute.value.string_value == "observed_gc" for attribute in point.attributes)]
                     self.assertEqual(max(gc_completed), 20, "off-state constructions cannot become retroactive metric observations")
                     labels = {attribute.value.string_value for point in capture.points("otelc.function.calls") for attribute in point.attributes if attribute.key == "function"}

@@ -14,12 +14,22 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class LiveState {
   private static final class Holder {
     private static final LiveState INSTANCE = load();
+
+    private static LiveState load() {
+      Properties properties = new Properties();
+      try (Reader reader = Files.newBufferedReader(Path.of(System.getProperty("otelc.plan")))) {
+        properties.load(reader);
+        return new LiveState(properties);
+      } catch (IOException error) {
+        throw new IllegalStateException("Cannot read the generated otelc plan", error);
+      }
+    }
   }
 
   private volatile boolean collection;
   final EmissionGate.State emission;
   final AtomicLong completed = new AtomicLong();
-  private volatile SdkMeterProvider provider;
+  private SdkMeterProvider provider;
   private final Properties plan;
 
   LiveState(Properties plan) {
@@ -28,21 +38,11 @@ public final class LiveState {
     emission = new EmissionGate.State(Boolean.parseBoolean(plan.getProperty("metrics.emission", "true")));
   }
 
-  private static LiveState load() {
-    Properties properties = new Properties();
-    try (Reader reader = Files.newBufferedReader(Path.of(System.getProperty("otelc.plan")))) {
-      properties.load(reader);
-      return new LiveState(properties);
-    } catch (IOException error) {
-      throw new IllegalStateException("Cannot read the generated otelc plan", error);
-    }
-  }
-
   public static LiveState instance() { return Holder.INSTANCE; }
   public boolean collecting() { return collection; }
   String property(String key) { return plan.getProperty(key); }
 
-  void attach(SdkMeterProvider value) {
+  synchronized void attach(SdkMeterProvider value) {
     provider = value;
     updateCollection(collection);
   }

@@ -46,9 +46,8 @@ def expression(pattern: str, *, path: bool = False) -> str:
             result += ".*"
             index += 2
             continue
-        result += ("[^/]*" if path else ".*") if char == "*" else (
-            ("[^/]" if path else ".") if char == "?" else re.escape(char)
-        )
+        wildcards = {"*": "[^/]*", "?": "[^/]"} if path else {"*": ".*", "?": "."}
+        result += wildcards.get(char, re.escape(char))
         index += 1
     return "^" + result + "$"
 
@@ -67,6 +66,59 @@ class Selection:
             return any(re.fullmatch(expression(item, path=self.paths), name, re.DOTALL) for item in items)
 
         return matches(self.include) and not matches(self.exclude)
+
+
+def validate_selectors_and_flags(data: dict[str, Any]) -> None:
+    """Validate selections and switches shared by every backend."""
+    for section in ("sources", "functions", "lifetimes"):
+        for key in ("include", "exclude"):
+            patterns(data[section][key], f"{section}.{key}")
+    patterns(data["lifetimes"]["release_methods"], "lifetimes.release_methods")
+    flags = (("metrics", "collection"), ("metrics", "emission"),
+             ("traces", "enabled"), ("lifetimes", "enabled"))
+    for section, key in flags:
+        if type(data[section][key]) is not bool:
+            raise ValueError(f"{section}.{key} must be boolean")
+
+
+def validate_limits(data: dict[str, Any]) -> None:
+    """Bound intervals, benchmark work and lifecycle bookkeeping."""
+    limits = (("export", ("interval_ms", "timeout_ms")),
+              ("benchmark", ("iterations", "samples", "warmup")),
+              ("lifetimes", ("max_live",)))
+    for section, keys in limits:
+        for key in keys:
+            value = data[section][key]
+            if type(value) is not int or not 1 <= value <= 1_000_000:
+                raise ValueError(f"{section}.{key} must be an integer in 1..1000000")
+
+
+def validate_destination(data: dict[str, Any]) -> None:
+    """Reject malformed resource names and credential-bearing export URLs."""
+    name = data["resource"]["service_name"]
+    if not isinstance(name, str) or not name or len(name) > 128 or any(ord(c) < 32 for c in name):
+        raise ValueError("resource.service_name must be a bounded non-empty name")
+    endpoint = data["export"]["endpoint"]
+    if not isinstance(endpoint, str):
+        raise ValueError("export.endpoint must be a URL")
+    url = urlsplit(endpoint)
+    if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment:
+        raise ValueError("export.endpoint must be an HTTP(S) base URL without credentials/query/fragment")
+
+
+def validate_distributions(data: dict[str, Any]) -> None:
+    """Check trace sampling and increasing positive histogram boundaries."""
+    ratio = data["traces"]["sample_ratio"]
+    if type(ratio) not in (int, float) or not math.isfinite(ratio) or not 0 <= ratio <= 1:
+        raise ValueError("traces.sample_ratio must be finite in 0..1")
+    buckets = data["metrics"]["histogram_boundaries_seconds"]
+    if not isinstance(buckets, list) or not buckets or len(buckets) > 128:
+        raise ValueError("histogram boundaries must be a non-empty bounded list")
+    previous = 0.
+    for value in buckets:
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= previous:
+            raise ValueError("histogram boundaries must be finite, positive and increasing")
+        previous = value
 
 
 @dataclass(frozen=True)
@@ -107,38 +159,10 @@ class Policy:
             if not isinstance(supplied, dict) or set(supplied) - fields:
                 raise ValueError(f"unknown or invalid {section} settings")
             resolved[section] = defaults[section] | supplied
-        for section in ("sources", "functions", "lifetimes"):
-            for key in ("include", "exclude"):
-                patterns(resolved[section][key], f"{section}.{key}")
-        patterns(resolved["lifetimes"]["release_methods"], "lifetimes.release_methods")
-        for section, key in (("metrics", "collection"), ("metrics", "emission"), ("traces", "enabled"), ("lifetimes", "enabled")):
-            if type(resolved[section][key]) is not bool:
-                raise ValueError(f"{section}.{key} must be boolean")
-        for section, keys in (("export", ("interval_ms", "timeout_ms")), ("benchmark", ("iterations", "samples", "warmup")), ("lifetimes", ("max_live",))):
-            for key in keys:
-                value = resolved[section][key]
-                if type(value) is not int or not 1 <= value <= 1_000_000:
-                    raise ValueError(f"{section}.{key} must be an integer in 1..1000000")
-        name = resolved["resource"]["service_name"]
-        if not isinstance(name, str) or not name or len(name) > 128 or any(ord(c) < 32 for c in name):
-            raise ValueError("resource.service_name must be a bounded non-empty name")
-        endpoint = resolved["export"]["endpoint"]
-        if not isinstance(endpoint, str):
-            raise ValueError("export.endpoint must be a URL")
-        url = urlsplit(endpoint)
-        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment:
-            raise ValueError("export.endpoint must be an HTTP(S) base URL without credentials/query/fragment")
-        ratio = resolved["traces"]["sample_ratio"]
-        if type(ratio) not in (int, float) or not math.isfinite(ratio) or not 0 <= ratio <= 1:
-            raise ValueError("traces.sample_ratio must be finite in 0..1")
-        buckets = resolved["metrics"]["histogram_boundaries_seconds"]
-        if not isinstance(buckets, list) or not buckets or len(buckets) > 128:
-            raise ValueError("histogram boundaries must be a non-empty bounded list")
-        previous = 0.
-        for value in buckets:
-            if type(value) not in (int, float) or not math.isfinite(value) or value <= previous:
-                raise ValueError("histogram boundaries must be finite, positive and increasing")
-            previous = value
+        validate_selectors_and_flags(resolved)
+        validate_limits(resolved)
+        validate_destination(resolved)
+        validate_distributions(resolved)
         return cls(resolved)
 
     def selection(self, section: str) -> Selection:

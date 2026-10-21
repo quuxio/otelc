@@ -17,7 +17,11 @@ public final class EmissionGate implements MetricExporter {
     synchronized boolean enabled() { return enabled; }
     synchronized int inFlight() { return inFlight; }
     synchronized void set(boolean value) { enabled = value; }
-    synchronized boolean begin() { if (!enabled) return false; inFlight++; return true; }
+    synchronized boolean begin() {
+      if (!enabled) return false;
+      inFlight++;
+      return true;
+    }
     synchronized void end() { inFlight--; }
   }
 

@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** Weak identity observation. Never invokes application hashCode, close or GC. */
 public final class Observer {
+  private static final String GC_BOUNDARY = "observed_gc";
+  private static final String RESOURCE_BOUNDARY = "resource";
   private static final ReferenceQueue<Object> QUEUE = new ReferenceQueue<>();
   private static final Map<Key, Tracked> LIVE = new HashMap<>();
   private static final int LIMIT = Integer.getInteger("otelc.lifetime.max-live", 4096);
@@ -37,8 +39,8 @@ public final class Observer {
   static {
     METER.gaugeBuilder("otelc.lifetime.live").ofLongs().buildWithCallback(result -> {
       synchronized (LIVE) {
-        result.record(LIVE.size(), labels("all", "observed_gc"));
-        result.record(LIVE.values().stream().filter(value -> value.resource && !value.released).count(), labels("all", "resource"));
+        result.record(LIVE.size(), labels("all", GC_BOUNDARY));
+        result.record(LIVE.values().stream().filter(value -> value.resource && !value.released).count(), labels("all", RESOURCE_BOUNDARY));
       }
     });
     Thread.ofPlatform().daemon().name("otelc-lifetime-observer").start(() -> {
@@ -64,8 +66,8 @@ public final class Observer {
           now.getEpochSecond() * 1_000_000_000L + now.getNano(), Span.current().getSpanContext(), metrics, RESOURCES.contains(type)));
     }
     if (metrics) {
-      ADMITTED.add(1, labels(type, "observed_gc"));
-      if (RESOURCES.contains(type)) ADMITTED.add(1, labels(type, "resource"));
+      ADMITTED.add(1, labels(type, GC_BOUNDARY));
+      if (RESOURCES.contains(type)) ADMITTED.add(1, labels(type, RESOURCE_BOUNDARY));
     }
   }
 
@@ -76,7 +78,7 @@ public final class Observer {
       if (tracked == null || !tracked.resource || tracked.released) return;
       tracked.released = true;
     }
-    complete(tracked, "resource");
+    complete(tracked, RESOURCE_BOUNDARY);
   }
 
   /** Local health remains observable even while SDK metric recording is off. */
@@ -86,8 +88,8 @@ public final class Observer {
     Tracked tracked;
     synchronized (LIVE) { tracked = LIVE.remove(key); }
     if (tracked == null) return;
-    complete(tracked, "observed_gc");
-    if (tracked.resource && !tracked.released && tracked.metrics) INCOMPLETE.add(1, labels(tracked.type, "resource"));
+    complete(tracked, GC_BOUNDARY);
+    if (tracked.resource && !tracked.released && tracked.metrics) INCOMPLETE.add(1, labels(tracked.type, RESOURCE_BOUNDARY));
   }
 
   private static Attributes labels(String type, String boundary) {

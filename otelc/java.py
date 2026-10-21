@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from otelc.config import Policy
+from otelc.config import Policy, Selection
 
 AGENT_VERSION = "2.32.0"
 AGENT_SHA256 = "f787eb6c7f3d18e69a431e108a15278d25ee37f83d68b678f621e063f3988f82"
@@ -64,6 +64,59 @@ def properties(values: dict[str, str]) -> str:
     return "".join(f"{escape(key)}={escape(value)}\n" for key, value in sorted(values.items()))
 
 
+def selected_methods(name: str, output: str, selection: Selection) -> list[str]:
+    """Reject partial overload selections that the upstream selector cannot express."""
+    methods: dict[str, list[bool]] = {}
+    for method, arguments in re.findall(r"\s([\w$]+)\(([^)]*)\)(?: throws [^;]+)?;", output):
+        identity = f"{name}.{method}({arguments.replace(' ', '')})"
+        methods.setdefault(method, []).append(selection.accepts(identity))
+    selected = []
+    for method, matches in methods.items():
+        if any(matches) and not all(matches):
+            raise ValueError("stock Java method selector cannot honour this overload exclusion")
+        if all(matches):
+            selected.append(method)
+    return selected
+
+
+def validate_lifetime_type(name: str, output: str) -> None:
+    """Limit the initial profile to unambiguous successful construction boundaries."""
+    if "final class " not in output:
+        raise ValueError("initial Java lifetime profile requires a final concrete class")
+    if len(re.findall(re.escape(name) + r"\(", output)) != 1:
+        raise ValueError("initial Java lifetime profile requires one constructor")
+
+
+def has_release_method(output: str, methods: list[str]) -> bool:
+    """Find a selected existing instance zero-argument void release method."""
+    for release in methods:
+        signature = r"(?m)^\s+(?![^\n]*\bstatic\b)[^\n]*\bvoid\s+" + re.escape(release) + r"\(\)(?: throws [^;]+)?;"
+        if re.search(signature, output):
+            return True
+    return False
+
+
+def resolve_selections(classes: Path, policy: Policy) -> tuple[dict[str, list[str]], list[str], list[str]]:
+    """Resolve policy intent against compiled identities before loading the agent."""
+    selected: dict[str, list[str]] = {}
+    types: list[str] = []
+    resources: list[str] = []
+    if not policy.selection("sources").accepts("examples/java/BenchmarkApp.java"):
+        return selected, types, resources
+    for path in sorted(classes.rglob("*.class")):
+        name = str(path.relative_to(classes).with_suffix("")).replace(os.sep, ".")
+        output = subprocess.check_output([executable("javap"), "-p", "-classpath", str(classes), name], text=True)
+        methods = selected_methods(name, output, policy.selection("functions"))
+        if methods:
+            selected[name] = methods
+        if policy.data["lifetimes"]["enabled"] and policy.selection("lifetimes").accepts(name):
+            validate_lifetime_type(name, output)
+            types.append(name)
+            if has_release_method(output, policy.data["lifetimes"]["release_methods"]):
+                resources.append(name)
+    return selected, types, resources
+
+
 def command(policy: Policy, runtime: Path, *, plain: bool = False) -> list[str]:
     """Lower one policy into the official agent and extension launch arguments."""
     if "java" not in policy.data["languages"]:
@@ -75,34 +128,7 @@ def command(policy: Policy, runtime: Path, *, plain: bool = False) -> list[str]:
     extension = ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"
     if not extension.is_file():
         raise ValueError("build the Java extension with make java-build first")
-    source = "examples/java/BenchmarkApp.java"
-    selected: dict[str, list[str]] = {}
-    types = []
-    resources = []
-    if policy.selection("sources").accepts(source):
-        for path in sorted(classes.rglob("*.class")):
-            name = str(path.relative_to(classes).with_suffix("")).replace(os.sep, ".")
-            output = subprocess.check_output([executable("javap"), "-p", "-classpath", str(classes), name], text=True)
-            methods: dict[str, list[bool]] = {}
-            for method, arguments in re.findall(r"\s([\w$]+)\(([^)]*)\)(?: throws [^;]+)?;", output):
-                identity = f"{name}.{method}({arguments.replace(' ', '')})"
-                methods.setdefault(method, []).append(policy.selection("functions").accepts(identity))
-            for method, matches in methods.items():
-                if any(matches) and not all(matches):
-                    raise ValueError("stock Java method selector cannot honour this overload exclusion")
-                if all(matches):
-                    selected.setdefault(name, []).append(method)
-            if policy.data["lifetimes"]["enabled"] and policy.selection("lifetimes").accepts(name):
-                if "final class " not in output:
-                    raise ValueError("initial Java lifetime profile requires a final concrete class")
-                if len(re.findall(re.escape(name) + r"\(", output)) != 1:
-                    raise ValueError("initial Java lifetime profile requires one constructor")
-                types.append(name)
-                for release in policy.data["lifetimes"]["release_methods"]:
-                    signature = r"(?m)^\s+(?![^\n]*\bstatic\b)[^\n]*\bvoid\s+" + re.escape(release) + r"\(\)(?: throws [^;]+)?;"
-                    if re.search(signature, output):
-                        resources.append(name)
-                        break
+    selected, types, resources = resolve_selections(classes, policy)
     data = policy.data
     values = {
         "otel.service.name": data["resource"]["service_name"],

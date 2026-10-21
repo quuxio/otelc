@@ -16,6 +16,8 @@ import io.opentelemetry.sdk.metrics.data.MetricData;
 import io.opentelemetry.sdk.metrics.export.MetricExporter;
 import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import io.quux.otelc.lifecycle.Observer;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
@@ -192,10 +194,14 @@ class ExtensionTests {
     }
   }
 
-  @Test void weakLifetimesDoNotCallApplicationHashCodeAndReportCapacity() throws Exception {
+  private ReferenceQueue<TestResource> observeResources() {
+    ReferenceQueue<TestResource> collected = new ReferenceQueue<>();
     TestResource first = new TestResource();
     TestResource second = new TestResource();
     TestResource overflow = new TestResource();
+    // Keep weak-reference registrations alive until the test has seen GC events.
+    references.add(new WeakReference<>(first, collected));
+    references.add(new WeakReference<>(second, collected));
     Observer.constructed(first, "mismatch");
     Observer.constructed(first, first.getClass().getName());
     Observer.constructed(first, first.getClass().getName());
@@ -206,15 +212,21 @@ class ExtensionTests {
     Observer.released(first);
     Observer.released(first);
     assertEquals(1, count("otelc.lifetime.completed"));
-    first = null;
-    second = null;
+    return collected;
+  }
+
+  private final List<WeakReference<TestResource>> references = new java.util.ArrayList<>();
+
+  @Test void weakLifetimesDoNotCallApplicationHashCodeAndReportCapacity() throws Exception {
+    ReferenceQueue<TestResource> collected = observeResources();
     long deadline = System.nanoTime() + 5_000_000_000L;
     while (count("otelc.lifetime.completed") < 3 && System.nanoTime() < deadline) {
       System.gc();
-      Thread.sleep(20);
+      collected.remove(20);
     }
     assertEquals(3, count("otelc.lifetime.completed"));
     assertEquals(1, count("otelc.lifetime.incomplete"));
+    assertTrue(references.stream().allMatch(reference -> reference.get() == null));
   }
 
   @Test void officialAutoconfigureAndAgentListenerLoadTheExtension() throws Exception {
