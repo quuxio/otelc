@@ -43,6 +43,6 @@ Test stale/invalid policy, unsupported selectors, overloads and exclusions; cach
 
 Java's [runtime health boundary](runtime-health.md) records raw exporter API activity and a bounded final SDK checkpoint. Queue/drop counts remain unavailable until a supported clean drain establishes them. This is separate from downstream receipt, lifetime completeness and per-invocation attribution; broader oteleq consumer qualification still needs those checks.
 
-[Java task propagation](java-context.md) qualifies ordinary platform-worker tasks with the official agent and a common launch-time task switch. Broader executor, virtual/structured-thread and HTTP shapes remain work; this does not complete the cross-language propagation criterion.
+[Java context propagation](java-context.md) qualifies ordinary platform-worker tasks and synchronous JDK HTTP/1.1 with the official agent, common task/HTTP switches and a small request-header preservation guard. Broader executor, async HTTP, custom-request and JDK shapes remain work; this does not complete the cross-language propagation criterion.
 
 The [Java action-witness checklist](action-witness.md) tracks exact compiled method bindings, live-context attribution and per-action completion. Its offline binding compiler is implemented; the runtime protocol and decoded scoped evidence remain outstanding.

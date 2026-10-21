@@ -5,7 +5,7 @@ MAVEN ?= mvn
 .NOTPARALLEL: check
 
 help:
-	@printf '%s\n' 'setup       Install locked Python and Markdown tools' 'check       Run lint, Java tests/80% coverage and Python tests/80% coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build the ordinary task example and its prepared manifest' 'java-witness-bindings Compile offline diagnostic action bindings (no runtime witness yet)' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
+	@printf '%s\n' 'setup       Install locked Python and Markdown tools' 'check       Run lint, Java tests/80% coverage and Python tests/80% coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile offline diagnostic action bindings (no runtime witness yet)' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
 setup:
 	python3 -m venv .venv

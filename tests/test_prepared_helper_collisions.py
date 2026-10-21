@@ -18,7 +18,7 @@ from test_prepared_java import binding
 
 class HelperCollisionTests(unittest.TestCase):
     def test_private_helpers_preserve_application_namespaces_without_source_changes(self) -> None:
-        for namespace in ("methods", "lifecycle"):
+        for namespace in ("methods", "lifecycle", "http"):
             for jar in (False, True):
                 with self.subTest(namespace=namespace, jar=jar):
                     self.exercise(namespace, jar)
@@ -31,15 +31,16 @@ class HelperCollisionTests(unittest.TestCase):
             classes = root / "classes"
             classes.mkdir()
             source = root / "Main.java"
+            helper_name = "HeaderReadGuard" if namespace == "http" else "Observer"
             source.write_text('public class Main { static int run() {'
-                ' try (WorkItem item = new WorkItem()) { return io.quux.otelc.' + namespace + '.Observer.applicationValue(); }}'
+                ' try (WorkItem item = new WorkItem()) { return io.quux.otelc.' + namespace + '.' + helper_name + '.applicationValue(); }}'
                 ' static final class WorkItem implements AutoCloseable { public void close() {} }'
                 ' public static void main(String[] args) throws Exception {'
                 ' java.nio.file.Files.writeString(java.nio.file.Path.of(args[0]), "main");'
                 ' System.out.println(run()); System.in.read(); }}')
-            helper = root / "Observer.java"
+            helper = root / (helper_name + ".java")
             helper_marker = root / "helper-ran"
-            helper.write_text('package io.quux.otelc.' + namespace + '; public class Observer {'
+            helper.write_text('package io.quux.otelc.' + namespace + '; public class ' + helper_name + ' {'
                 ' static { try { java.nio.file.Files.writeString(java.nio.file.Path.of('
                 + json.dumps(str(helper_marker)) + '), "helper"); }'
                 ' catch (java.io.IOException error) { throw new java.io.UncheckedIOException(error); } }'
@@ -93,6 +94,6 @@ class HelperCollisionTests(unittest.TestCase):
                     self.assertFalse((runtime / "helpers-extension.jar").exists())
                 else:
                     mapping = json.loads((runtime / "helpers.json").read_text())
-                    self.assertEqual(set(mapping["packages"]), {"io.quux.otelc.methods.", "io.quux.otelc.lifecycle."})
+                    self.assertEqual(set(mapping["packages"]), {"io.quux.otelc.methods.", "io.quux.otelc.lifecycle.", "io.quux.otelc.http."})
                     self.assertEqual(capture.calls(), 1)
                     self.assertGreater(len(capture.traces), 0)
