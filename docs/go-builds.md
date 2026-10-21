@@ -2,7 +2,7 @@
 
 Build an ordinary baseline and an instrumented Go executable once, then run either without compiling again. Application and dependency sources, `go.mod` and `go.sum` stay unchanged. The common schema-2 policy selects functions and controls the SDK.
 
-This is a host-specific diagnostic build bundle, not a signed attestation or a general deployment package. Current qualification uses macOS ARM64 and Go 1.27.2; other hosts/toolchains require separate qualification. Runtime assets used by the application must still be available. Replay needs the original adapter binary and host target, but no Go compiler, module cache, application source or SDK source installation for the qualified self-contained fixtures.
+This is a host-specific diagnostic build bundle, not a signed attestation or a general deployment package. Current qualification uses macOS ARM64 and Go 1.27.3; other hosts/toolchains require separate qualification. Runtime assets used by the application must still be available. Replay needs the original adapter binary and host target, but no Go compiler, module cache, application source or SDK source installation for the qualified self-contained fixtures.
 
 ## Source, configuration and commands
 
@@ -14,7 +14,7 @@ func process_order(value int) int { return value * 3 }
 
 No SDK import or manual probe is required. The [Go example policy](../examples/go.toml) selects functions externally and enables optional existing comments. The generated compiler overlay contains the probes; the original file is unchanged.
 
-From the repository root, with the qualified Go 1.27.2 toolchain:
+From the repository root, with the qualified Go 1.27.3 toolchain:
 
 ```sh
 make build go-check
