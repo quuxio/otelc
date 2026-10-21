@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from otelc import benchmark, control, java, prepared_java
+from otelc import health as runtime_health
 from otelc.config import Policy, Selection
 from test_java_integration import Capture, batch, wait_for_count
 
@@ -276,6 +277,12 @@ public final class Driver {
                     self.assertFalse(capture.metrics)
                     self.assertFalse(capture.traces)
                 else:
+                    report = runtime_health.read(Path(launch.identity["health_report"]))
+                    self.assertEqual(report["pid"], process.pid)
+                    self.assertEqual(report["phase"], "final")
+                    self.assertEqual(report["policy_sha256"], launch.identity["policy_sha256"])
+                    self.assertEqual(report["selection_sha256"], launch.identity["selection_sha256"])
+                    self.assertEqual(report["lifecycle"], {"flush": "succeeded", "shutdown": "succeeded"})
                     diagnostics = Path(launch.identity["agent_diagnostics"]).read_text()
                     self.assertIn("opentelemetry-javaagent - version: 2.32.0", diagnostics)
                     self.assertNotIn("application-owned", diagnostics)
