@@ -10,6 +10,8 @@ processors:
     spike_limit_mib: 64
   batch:
     timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 512
 exporters:
   otlp_http/tempo:
     endpoint: http://tempo:4318

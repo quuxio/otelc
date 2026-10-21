@@ -35,6 +35,8 @@ Grafana must show absolute per-language ns/op and throughput, plus each language
 
 Compose provides an OTLP/HTTP Collector, Prometheus, Tempo and provisioned Grafana dashboards. The rebuild uses a distinct project and loopback ports so the pre-existing stack and its data remain available: OTLP 4320, Grafana 3001, Prometheus 9091 and Tempo 3201. Validate actual received metrics, scrape results and dashboard queries for every delivered language; running containers alone is not delivery.
 
+Collector batches have a hard maximum of 512 items and send at 256 items or after one second. The unbounded default allowed batches of 8192 rich lifetime spans to exceed Tempo's internal 16 MiB request limit, causing 429 retries and drops. Qualification must cover repeated lifetime-span bursts and check downstream receipt and Collector errors, not only HTTP acceptance at the receiver.
+
 ## Focused failure cases
 
 Test stale/invalid policy, unsupported selectors, overloads and exclusions; cached and newly-created instruments; observable callbacks while collection is off; outstanding calls and GC/release around a toggle; SDK export retries and shutdown with an open control connection; module/loader/compiler differences; constructor failure, duplicate close, address/identity reuse and incomplete lifetimes. Preserve source/module hashes, application values and exceptions. Record unsupported boundaries explicitly.
