@@ -16,9 +16,11 @@ import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.LookupSwitchInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -155,10 +157,20 @@ public final class WitnessBindings {
 
   /** Canonical original method representation for subsequent transformation checks. */
   static String methodDigest(Declaration declaration, MethodNode method) {
+    MethodNode canonical = new MethodNode(Opcodes.ASM9, method.access, method.name, method.desc,
+        method.signature, method.exceptions.toArray(String[]::new));
+    method.accept(canonical);
+    canonical.parameters = null;
+    canonical.localVariables = null;
+    for (AbstractInsnNode instruction : canonical.instructions.toArray()) {
+      if (instruction instanceof FrameNode || instruction instanceof LineNumberNode) {
+        canonical.instructions.remove(instruction);
+      }
+    }
     ClassWriter writer = new ClassWriter(0);
     writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, declaration.owner(), null, "java/lang/Object", null);
-    method.accept(writer.visitMethod(method.access, method.name, method.desc, method.signature,
-        method.exceptions.toArray(String[]::new)));
+    canonical.accept(writer.visitMethod(canonical.access, canonical.name, canonical.desc, canonical.signature,
+        canonical.exceptions.toArray(String[]::new)));
     writer.visitEnd();
     return digest(writer.toByteArray());
   }

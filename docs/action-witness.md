@@ -12,6 +12,8 @@ The compiler accepts static, unsynchronised ordinary control methods and ordinar
 
 This is structural binding evidence. It does **not** prove that a class loaded, transformation succeeded, an action ran, virtual dispatch reached the selected implementation, telemetry arrived, or an invocation completed. JVM verification and real execution remain necessary. It is not a hostile-bytecode verifier or a semantic equivalence proof.
 
+`WitnessMethodGuard` checks the actual incoming method stream of a ByteBuddy transformation against the canonical method bindings. It buffers each declared method before passing it to downstream advice and reports matches only after every expected method has matched. Changed, missing, duplicated or omitted methods, a wrong class owner and incorrect advice/guard ordering fail. Canonical hashing discards debug tables/frames on a copy; the executable output keeps them. Tests transform and load real bytecode, run the resulting method and check exceptional exits. The guard is not yet connected to an enabled agent profile: loaded origins, successful role-probe execution, live context and OTLP attribution still require the runtime implementation below. A method-stream match alone does not attest the complete original class bytes or prove JVM definition.
+
 Run the ordinary fixture and generate its bindings:
 
 ```sh
