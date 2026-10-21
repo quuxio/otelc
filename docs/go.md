@@ -6,7 +6,7 @@ Use [retained Go build bundles](go-builds.md) to compile ordinary/instrumented e
 
 ## Install and run
 
-Use Go 1.26+; the local and CI qualification uses Go 1.27.2. Install the pinned validation tools, build the launcher and start the [metrics stack](observability-stack.md):
+Use a patched Go toolchain: current qualification uses Go 1.27.3; the older Go 1.26 line needs 1.26.10 or later. The language minimum remains Go 1.26. The patch releases address [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) in certificate verification. Install the pinned validation tools, build the launcher and start the [metrics stack](observability-stack.md):
 
 ```sh
 make go-tools
@@ -100,4 +100,4 @@ The pinned SDK performs aggregation and protobuf encoding. The bounded HTTP tran
 
 Duplicate export suppression fingerprints the collected cumulative SDK snapshot, with observation timestamps removed and health counters retained. Export loss without a new application call still changes the next exported snapshot. A concurrent completion cannot label an older snapshot as current or suppress its successor. Admission rechecks live enable state after acquiring the runtime lock.
 
-Development analysers are pinned separately in `ci/go-tools/go.mod` and `go.sum`. `make go-tools` builds them with `-mod=readonly`; CI and `make go-check` use these locked binaries. The development tool build uses Go 1.27.2.
+Development analysers are pinned separately in `ci/go-tools/go.mod` and `go.sum`. `make go-tools` builds them with `-mod=readonly`; CI and `make go-check` use these locked binaries. The development tool build uses Go 1.27.3.

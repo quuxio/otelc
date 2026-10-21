@@ -1,4 +1,5 @@
 //! Cumulative metrics encoded using the upstream OpenTelemetry protobuf types.
+pub mod carrier;
 pub mod traces;
 use anyhow::{bail, Result};
 use opentelemetry_proto::tonic::{
