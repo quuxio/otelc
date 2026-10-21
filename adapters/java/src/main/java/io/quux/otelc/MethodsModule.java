@@ -50,10 +50,10 @@ public final class MethodsModule extends InstrumentationModule {
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
     public static void exit(@Advice.Enter io.quux.otelc.methods.Observer.Call call,
-                            @Advice.Origin java.lang.reflect.Method method,
+                            @Advice.Origin("#d") String descriptor,
                             @Advice.Return(readOnly = false, typing = Assigner.Typing.DYNAMIC) Object result,
                             @Advice.Thrown Throwable error) {
-      result = io.quux.otelc.methods.Observer.exit(call, method.getReturnType(), result, error);
+      result = io.quux.otelc.methods.Observer.exit(call, descriptor, result, error);
     }
   }
 }
