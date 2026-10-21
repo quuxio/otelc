@@ -406,3 +406,27 @@ fn object_transform_updates_other_translation_units_references_to_main() {
         );
     }
 }
+
+#[test]
+fn object_transform_help_is_successful_and_does_not_require_config_or_toolchain() {
+    let root = tempfile::tempdir().unwrap();
+    for arguments in [
+        vec!["object", "--help"],
+        vec!["object", "rename-main", "--help"],
+    ] {
+        let result = success(cli(&arguments, root.path()));
+        assert!(result.stderr.is_empty());
+        let help = String::from_utf8(result.stdout).unwrap();
+        for option in ["rename-main", "INPUT.o", "--output", "--symbol"] {
+            assert!(help.contains(option), "{help}");
+        }
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+    assert!(!cli(
+        &["object", "rename-main", "missing.o", "--help"],
+        root.path()
+    )
+    .status
+    .success());
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}

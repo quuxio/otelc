@@ -3,9 +3,15 @@ use anyhow::{bail, Context, Result};
 use quux_otelc_symbols::object_transform::MainRename;
 use std::{io::Write, path::Path, process::Command};
 
+const USAGE: &str = "object rename-main INPUT.o --output NEW.o --symbol NEW_MAIN";
+
 pub fn run(args: &[String]) -> Result<i32> {
+    if args == ["--help"] || args == ["rename-main", "--help"] {
+        println!("{USAGE}\nValidate and rename main in a compiled native object; write a fresh object and SDK marker.");
+        return Ok(0);
+    }
     if args.len() != 6 || args[0] != "rename-main" {
-        bail!("object rename-main INPUT.o --output NEW.o --symbol NEW_MAIN");
+        bail!(USAGE);
     }
     let mut output = None;
     let mut symbol = None;
