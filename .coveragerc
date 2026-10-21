@@ -1,0 +1,5 @@
+[run]
+# Keep coverage separate from the product's sys.monitoring events. The Python
+# 3.14 sysmon coverage core invokes application equality hooks during resource
+# tests; the C tracer preserves the same passive checks used on Python 3.12.
+core = ctrace

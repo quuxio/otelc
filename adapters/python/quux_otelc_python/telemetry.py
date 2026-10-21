@@ -218,6 +218,7 @@ class Frame:
 
 class Runtime:
     def __init__(self, plan: dict, delegate=None, trace_delegate=None):
+        self.http = None
         self.closed = False
         self.monitor = None
         self.traces = None
@@ -327,7 +328,7 @@ class Runtime:
             if name not in self.calls:
                 if len(self.calls) >= self.plan["runtime"]["max_functions"]:
                     reason = "function_capacity"
-            if len(self.pending) >= self.plan["runtime"]["max_active_calls"]:
+            if len(self.pending) + (self.http.active_count if self.http else 0) >= self.plan["runtime"]["max_active_calls"]:
                 reason = reason or "active_call_capacity"
             if reason is not None:
                 self.loss[reason] += 1

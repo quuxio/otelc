@@ -1,6 +1,6 @@
 # Shared trace-context carrier
 
-The Rust export crate and Python adapter implement the same bounded wire parser and emitter. This is a prerequisite for service propagation. It does not install HTTP hooks, create client/server spans or enable `propagation.http`; that policy remains explicitly unsupported.
+The Rust export crate and Python adapter implement the same bounded wire parser and emitter. The carrier alone is a prerequisite for service propagation. The [Python standard-library HTTP integration](python-http.md) uses it for client/server spans when `propagation.http=true`; other languages still require their own qualified transport integrations.
 
 ## Contract
 
@@ -28,4 +28,4 @@ make check
 
 The full gate enforces independent minimum 80% line coverage for each carrier implementation. Compiler coverage provenance includes the shared JSON fixture, so changing a vector invalidates an older coverage manifest.
 
-Runtime integrations still need independent local-root ownership, inbound/outbound span creation, child IDs, sampling continuity, application-header precedence, telemetry suppression, concurrent request isolation and cleanup after exceptions/cancellation. They must retain canonical wire state across SDK boundaries and prove mixed-language stored traces before service propagation is advertised. Native bindings and JavaScript, TypeScript, Java and Go carrier implementations are separate work under the [context and lifetime plan](context-and-lifetime-plan.md).
+Runtime integrations still need independent local-root ownership, inbound/outbound span creation, child IDs, sampling continuity, application-header precedence, telemetry suppression, concurrent request isolation and cleanup after exceptions/cancellation. They must retain canonical wire state across SDK boundaries. The qualified Python stdlib integration has two-process stored-trace evidence; mixed-language traces remain outstanding. Native bindings and JavaScript, TypeScript, Java and Go carrier implementations are separate work under the [context and lifetime plan](context-and-lifetime-plan.md).

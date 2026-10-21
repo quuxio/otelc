@@ -71,7 +71,11 @@ config_section!(NativeLimits {
     stack_depth: usize = 256,
     queue_capacity: usize = 4096
 });
-config_section!(Adapter { backend: String = "auto".into(), native: Option<NativeLimits> = None });
+config_section!(Adapter {
+    backend: String = "auto".into(),
+    native: Option<NativeLimits> = None,
+    http: Option<String> = None
+});
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TraceExport {
     pub endpoint: String,
@@ -141,6 +145,8 @@ pub struct ResolvedConfig {
     pub metrics: Metrics,
     pub traces: Traces,
     pub propagation: Propagation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_integration: Option<String>,
     pub export: Export,
     pub resource: Resource,
     pub metrics_endpoint: String,
@@ -330,6 +336,11 @@ impl CommonConfig {
             if !allowed.contains(&adapter.backend.as_str()) {
                 bail!("invalid backend for {language}");
             }
+            if let Some(integration) = &adapter.http {
+                if *language != Language::Python || integration != "stdlib" {
+                    bail!("unsupported HTTP integration for {language}; Python supports stdlib");
+                }
+            }
             if let Some(native) = &adapter.native {
                 if !matches!(language, Language::C | Language::Cpp) {
                     bail!("native buffer settings are not applicable to {language}");
@@ -367,7 +378,7 @@ impl CommonConfig {
                 "{language} task context propagation is not implemented"
             ));
         }
-        if self.propagation.http {
+        if self.propagation.http && language != Language::Python {
             unavailable.push(format!(
                 "{language} HTTP context propagation is not implemented"
             ));
@@ -463,6 +474,8 @@ impl CommonConfig {
             metrics: self.metrics.clone(),
             traces: self.traces.clone(),
             propagation: self.propagation.clone(),
+            http_integration: (self.propagation.http && language == Language::Python)
+                .then(|| adapter.http.unwrap_or_else(|| "stdlib".into())),
             export: self.export.clone(),
             resource: self.resource.clone(),
             metrics_endpoint: self.metrics_endpoint_override.clone().unwrap_or_else(|| {

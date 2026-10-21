@@ -1,0 +1,26 @@
+schema_version = 2
+languages = ["python"]
+
+[sources]
+include = ["examples/apps/python_http_client.py"]
+
+[functions]
+include = ["*.request_order"]
+
+[traces]
+enabled = true
+root_sample_ratio = 1.0
+
+[propagation]
+http = true
+
+[resource]
+service_name = "otelc-python-http-client"
+
+[export]
+endpoint = "http://127.0.0.1:4318"
+interval_ms = 500
+
+[adapters.python]
+backend = "profile"
+http = "stdlib"

@@ -95,6 +95,11 @@ def main(args: list[str]) -> int:
             signals += " and function spans"
             if plan.get("propagation", {}).get("tasks", False):
                 signals += " with standard asyncio task context and ThreadPoolExecutor context"
+            if plan.get('propagation', {}).get('http', False):
+                from quux_otelc_python import http_context
+                if plan.get('http_integration', 'stdlib') != 'stdlib':
+                    raise ValueError('Python HTTP integration requires stdlib')
+                signals += ' with stdlib HTTPConnection/HTTPSConnection/urllib and BaseHTTPRequestHandler context'
             if plan.get("lifetimes", {}).get("enabled", False):
                 boundary = plan['lifetimes']['boundary']
                 signals += f" and ordinary own-initializer weak-referenceable class {boundary} lifetimes"
