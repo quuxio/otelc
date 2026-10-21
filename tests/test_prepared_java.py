@@ -279,6 +279,36 @@ public final class Driver {
             self.assertTrue(any(argument.startswith("-javaagent:") for argument in identity["argv"]))
             self.assertFalse((runtime / "process.json").exists())
             self.assertFalse((runtime / "class-load.log").exists())
+            application_jar = root / "application.jar"
+            with zipfile.ZipFile(application_jar, "w") as archive:
+                for compiled in classes.rglob("*.class"):
+                    archive.write(compiled, compiled.relative_to(classes).as_posix())
+            manifest.write_text(json.dumps({"schema_version": 1, "main_class": "external.Driver",
+                                            "classpath": ["application.jar", "dependency.jar"], "bindings": bindings}))
+            jar_capture = Capture()
+            self.addCleanup(jar_capture.close)
+            data["export"]["endpoint"] = f"http://127.0.0.1:{jar_capture.server.server_port}"
+            runtime = root / "bound-jar"
+            runtime.mkdir(mode=0o700)
+            launch = prepared_java.prepare(prepared_java.PreparedApplication.load(manifest),
+                                           Policy.parse(data), runtime, arguments=("argument with spaces",))
+            with subprocess.Popen(launch.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True) as process:
+                try:
+                    control.wait_ready(runtime / "control.sock", process.pid)
+                    control.request(runtime / "control.sock", "on")
+                    self.assertEqual(batch(process, 2)["checksum"], 3)
+                    control.request(runtime / "control.sock", "flush")
+                    self.assertEqual(jar_capture.calls(), 2)
+                    output, errors = process.communicate("quit\n", timeout=15)
+                    self.assertEqual(process.returncode, 0, errors)
+                    self.assertEqual(output, "")
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait(timeout=5)
+            launch.verify_inputs()
+            self.assertIn("application.jar", (runtime / "class-load.log").read_text())
 
 
 if __name__ == "__main__":
