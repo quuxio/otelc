@@ -58,7 +58,7 @@ Prepared launches keep agent diagnostics in `agent.log`. For exact application s
 
 [Runtime health](docs/runtime-health.md) records PID/policy/selection identity, raw SDK exporter activity and bounded final flush/shutdown outcomes in `health.json`, including while metrics are off. Inspect it with `python -m otelc health --socket ...` or `--report ...`. Queue loss stays unavailable until a supported clean drain establishes it; exporter success still requires separate downstream receipt evidence.
 
-[Invocation attribution](docs/action-witness.md) is being implemented separately. The offline Java binding compiler identifies exact compiled envelope/rendezvous/wrapper/target methods and refuses unsafe diagnostic harness shapes. Runtime scoping and per-action export evidence are still pending; this compiler does not enable a witness capability.
+[Invocation attribution](docs/action-witness.md) is being implemented separately. The offline Java binding compiler identifies exact compiled envelope/rendezvous/wrapper/target methods and refuses unsafe diagnostic harness shapes. Read-only class capture is tested against the real agent before SDK advice and against actual loaded identities/origins. Runtime scoping and per-action export evidence are still pending; these building blocks do not enable a witness capability.
 
 ## Validation and limits
 
