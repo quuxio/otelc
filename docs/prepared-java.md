@@ -33,6 +33,8 @@ The initial profile refuses missing/stale bindings, duplicate JSON keys/class de
 
 ## Runnable example
 
+If an application owns a helper namespace, otelc generates a private copy of its extension with collision-free helper names. It preserves application source, classes and initialisation; the official agent is unchanged. The generated `helpers-extension.jar` and `helpers.json` mapping are bound in the existing launch tooling identities. The usual extension is used when no names conflict. Developers do not rename classes or add dependencies.
+
 The ordinary [Java example](../examples/java/BenchmarkApp.java) has no telemetry code. Compile it and bind this known single-source build:
 
 ```sh
