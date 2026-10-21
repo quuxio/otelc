@@ -19,7 +19,7 @@ import org.objectweb.asm.commons.Remapper;
 /** Offline ASM transformation of our extension only; application and official-agent bytes are never rewritten. */
 public final class HelperRelocator {
   private static final java.util.Set<String> PACKAGES = java.util.Set.of("io.quux.otelc.methods.",
-      "io.quux.otelc.lifecycle.", "io.quux.otelc.witness.probe.");
+      "io.quux.otelc.lifecycle.", "io.quux.otelc.witness.probe.", "io.quux.otelc.http.");
 
   private HelperRelocator() {}
 
@@ -53,7 +53,7 @@ public final class HelperRelocator {
     Map<String, String> packages = new LinkedHashMap<>();
     for (String key : properties.stringPropertyNames().stream().sorted().toList()) {
       String value = properties.getProperty(key);
-      if (!PACKAGES.contains(key) || !value.matches("io\\.quux\\.otelc\\.generated\\.h[0-9a-f]{16}x\\d+\\.(methods|lifecycle|probe)\\.")) {
+      if (!PACKAGES.contains(key) || !value.matches("io\\.quux\\.otelc\\.generated\\.h[0-9a-f]{16}x\\d+\\.(methods|lifecycle|probe|http)\\.")) {
         throw new IllegalArgumentException("invalid private helper mapping");
       }
       packages.put(key, value);

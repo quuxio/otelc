@@ -1,0 +1,23 @@
+# One common policy for the ordinary task and HTTP examples.
+schema_version = 3
+languages = ["java", "typescript", "javascript", "python", "go", "c", "cpp", "rust"]
+
+[resource]
+service_name = "otelc-context-examples"
+
+[export]
+endpoint = "http://127.0.0.1:4320"
+
+[sources]
+include = ["examples/**"]
+
+[functions]
+include = ["*parent(*)", "*child(*)", "*cancel()", "*reject()", "*cancelledChild(*)", "*request(*)", "*handle(*)"]
+
+[traces]
+enabled = true
+sample_ratio = 1.0
+
+[context]
+tasks = true
+http = true

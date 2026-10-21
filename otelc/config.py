@@ -18,6 +18,7 @@ SECTIONS = {
     "functions": {"include", "exclude"},
     "metrics": {"collection", "emission", "histogram_boundaries_seconds"},
     "traces": {"enabled", "sample_ratio"},
+    "context": {"tasks", "http"},
     "lifetimes": {"enabled", "include", "exclude", "max_live", "release_methods"},
     "benchmark": {"iterations", "samples", "warmup"},
 }
@@ -75,10 +76,13 @@ def validate_selectors_and_flags(data: dict[str, Any]) -> None:
             patterns(data[section][key], f"{section}.{key}")
     patterns(data["lifetimes"]["release_methods"], "lifetimes.release_methods")
     flags = (("metrics", "collection"), ("metrics", "emission"),
-             ("traces", "enabled"), ("lifetimes", "enabled"))
+             ("traces", "enabled"), ("lifetimes", "enabled"),
+             ("context", "tasks"), ("context", "http"))
     for section, key in flags:
         if type(data[section][key]) is not bool:
             raise ValueError(f"{section}.{key} must be boolean")
+    if any(data["context"].values()) and not data["traces"]["enabled"]:
+        raise ValueError("context propagation requires traces.enabled=true")
 
 
 def validate_limits(data: dict[str, Any]) -> None:
@@ -151,6 +155,7 @@ class Policy:
             "functions": {"include": [], "exclude": []},
             "metrics": {"collection": True, "emission": True, "histogram_boundaries_seconds": [1e-6, 1e-5, 1e-4, .001, .01, .1, 1.]},
             "traces": {"enabled": False, "sample_ratio": .01},
+            "context": {"tasks": False, "http": False},
             "lifetimes": {"enabled": False, "include": [], "exclude": [], "max_live": 4096, "release_methods": ["close"]},
             "benchmark": {"iterations": 10000, "samples": 15, "warmup": 5},
         }

@@ -9,7 +9,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 
-PACKAGES = ("io.quux.otelc.methods.", "io.quux.otelc.lifecycle.", "io.quux.otelc.witness.probe.")
+PACKAGES = ("io.quux.otelc.methods.", "io.quux.otelc.lifecycle.", "io.quux.otelc.witness.probe.", "io.quux.otelc.http.")
 CLASS_SUFFIX = ".class"
 
 
