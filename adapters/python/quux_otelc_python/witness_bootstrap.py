@@ -133,6 +133,9 @@ class WitnessBootstrap:
         self.program.validate_sources()
         self._bind_module(path, code)
 
+    def contains(self, frame: FrameType) -> bool:
+        return self.sdk is not None and self.sdk.contains(frame)
+
     def watches(self, code: CodeType) -> bool:
         return any(code is self._code(role) for role in self.record['roles'])
 

@@ -45,6 +45,10 @@ class Monitor:
             raise ValueError("Python instrumentation requires CPython 3.12+")
         self.runtime = runtime
         self.witness = witness
+        self.continuations = None
+        if witness is not None:
+            from .witness_continuations import WitnessContinuations
+            self.continuations = WitnessContinuations(witness)
         self.plan = plan
         self.root = Path.cwd().resolve()
         self.protected = Path(__file__).resolve().parents[1]
@@ -74,7 +78,13 @@ class Monitor:
         display = function_identity(name, code)
         return display if self.functions.accepts(display, tag == "otelc.instrument") else None
 
+    def called(self, _code, _offset, function, _argument):
+        if self.continuations is not None:
+            self.continuations.called(sys._getframe(1), function)
+
     def start(self, code, _):
+        if self.continuations is not None:
+            self.continuations.execution(sys._getframe(1), code)
         witness_event = self.witness.entered(sys._getframe(1)) if self.witness is not None else None
         if not self.runtime.observing or self.runtime.closed:
             return
@@ -184,14 +194,20 @@ class Monitor:
             self.witness.exited(sys._getframe(1), 'exception')
 
     def yielded(self, code, _, value):
+        if self.continuations is not None:
+            self.continuations.execution(sys._getframe(1), code)
         if self.context is not None:
             self.context.suspend(id(sys._getframe(1)))
 
     def resumed(self, code, _):
+        if self.continuations is not None:
+            self.continuations.execution(sys._getframe(1), code)
         if self.context is not None:
             self.context.resume(id(sys._getframe(1)))
 
     def thrown(self, code, _, exception):
+        if self.continuations is not None:
+            self.continuations.execution(sys._getframe(1), code)
         if self.context is not None:
             self.context.resume(id(sys._getframe(1)))
 
@@ -224,6 +240,11 @@ class Monitor:
             monitoring.register_callback(self.tool, events.PY_YIELD, self.yielded)
             monitoring.register_callback(self.tool, events.PY_RESUME, self.resumed)
             monitoring.register_callback(self.tool, events.PY_THROW, self.thrown)
+        if self.continuations is not None:
+            monitoring.register_callback(self.tool, events.CALL, self.called)
+            monitoring.register_callback(self.tool, events.PY_YIELD, self.yielded)
+            monitoring.register_callback(self.tool, events.PY_RESUME, self.resumed)
+            monitoring.register_callback(self.tool, events.PY_THROW, self.thrown)
         self.runtime.monitor = self
         if self.plan.get('propagation', {}).get('http', False):
             from .http_context import HTTPContext
@@ -249,6 +270,9 @@ class Monitor:
             mask |= events.PY_YIELD | events.PY_RESUME | events.PY_THROW
         if self.http is not None and self.runtime.observing:
             mask |= events.EXCEPTION_HANDLED
+        if self.continuations is not None:
+            mask |= (events.CALL | events.PY_START | events.PY_RETURN | events.PY_UNWIND
+                     | events.PY_YIELD | events.PY_RESUME | events.PY_THROW)
         sys.monitoring.set_events(self.tool, mask)
 
     def close(self):
@@ -264,7 +288,7 @@ class Monitor:
             self.context = None
         for event in (monitoring.events.PY_START, monitoring.events.PY_RETURN, monitoring.events.PY_UNWIND,
                       monitoring.events.PY_YIELD, monitoring.events.PY_RESUME, monitoring.events.PY_THROW,
-                      monitoring.events.EXCEPTION_HANDLED):
+                      monitoring.events.EXCEPTION_HANDLED, monitoring.events.CALL):
             monitoring.register_callback(self.tool, event, None)
         monitoring.free_tool_id(self.tool)
         self.tool = None

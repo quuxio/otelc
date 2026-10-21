@@ -1,4 +1,4 @@
-"""Private single-action protocol state; compiler/runtime integration is separate."""
+"""Private single-action protocol state with externally supplied live bindings."""
 import secrets
 import threading
 from collections import deque
@@ -75,11 +75,11 @@ class Health:
 
 
 class WitnessState:
-    """Serialise one private scope, without claiming actual compiler attribution.
+    """Serialise one private scope using observed compiler/context bindings.
 
-    Backend-issued Probe/context/call-site handles must come from actual compiled
-    events before this kernel can support a public witness profile. Tests which
-    construct handles demonstrate state behaviour only. No launcher uses it yet.
+    The private launcher supplies actual handles through its bootstrap and SDK
+    bridge. Tests which construct handles demonstrate state behaviour only;
+    neither the kernel nor those model tests qualify a public witness profile.
     """
 
     def __init__(self, bindings: Bindings, *, available: bool = False) -> None:

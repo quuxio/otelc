@@ -85,7 +85,7 @@ class Stream:
 
 
 class PythonWitnessLaunchTests(unittest.TestCase):
-    def fixture(self, root, endpoint, *, fail=False, noise=False):
+    def fixture(self, root, endpoint, *, fail=False, noise=False, continuation=None):
         project = root / 'app'; project.mkdir()
         control = root / 'control'; control.mkdir(mode=0o700)
         source = APP
@@ -115,6 +115,18 @@ def target(value):
         return 7
     return value + 1
 """
+        if continuation is not None:
+            providers = {
+                'future': "import asyncio\nLOOP = asyncio.new_event_loop()\nFUTURE = LOOP.create_future()\ndef target(value):\n    FUTURE.add_done_callback(lambda _: None)\n    FUTURE.set_result(1)\n    LOOP.close()\n    return value + 1\n",
+                'generator': "def child():\n    yield 1\ndef target(value):\n    child().close()\n    return value + 1\n",
+                'coroutine': "async def child():\n    return 1\ndef target(value):\n    child().close()\n    return value + 1\n",
+                'async_generator': "async def child():\n    yield 1\ndef target(value):\n    child()\n    return value + 1\n",
+                'generator_resume': "def child():\n    yield 1\nCHILD = child()\ndef target(value):\n    next(CHILD)\n    CHILD.close()\n    return value + 1\n",
+                'thread': "import threading\ndef target(value):\n    worker = threading.Thread(target=lambda: None)\n    worker.start()\n    worker.join()\n    return value + 1\n",
+                'pool': "from concurrent.futures import ThreadPoolExecutor\nPOOL = ThreadPoolExecutor(max_workers=1)\nPOOL.submit(lambda: None).result()\ndef target(value):\n    POOL.submit(lambda: None).result()\n    POOL.shutdown()\n    return value + 1\n",
+                'loop': "import asyncio\nLOOP = asyncio.new_event_loop()\ndef target(value):\n    LOOP.call_soon(LOOP.stop)\n    LOOP.run_forever()\n    LOOP.close()\n    return value + 1\n",
+            }
+            provider = providers[continuation]
         (project / 'harness.py').write_text(source)
         (project / 'otelc_witness_provider.py').write_text(provider)
         roles, offsets = declaration(project, source)
@@ -136,11 +148,11 @@ def target(value):
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(('OTEL_', 'OTELC_'))}
         environment.update(OTELC_PYTHON=sys.executable, OTELC_ADAPTER_ROOT=str(ROOT / 'adapters'))
-        for mode in ('return', 'exception', 'unarmed', 'stale', 'noise'):
+        for mode in ('return', 'exception', 'unarmed', 'stale', 'noise', 'generator', 'coroutine', 'async_generator', 'generator_resume', 'thread', 'pool', 'loop', 'future'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix='ow-', dir='/private/tmp') as name, \
                     receiver() as (endpoint, received):
                 root = Path(name)
-                project, config, selector, manifest, sock = self.fixture(root, endpoint, fail=mode == 'exception', noise=mode == 'noise')
+                project, config, selector, manifest, sock = self.fixture(root, endpoint, fail=mode == 'exception', noise=mode == 'noise', continuation=mode if mode in ('generator', 'coroutine', 'async_generator', 'generator_resume', 'thread', 'pool', 'loop', 'future') else None)
                 before = {p.name: p.read_bytes() for p in project.glob('*.py')}
                 command = [str(CLI), '--config', str(config), 'python']
                 frozen = subprocess.run([*command, '--witness-freeze', str(selector)], cwd=project,
@@ -193,6 +205,8 @@ def target(value):
                 self.assertEqual(list(range(1, len(events) + 1)), [e['event_seq'] for e in events])
                 self.assertEqual('runtime_end', events[-1]['event'])
                 self.assertEqual(mode in ('return', 'exception', 'noise'), events[-1]['complete'])
+                if mode in ('generator', 'coroutine', 'async_generator', 'generator_resume', 'thread', 'pool', 'loop', 'future'):
+                    self.assertEqual('unsupported_profile', next(e['reason'] for e in events if e['event'] == 'invalidated'))
                 spans = [span for path, _, body in received if path == '/v1/traces'
                          for resource in ExportTraceServiceRequest.FromString(body).resource_spans
                          for scope in resource.scope_spans for span in scope.spans]

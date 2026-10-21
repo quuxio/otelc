@@ -23,6 +23,9 @@ class WitnessSDK:
         self.owner = ExecutionOwner(profile)
         self.claim = None
 
+    def contains(self, frame: FrameType) -> bool:
+        return self.owner.contains(frame)
+
     def watches(self, code: CodeType) -> bool:
         profile = self.owner.profile
         return any(code is candidate for candidate in (

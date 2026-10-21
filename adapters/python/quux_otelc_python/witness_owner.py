@@ -1,4 +1,4 @@
-"""Private synchronous execution ownership; no SDK/control integration yet."""
+"""Private synchronous execution ownership by observed live frame generations."""
 from dataclasses import dataclass
 import threading
 from types import CodeType, FrameType
@@ -103,6 +103,22 @@ class ExecutionOwner:
     @staticmethod
     def _direct(frame: FrameType, parent: Generation | None, site: CallSite) -> bool:
         return parent is not None and frame.f_back is not None and id(frame.f_back) == parent.frame_id and site.matches(frame)
+
+    def contains(self, frame: FrameType) -> bool:
+        """Match the actual live wrapper ancestor on its owning native thread."""
+        if type(frame) is not FrameType or threading.get_native_id() != self.thread:
+            return False
+        with self.lock:
+            if self.closed or self.fault is not None or self.wrapper is None:
+                return False
+            for _ in range(4096):
+                if frame is None:
+                    return False
+                if (id(frame) == self.wrapper.frame_id
+                        and frame.f_code is self.profile.wrapper.callee()):
+                    return True
+                frame = frame.f_back
+            raise CodeBindingError('owner_frame_capacity')
 
     def entered(self, frame: FrameType) -> OwnerEvent | None:
         if type(frame) is not FrameType or threading.get_native_id() != self.thread:
