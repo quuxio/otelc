@@ -55,6 +55,7 @@ public final class LiveState {
   }
 
   private String lifetimeLosses() {
+    if (System.getProperty("otelc.lifetime.types", "").isEmpty()) return "0";
     try {
       Class<?> observer = Class.forName("io.quux.otelc.lifecycle.Observer", false, ClassLoader.getSystemClassLoader());
       return observer.getMethod("lost").invoke(null).toString();

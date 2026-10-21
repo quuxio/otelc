@@ -14,6 +14,22 @@ from test_java_integration import Capture
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_excluded_sources_have_no_application_observations(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        data = copy.deepcopy(Policy.load(Path("examples/otelc.toml")).data)
+        data["sources"]["exclude"] = ["examples/**"]
+        data["benchmark"].update(iterations=10, samples=1, warmup=1)
+        data["export"]["endpoint"] = f"http://127.0.0.1:{capture.server.server_port}"
+        with tempfile.TemporaryDirectory(dir="/tmp") as directory:
+            output = Path(directory) / "run"
+            report = benchmark.run(Policy.parse(data), output)
+            self.assertEqual(report["expected_checksum"], 41284864)
+            self.assertEqual(capture.calls(), 0)
+            self.assertFalse(capture.points("otelc.lifetime.admitted"))
+            self.assertFalse(capture.traces)
+            self.assertEqual(json.loads((output / "health.json").read_text())["lifetime_lost"], 0)
+
     def test_checksums_are_independent_and_deterministic(self) -> None:
         self.assertEqual(benchmark.checksum(0), 0)
         self.assertEqual(benchmark.checksum(10), 41284864)
