@@ -137,6 +137,20 @@ class ExtensionTests {
     assertEquals(3, count("otelc.function.calls"));
   }
 
+  @Test void safeMethodObserverPreservesValuesAndClosesSyncAndAsyncScopes() {
+    assertEquals("unchanged", io.quux.otelc.methods.Observer.exit(null, String.class, "unchanged", null));
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "run");
+    assertNotNull(call);
+    assertEquals(3, io.quux.otelc.methods.Observer.exit(call, int.class, 3, null));
+    var errorCall = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "fail");
+    assertNull(io.quux.otelc.methods.Observer.exit(errorCall, void.class, null, new IllegalArgumentException()));
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    var async = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "async");
+    assertSame(future, io.quux.otelc.methods.Observer.exit(async, future.getClass(), future, null));
+    future.complete(7);
+    assertEquals(7, future.join());
+  }
+
   @Test void customizerAppliesOnlyToTheOfficialMethodInstrumenter() {
     var factories = new java.util.ArrayList<io.opentelemetry.instrumentation.api.instrumenter.OperationMetrics>();
     for (String name : List.of("another-instrumentation", "io.opentelemetry.methods")) {
