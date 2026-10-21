@@ -46,6 +46,49 @@ public final class WitnessBindings {
       }
     }
 
+    private static boolean identifier(String text) {
+      if (text == null || text.isEmpty() || !Character.isJavaIdentifierStart(text.codePointAt(0))) return false;
+      return text.codePoints().allMatch(value -> Character.isJavaIdentifierPart(value) && !Character.isISOControl(value));
+    }
+
+    private static boolean internalName(String text) {
+      if (text == null) return false;
+      for (String segment : text.split("/", -1)) {
+        if (!identifier(segment)) return false;
+      }
+      return true;
+    }
+
+    private static boolean methodDescriptor(String text) {
+      if (text == null || !text.startsWith("(")) return false;
+      int index = 1;
+      int slots = 0;
+      while (index < text.length() && text.charAt(index) != ')') {
+        int end = valueEnd(text, index);
+        if (end < 0) return false;
+        slots += text.charAt(index) == 'J' || text.charAt(index) == 'D' ? 2 : 1;
+        if (slots > 255) return false;
+        index = end;
+      }
+      if (index >= text.length() - 1) return false;
+      index++;
+      return text.charAt(index) == 'V' ? index == text.length() - 1 : valueEnd(text, index) == text.length();
+    }
+
+    private static int valueEnd(String text, int index) {
+      int dimensions = 0;
+      while (index < text.length() && text.charAt(index) == '[') {
+        if (++dimensions > 255) return -1;
+        index++;
+      }
+      if (index == text.length()) return -1;
+      char kind = text.charAt(index);
+      if ("BCDFIJSZ".indexOf(kind) >= 0) return index + 1;
+      if (kind != 'L') return -1;
+      int end = text.indexOf(';', index);
+      return end > index && internalName(text.substring(index + 1, end)) ? end + 1 : -1;
+    }
+
     boolean matches(MethodInsnNode instruction) {
       return owner.equals(instruction.owner) && name.equals(instruction.name)
           && descriptor.equals(instruction.desc);
@@ -55,49 +98,6 @@ public final class WitnessBindings {
   /** IDs bind role, complete original class bytes and canonical method code. */
   public record Binding(String role, Declaration declaration, String classSha256,
                         String methodSha256, String probeId) {}
-
-  private static boolean identifier(String text) {
-    if (text == null || text.isEmpty() || !Character.isJavaIdentifierStart(text.codePointAt(0))) return false;
-    return text.codePoints().allMatch(value -> Character.isJavaIdentifierPart(value) && !Character.isISOControl(value));
-  }
-
-  private static boolean internalName(String text) {
-    if (text == null) return false;
-    for (String segment : text.split("/", -1)) {
-      if (!identifier(segment)) return false;
-    }
-    return true;
-  }
-
-  private static boolean methodDescriptor(String text) {
-    if (text == null || !text.startsWith("(")) return false;
-    int index = 1;
-    int slots = 0;
-    while (index < text.length() && text.charAt(index) != ')') {
-      int end = valueEnd(text, index);
-      if (end < 0) return false;
-      slots += text.charAt(index) == 'J' || text.charAt(index) == 'D' ? 2 : 1;
-      if (slots > 255) return false;
-      index = end;
-    }
-    if (index >= text.length() - 1) return false;
-    index++;
-    return text.charAt(index) == 'V' ? index == text.length() - 1 : valueEnd(text, index) == text.length();
-  }
-
-  private static int valueEnd(String text, int index) {
-    int dimensions = 0;
-    while (index < text.length() && text.charAt(index) == '[') {
-      if (++dimensions > 255) return -1;
-      index++;
-    }
-    if (index == text.length()) return -1;
-    char kind = text.charAt(index);
-    if ("BCDFIJSZ".indexOf(kind) >= 0) return index + 1;
-    if (kind != 'L') return -1;
-    int end = text.indexOf(';', index);
-    return end > index && internalName(text.substring(index + 1, end)) ? end + 1 : -1;
-  }
 
   /** Validate all four roles together; do not derive a runtime capability from this result. */
   public static Map<String, Binding> compile(Map<String, byte[]> classes,
