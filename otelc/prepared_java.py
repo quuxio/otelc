@@ -238,7 +238,7 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
     tooling = [file_identity(executable)]
     if not plain:
         tooling.extend(file_identity(path) for path in (
-            java.agent(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
+            java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
             runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
     identity = {"schema_version": 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",

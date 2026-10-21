@@ -1,0 +1,13 @@
+OpenTelemetry Java W3C trace-state parser
+Copyright The OpenTelemetry Authors
+SPDX-License-Identifier: Apache-2.0
+
+The bootstrap patch contains only W3CTraceContextEncoding.class from the
+official io.opentelemetry:opentelemetry-api:1.67.0 artifact, relocated into
+the namespace used by OpenTelemetry Java agent 2.32.0. Its implementation
+is unmodified. This backports the official fix for GHSA-ccrj-gw8r-854m.
+
+Upstream: https://github.com/open-telemetry/opentelemetry-java/tree/v1.67.0
+Advisory: https://github.com/open-telemetry/opentelemetry-java/security/advisories/GHSA-ccrj-gw8r-854m
+API artifact SHA-256:
+538d1dff2f9a37aecbc0ef98fd17273a3affb058e734e6763a3a07a38a5fdc59
