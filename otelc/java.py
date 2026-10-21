@@ -48,6 +48,8 @@ def agent() -> Path:
 def parser_patch() -> Path:
     """Require the exact official patched parser, with no extra bootstrap code."""
     path = ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT-bootstrap-patch.jar"
+    if os.pathsep in str(path):
+        raise ValueError("bootstrap parser patch path contains a classpath separator")
     if not path.is_file():
         raise ValueError("build the Java bootstrap parser patch with make java-build first")
     if path.stat().st_size > 262_144:
@@ -61,7 +63,8 @@ def parser_patch() -> Path:
             if (len(set(names)) != len(names) or files != required
                     or any(not any(file.startswith(directory) for file in required) for directory in directories)):
                 raise ValueError("unexpected or missing bootstrap patch entries")
-            if any(info.flag_bits & 1 or info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+            if any(info.orig_filename != info.filename or info.flag_bits & 1
+                   or info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
                    for info in archive.infolist()):
                 raise ValueError("unsupported bootstrap patch encryption or compression")
             if archive.getinfo(PARSER_CLASS).file_size > 16_384:

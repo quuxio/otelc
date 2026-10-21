@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -87,12 +88,23 @@ class ParserPatchTests(unittest.TestCase):
                     archive.writestr(name, value)
             with self.assertRaisesRegex(ValueError, "unsupported"):
                 java.parser_patch()
+            with zipfile.ZipFile(path, "w") as archive:
+                for name, value in entries.items():
+                    info = zipfile.ZipInfo(name)
+                    if name == java.PARSER_CLASS:
+                        info.filename = name + "\x00alias"
+                    archive.writestr(info, value)
+            with self.assertRaisesRegex(ValueError, "unsupported"):
+                java.parser_patch()
             path.write_bytes(b"not a zip")
             with self.assertRaisesRegex(ValueError, "invalid bootstrap"):
                 java.parser_patch()
             path.write_bytes(b"x" * 262_145)
             with self.assertRaisesRegex(ValueError, "too large"):
                 java.parser_patch()
+            with patch.object(java, "ROOT", Path(directory) / ("bad" + os.pathsep + "path")):
+                with self.assertRaisesRegex(ValueError, "classpath separator"):
+                    java.parser_patch()
 
     def test_actual_agent_loads_patched_parser_and_preserves_valid_state(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
