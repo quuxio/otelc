@@ -263,7 +263,7 @@ func Run(planPath string, args []string, sdkRoot string) (int, error) {
 		if err = Doctor(goTool, root); err == nil {
 			fmt.Println("Go: compiler overlays, deferred probes, OTLP/HTTP metrics and retained build/run bundles available")
 			if plan.Traces.Enabled {
-				fmt.Println("Go: sampled function spans with private same-goroutine parenting available; qualified on Go 1.27.2")
+				fmt.Println("Go: sampled function spans with private same-goroutine parenting available; qualified on Go 1.27.3")
 			}
 		}
 		return 0, err
