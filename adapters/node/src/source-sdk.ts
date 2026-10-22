@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { defaultResource, resourceFromAttributes } from '@opentelemetry/resources';
 import { AlwaysOffSampler, ParentBasedSampler, TraceIdRatioBasedSampler, TracerProvider } from '@opentelemetry/sdk-trace';
 import type { SpanProcessor } from '@opentelemetry/sdk-trace';
+import type { MeterOptions } from '@opentelemetry/api';
 import { spanToWire } from './export-wire.ts';
 import type { IControlDescriptor } from './local-metric-control.ts';
 import { MetricControls } from './metric-controls.ts';
@@ -122,7 +123,9 @@ export class SourceSdk {
     return this.#writer.send(record);
   }
 
-  metrics(scope: string): SourceMetrics { return new SourceMetrics(scope, this.controls, record => this.send(record)); }
+  metrics(scope: string, version = '0.2.0', options?: MeterOptions): SourceMetrics {
+    return new SourceMetrics(scope, this.controls, record => this.send(record), version, options);
+  }
   descriptor(value: IControlDescriptor): void {
     if (!this.send({ kind: 'control-descriptor', descriptor: value })) throw new Error('control ownership handoff failed');
   }

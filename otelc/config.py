@@ -81,8 +81,6 @@ def validate_selectors_and_flags(data: dict[str, Any]) -> None:
     for section, key in flags:
         if type(data[section][key]) is not bool:
             raise ValueError(f"{section}.{key} must be boolean")
-    if any(data["context"].values()) and not data["traces"]["enabled"]:
-        raise ValueError("context propagation requires traces.enabled=true")
 
 
 def validate_limits(data: dict[str, Any]) -> None:

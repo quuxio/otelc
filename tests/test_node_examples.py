@@ -16,6 +16,19 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class NodeExampleTests(unittest.TestCase):
+    def test_http_examples_are_the_actual_strict_microsoft_compiler_output(self) -> None:
+        compiler = ROOT / 'node_modules/typescript'
+        package = json.loads((compiler / 'package.json').read_text())
+        source = ROOT / 'examples/typescript/HttpContextApp.ts'
+        before = source.read_bytes()
+        with tempfile.TemporaryDirectory(prefix='otelc-http-emit-', dir='/tmp') as temporary:
+            subprocess.run([node_command(), str(compiler / package['bin']['tsc']),
+                '--target', 'ES2022', '--module', 'NodeNext', '--strict', '--types', 'node',
+                '--outDir', temporary, str(source)], cwd=ROOT, capture_output=True, text=True, check=True, timeout=30)
+            self.assertEqual((Path(temporary) / 'HttpContextApp.js').read_bytes(),
+                             (ROOT / 'examples/javascript/HttpContextApp.js').read_bytes())
+        self.assertEqual(source.read_bytes(), before)
+
     def run_example(self, application: Path) -> None:
         before = hashlib.sha256(application.read_bytes()).hexdigest()
         result = subprocess.run([node_command(), '--expose-gc', str(application)],

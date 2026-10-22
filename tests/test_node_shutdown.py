@@ -32,6 +32,33 @@ def shutdown_policy(capture: Capture) -> Policy:
 
 
 class NodeShutdownTests(unittest.TestCase):
+    def test_existing_propagator_owner_is_preserved_when_http_startup_is_refused(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        data = copy.deepcopy(shutdown_policy(capture).data)
+        data['context']['http'] = True
+        with tempfile.TemporaryDirectory(prefix='otelc-propagator-owner-', dir='/tmp') as directory:
+            root = Path(directory).resolve()
+            entry = root / 'app.cjs'
+            entry.write_text("console.log('APPLICATION RAN');\n")
+            preload = root / 'owner.mjs'
+            preload.write_text('import {createRequire} from "node:module";\n'
+                'const {propagation}=createRequire(' + json.dumps(str(ROOT / 'package.json'))
+                + ')("@opentelemetry/api");\n' + """const owner = {
+  fields(){return ['application-owner'];}, inject(){}, extract(active){return active;}
+};
+propagation.setGlobalPropagator(owner);
+process.on('exit', () => console.log(JSON.stringify({fields:propagation.fields()})));
+""")
+            runtime = root / 'instrumented'
+            command = node.command(Policy.parse(data), runtime, 'javascript', root=root, entry=entry)
+            result = subprocess.run([command[0], '--import', str(preload), *command[1:]],
+                capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('an OpenTelemetry propagator is already installed', result.stderr)
+            self.assertEqual(json.loads(result.stdout), {'fields': ['application-owner']})
+            self.assertEqual(node.wait_report(runtime)['sdk_phase'], 'closed')
+
     def test_existing_context_owner_is_preserved_and_refusal_cannot_exit_silently(self) -> None:
         capture = Capture()
         self.addCleanup(capture.close)

@@ -61,12 +61,15 @@ class Downstream:
 
 
 class JavaHttpContextTests(unittest.TestCase):
+    def test_http_metrics_and_live_switches_work_without_trace_emission(self) -> None:
+        self.exercise(True, traces=False)
+
     def test_official_client_server_carriers_parents_sampling_and_live_metrics(self) -> None:
         for http in (False, True):
             with self.subTest(http=http):
                 self.exercise(http)
 
-    def exercise(self, http: bool) -> None:
+    def exercise(self, http: bool, *, traces: bool = True) -> None:
         capture = Capture()
         self.addCleanup(capture.close)
         downstream = Downstream()
@@ -87,7 +90,7 @@ class JavaHttpContextTests(unittest.TestCase):
                 "sources": {"include": ["examples/**"]},
                 "functions": {"include": ["HttpContextApp.request(*)", "HttpContextApp.handle(*)"]},
                 "metrics": {"collection": False, "emission": False},
-                "traces": {"enabled": True, "sample_ratio": 1.0}, "context": {"http": http},
+                "traces": {"enabled": traces, "sample_ratio": 1.0}, "context": {"http": http},
                 "export": {"endpoint": f"http://127.0.0.1:{capture.server.server_port}"}})
             outcomes = []
             audits = []
@@ -159,29 +162,33 @@ class JavaHttpContextTests(unittest.TestCase):
             self.assertTrue(all(row[1] == "null" for row in audits[0] if row[0] in ("/ok", "/error")))
             spans = [span for request in capture.traces for resource in request.resource_spans
                      for scope in resource.scope_spans for span in scope.spans]
-            self.assertEqual(len(spans), 56 if http else 32)
+            self.assertEqual(len(spans), (56 if http else 32) if traces else 0)
             clients = {span.span_id: span for span in spans if span.kind == 3}
             servers = [span for span in spans if span.kind == 2]
-            self.assertEqual(len(clients), 12 if http else 0)
-            self.assertEqual(len(servers), 16 if http else 0)
+            self.assertEqual(len(clients), 12 if http and traces else 0)
+            self.assertEqual(len(servers), 16 if http and traces else 0)
             self.assertEqual(histogram_count(capture, "http.client.request.duration"), 6 if http else 0)
             self.assertEqual(histogram_count(capture, "http.server.request.duration"), 10 if http else 0)
             linked = [span for span in servers if span.parent_span_id in clients]
-            self.assertEqual(len(linked), 8 if http else 0)
+            self.assertEqual(len(linked), 8 if http and traces else 0)
             for span in linked:
                 self.assertEqual(span.trace_id, clients[span.parent_span_id].trace_id)
             if http:
                 self.assertTrue(all(row[1].startswith("00-") for row in audits[1] if row[0] in ("/ok", "/error")))
-                for index in range(4):
-                    sampled = [span for span in servers if span.trace_id.hex() == f"{index + 1:032x}"]
-                    self.assertEqual(len(sampled), 1)
-                    self.assertEqual(sampled[0].parent_span_id.hex(), f"{index + 1:016x}")
-                    self.assertFalse(any(span.trace_id.hex() == f"{index + 101:032x}" for span in spans))
+                if traces:
+                    for index in range(4):
+                        sampled = [span for span in servers if span.trace_id.hex() == f"{index + 1:032x}"]
+                        self.assertEqual(len(sampled), 1)
+                        self.assertEqual(sampled[0].parent_span_id.hex(), f"{index + 1:016x}")
+                        self.assertFalse(any(span.trace_id.hex() == f"{index + 101:032x}" for span in spans))
                 self.assertEqual(len(downstream.received), 8)
                 self.assertEqual(downstream.received[:4], [(None, None)] * 4)
                 for index, (parent, baggage) in enumerate(downstream.received[4:]):
                     self.assertEqual(baggage, "session=ordinary")
                     self.assertEqual(parent.split("-")[1], f"{index + 201:032x}")
-                    self.assertIn(bytes.fromhex(parent.split("-")[2]), clients)
+                    if traces:
+                        self.assertIn(bytes.fromhex(parent.split("-")[2]), clients)
+                    else:
+                        self.assertEqual(parent.split('-')[3], '00')
             else:
                 self.assertTrue(all(row[1] == "null" for row in audits[1] if row[0] in ("/ok", "/error")))

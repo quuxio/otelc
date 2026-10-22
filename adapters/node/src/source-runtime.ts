@@ -8,6 +8,8 @@ import { epochNs, monotonicNs, sdkTime } from './source-clock.ts';
 import { SourceLifetimes } from './source-lifetimes.ts';
 import { PromiseObserver } from './compiler/promise-observer.mjs';
 import type { IAsyncSite, ISourcePlan } from './source-plan.ts';
+import { installHttp } from './http-instrumentation.ts';
+import type { IHttpInstallation } from './http-instrumentation.ts';
 
 interface IFunction { count: number; unwinds: number; attributes: { function: string; language: string } }
 interface IFrame { function: IFunction; started: bigint; epoch: bigint; metrics: boolean; span?: Span }
@@ -29,6 +31,7 @@ export class SourceRuntime {
   readonly #duration: Histogram;
   readonly lifetimes?: SourceLifetimes;
   #observer?: PromiseObserver;
+  #http?: IHttpInstallation;
   #ownsContext = false;
   #closed = false;
   #next = 1;
@@ -48,7 +51,13 @@ export class SourceRuntime {
   /** Refuse an existing owner and release our own SDKs without disabling that owner. */
   static async start(plan: ISourcePlan): Promise<SourceRuntime> {
     const runtime = new SourceRuntime(plan, await SourceSdk.start(plan));
-    if (context.setGlobalContextManager(runtime.#manager)) { runtime.#ownsContext = true; return runtime; }
+    if (context.setGlobalContextManager(runtime.#manager)) {
+      runtime.#ownsContext = true;
+      try {
+        if (plan.context.http) runtime.#http = await installHttp(runtime.sdk);
+        return runtime;
+      } catch (error) { await runtime.shutdown(); throw error; }
+    }
     await runtime.shutdown();
     throw new Error('an OpenTelemetry context manager is already installed');
   }
@@ -127,7 +136,7 @@ export class SourceRuntime {
       active_functions: this.#frames.size, runtime_losses: { ...this.losses },
       native_callback_failures: this.#observer?.failures() ?? 0,
       lifetimes: this.lifetimes?.status(), lifetime_lost: this.lifetimes?.status().lost ?? 0,
-      handoff: this.sdk.handoffStatus(), span_observation: this.sdk.spanObservation() };
+      handoff: this.sdk.handoffStatus(), span_observation: this.sdk.spanObservation(), http: this.#http?.identity };
   }
 
   async status(): Promise<object> { return { ...await this.sdk.status(), ...this.snapshot() }; }
@@ -145,6 +154,7 @@ export class SourceRuntime {
       try { this.#observer?.close(); }
       catch { this.losses.invalid++; }
       this.lifetimes?.close(); this.#closed = true;
+      this.#http?.stop();
       this.losses.incomplete += this.#frames.size; this.#frames.clear();
       if (this.#ownsContext) context.disable();
       this.#manager.disable();

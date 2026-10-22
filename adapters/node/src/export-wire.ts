@@ -6,7 +6,7 @@ import type { ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 
 interface IResourceWire { attributes: Attributes; schemaUrl?: string }
-interface ISpanContextWire extends Omit<SpanContext, 'traceState'> { traceState?: string }
+export interface ISpanContextWire extends Omit<SpanContext, 'traceState'> { traceState?: string }
 interface ILinkWire extends Omit<Link, 'context'> { context: ISpanContextWire }
 export interface IMetricWire extends Omit<ResourceMetrics, 'resource'> { resource: IResourceWire }
 export interface ISpanWire extends Omit<ReadableSpan, 'spanContext' | 'parentSpanContext' | 'links' | 'resource'> {
@@ -16,12 +16,14 @@ export interface ISpanWire extends Omit<ReadableSpan, 'spanContext' | 'parentSpa
   resource: IResourceWire;
 }
 
-function contextToWire(value: SpanContext): ISpanContextWire {
+/** Carry IDs, flags and serialised tracestate, without retaining a live application context. */
+export function contextToWire(value: SpanContext): ISpanContextWire {
   return { traceId: value.traceId, spanId: value.spanId, traceFlags: value.traceFlags,
     isRemote: value.isRemote, traceState: value.traceState?.serialize() };
 }
 
-function contextFromWire(value: ISpanContextWire): SpanContext {
+/** Restore the official tracestate value for span export and metric exemplars. */
+export function contextFromWire(value: ISpanContextWire): SpanContext {
   return { ...value, traceState: value.traceState === undefined ? undefined : createTraceState(value.traceState) };
 }
 

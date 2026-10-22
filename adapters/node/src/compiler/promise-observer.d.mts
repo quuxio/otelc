@@ -2,6 +2,7 @@ import type { IAsyncSite } from '../source-plan.ts';
 
 export interface INativePromiseObserver {
   state(value: Promise<unknown>): 0 | 1 | 2;
+  typeName(value: unknown): string;
   frames(): Array<[string, number, number, number]>;
   checkpoint(callback: () => void): number;
   stopCheckpoint(generation: number): boolean;

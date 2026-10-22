@@ -85,8 +85,11 @@ class PolicyTests(unittest.TestCase):
                     self.assertEqual(values["otel.instrumentation.otelc-http-headers.enabled"], str(http).lower())
                     self.assertEqual(values.get("otel.propagators"), "tracecontext,baggage" if http else None)
         for context in ({"tasks": True}, {"http": True}):
-            with self.subTest(context=context), self.assertRaisesRegex(ValueError, "traces.enabled"):
-                Policy.parse({"schema_version": 3, "context": context})
+            with self.subTest(context=context):
+                policy = Policy.parse({"schema_version": 3, "context": context})
+                self.assertFalse(policy.data['traces']['enabled'])
+                self.assertEqual(context_configuration(policy)['otel.instrumentation.java-http-client.enabled'],
+                                 str(context.get('http', False)).lower())
 
     def test_http_preflight_refuses_missing_or_incompatible_jdk_headers_before_launch(self) -> None:
         declarations = ("private final java.net.http.HttpHeaders headers;\n"

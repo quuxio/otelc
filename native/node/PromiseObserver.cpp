@@ -119,6 +119,23 @@ void State(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(static_cast<int>(args[0].As<v8::Promise>()->State()));
 }
 
+void TypeName(const FunctionCallbackInfo<Value>& args) {
+  auto* isolate = args.GetIsolate();
+  if (args.Length() != 1) {
+    isolate->ThrowException(v8::Exception::TypeError(String::NewFromUtf8Literal(isolate, "expected one value")));
+    return;
+  }
+  const auto value = args[0];
+  // V8 constructor metadata skips accessors/interceptors and proxy traversal.
+  // Never read application name/message/stack/constructor properties in JS.
+  if (value->IsObject() && !value->IsProxy()) {
+    const auto name = value.As<Object>()->GetConstructorName();
+    args.GetReturnValue().Set(name->Length() <= 1024 ? name : String::NewFromUtf8Literal(isolate, "object"));
+    return;
+  }
+  args.GetReturnValue().Set(value->IsNull() ? String::NewFromUtf8Literal(isolate, "null") : value->TypeOf(isolate));
+}
+
 void Frames(const FunctionCallbackInfo<Value>& args) {
   auto* isolate = args.GetIsolate();
   const auto context = isolate->GetCurrentContext();
@@ -146,7 +163,7 @@ void Initialize(Local<Object> exports, Local<Value>, Local<v8::Context> context,
   node::AddEnvironmentCleanupHook(isolate, Cleanup, state);
   const auto data = v8::External::New(isolate, state);
   for (const auto& method : {std::pair{"checkpoint", Checkpoint}, {"stopCheckpoint", StopCheckpoint},
-      {"checkpointStats", CheckpointStats}, {"state", State}, {"frames", Frames}}) {
+      {"checkpointStats", CheckpointStats}, {"state", State}, {"typeName", TypeName}, {"frames", Frames}}) {
     exports->CreateDataProperty(context, String::NewFromUtf8(isolate, method.first).ToLocalChecked(),
         v8::Function::New(context, method.second, data).ToLocalChecked()).Check();
   }

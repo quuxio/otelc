@@ -1,7 +1,8 @@
 import { constants, createReadStream, fstatSync, openSync, closeSync, ftruncateSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
+import { ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import type { Counter, Gauge, Histogram } from '@opentelemetry/api';
-import { spanFromWire } from './export-wire.ts';
+import { contextFromWire, spanFromWire } from './export-wire.ts';
 import { removeControlDescriptor } from './local-metric-control.ts';
 import type { IControlDescriptor } from './local-metric-control.ts';
 import { OwnedSdkPipeline } from './sdk-pipeline.ts';
@@ -21,17 +22,18 @@ let stopping = false;
 let spansReceived = 0;
 
 function recordMetric(record: ISourceMetric): void {
-  const key = JSON.stringify([record.scope, record.instrument, record.name, record.options]);
+  const key = JSON.stringify([record.scope, record.version, record.schemaUrl, record.instrument, record.name, record.options]);
   let instrument = metrics.get(key);
   if (!instrument) {
-    const meter = pipeline.meterProvider.getMeter(record.scope, '0.2.0');
+    const meter = pipeline.meterProvider.getMeter(record.scope, record.version, { schemaUrl: record.schemaUrl });
     instrument = record.instrument === 'counter' ? meter.createCounter(record.name, record.options)
       : record.instrument === 'histogram' ? meter.createHistogram(record.name, record.options)
         : meter.createGauge(record.name, record.options);
     metrics.set(key, instrument);
   }
-  if ('add' in instrument) instrument.add(record.value, record.attributes);
-  else instrument.record(record.value, record.attributes);
+  const active = record.context ? trace.setSpanContext(ROOT_CONTEXT, contextFromWire(record.context)) : ROOT_CONTEXT;
+  if ('add' in instrument) instrument.add(record.value, record.attributes, active);
+  else instrument.record(record.value, record.attributes, active);
 }
 
 function status(): object {

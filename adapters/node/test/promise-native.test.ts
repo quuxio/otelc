@@ -10,6 +10,30 @@ import { nativeObserver } from '../src/compiler/promise-observer.mjs';
 const native = nativeObserver();
 const filename = fileURLToPath(new URL('../../../build/tools/otelc_node_observer-' + process.versions.node + '.node', import.meta.url));
 
+test('V8 type metadata never invokes error getters, constructor accessors or proxy traps', () => {
+  let reads = 0;
+  class ApplicationError extends Error {}
+  const error = new ApplicationError();
+  for (const key of ['name', 'message', 'stack', 'constructor', Symbol.toStringTag]) {
+    Object.defineProperty(error, key, { configurable: true, get() { reads++; throw 'forbidden getter'; } });
+  }
+  Object.defineProperty(ApplicationError, 'name', { configurable: true, get() { reads++; throw 'constructor getter'; } });
+  assert.equal(native.typeName(error), 'ApplicationError');
+  const proxy = new Proxy(error, { get() { reads++; throw 'get trap'; },
+    getPrototypeOf() { reads++; throw 'prototype trap'; }, getOwnPropertyDescriptor() { reads++; throw 'descriptor trap'; } });
+  assert.equal(native.typeName(proxy), 'object');
+  const revoked = Proxy.revocable(error, {}); revoked.revoke();
+  assert.equal(native.typeName(revoked.proxy), 'object');
+  Object.setPrototypeOf(error, proxy);
+  assert.equal(native.typeName(error), 'Error');
+  assert.equal(native.typeName(null), 'null');
+  assert.equal(native.typeName(undefined), 'undefined');
+  assert.equal(native.typeName(42), 'number');
+  assert.equal(native.typeName('failure'), 'string');
+  assert.throws(() => Reflect.apply(native.typeName, undefined, []), /expected one value/);
+  assert.equal(reads, 0);
+});
+
 test('reads actual pending/fulfilled/rejected states without inspecting thenables', () => {
   assert.equal(native.state(new Promise(() => { /* Deliberately unresolved application Promise. */ })), 0);
   assert.equal(native.state(Promise.resolve(42)), 1);
