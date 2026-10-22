@@ -20,6 +20,42 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class NodePreloadTests(unittest.TestCase):
+    def test_builtin_export_conditions_match_actual_require_and_import_execution(self) -> None:
+        cases = [('node-addons', '--no-addons', 'fallback.cjs'),
+                 ('node-addons', '--no-addons --addons', 'enabled.cjs'),
+                 ('module-sync', '--no-experimental-require-module', 'fallback.cjs'),
+                 ('module-sync', '--no-experimental-require-module --experimental-require-module', 'enabled.cjs'),
+                 ('module-sync', '--no-require-module', 'fallback.cjs'),
+                 ('module-sync', '--no-require-module --require-module', 'enabled.cjs')]
+        with tempfile.TemporaryDirectory(dir=ROOT / 'build') as temporary:
+            root = Path(temporary)
+            audit = root / 'audit.txt'
+            package = root / 'node_modules/preload-case'
+            package.mkdir(parents=True)
+            for name in ('enabled.cjs', 'fallback.cjs'):
+                (package / name).write_text("require('node:fs').writeFileSync(" + json.dumps(str(audit)) +
+                    ',' + json.dumps(name) + ');\n')
+            entry = root / 'app.cjs'
+            entry.write_text("console.log(require('node:fs').readFileSync(" + json.dumps(str(audit)) + ", 'utf8'));\n")
+            for index, (condition, flags, expected) in enumerate(cases):
+                (package / 'package.json').write_text(json.dumps({'exports': {condition: './enabled.cjs', 'default': './fallback.cjs'}}))
+                for mechanism in ('require', 'import'):
+                    with self.subTest(flags=flags, mechanism=mechanism):
+                        audit.unlink(missing_ok=True)
+                        runtime = root / f'run-{index}-{mechanism}'
+                        options = flags + ' --' + mechanism + '=preload-case'
+                        with patch.dict(os.environ, {'NODE_OPTIONS': options}), contextlib.chdir(root):
+                            argv = node.command(Policy.parse({'schema_version': 3}), runtime, 'javascript',
+                                                root=root, entry=entry, plain=True)
+                            self.assertFalse(audit.exists(), 'planning executed an application preload')
+                            manifest = json.loads((runtime / 'node-plain-launch.json').read_text())
+                            result = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=10)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), expected)
+                        self.assertEqual(Path(manifest['preloads']['entries'][0]['file']['path']).name, expected)
+                        self.assertEqual(manifest['preloads']['resolution_flags'], flags.split())
+                        self.assertTrue(node_provenance.finish(runtime, manifest))
+
     def test_relative_quoted_preloads_conditions_and_actual_execution_order(self) -> None:
         capture = Capture()
         self.addCleanup(capture.close)
@@ -110,6 +146,34 @@ class NodePreloadTests(unittest.TestCase):
             first.unlink()
             with self.assertRaises((ValueError, FileNotFoundError)):
                 node_preloads.verify(manifest['request'], manifest['preloads'])
+
+    def test_disabled_global_search_paths_do_not_resolve_node_path_preloads(self) -> None:
+        policy = Policy.parse({'schema_version': 3})
+        with tempfile.TemporaryDirectory(dir=ROOT / 'build') as temporary:
+            root = Path(temporary)
+            package = root / 'module-path/preload-case'
+            package.mkdir(parents=True)
+            (package / 'index.js').write_text("console.log('path preload');\n")
+            entry = root / 'app.cjs'
+            entry.write_text("console.log('app');\n")
+            options = '--no-global-search-paths --require=preload-case'
+            with patch.dict(os.environ, {'NODE_OPTIONS': options, 'NODE_PATH': './module-path'}), contextlib.chdir(root):
+                actual = subprocess.run([node.executable(), str(entry)], cwd=root, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(actual.returncode, 0)
+                self.assertFalse(actual.stdout)
+                self.assertIn('MODULE_NOT_FOUND', actual.stderr)
+                with self.assertRaisesRegex(ValueError, '^Node preload resolution failed$'):
+                    node.command(policy, root / 'disabled', 'javascript', root=root, entry=entry, plain=True)
+            options = '--no-global-search-paths --global-search-paths --require=preload-case'
+            runtime = root / 'enabled'
+            with patch.dict(os.environ, {'NODE_OPTIONS': options, 'NODE_PATH': './module-path'}), contextlib.chdir(root):
+                argv = node.command(policy, runtime, 'javascript', root=root, entry=entry, plain=True)
+                actual = subprocess.run(argv, cwd=root, capture_output=True, text=True, timeout=10)
+            self.assertEqual(actual.returncode, 0, actual.stderr)
+            self.assertEqual(actual.stdout, 'path preload\napp\n')
+            manifest = json.loads((runtime / 'node-plain-launch.json').read_text())
+            self.assertEqual(manifest['preloads']['entries'][0]['file']['path'], str(package / 'index.js'))
+            self.assertTrue(node_provenance.finish(runtime, manifest))
 
     def test_node_option_quoting_keeps_tabs_and_single_quotes_literal(self) -> None:
         self.assertEqual(node_preloads.tokens('--require "a b" --title="x\\\"y"'),

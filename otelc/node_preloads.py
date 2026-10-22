@@ -15,6 +15,9 @@ from otelc.node_context import package_context
 RESOLVER = Path(__file__).resolve().parent.parent / 'adapters/node/src/compiler/preload-resolver.mjs'
 OPTIONS = {'--require': 'require', '-r': 'require', '--import': 'import',
            '--loader': 'loader', '--experimental-loader': 'loader'}
+RESOLUTION_FLAGS = {'--preserve-symlinks', '--no-preserve-symlinks', '--addons', '--no-addons',
+                    '--require-module', '--no-require-module', '--experimental-require-module',
+                    '--no-experimental-require-module', '--global-search-paths', '--no-global-search-paths'}
 
 
 def finish_token(result: list[str], word: list[str]) -> None:
@@ -85,8 +88,8 @@ def options(original: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
                 requests.append({'mechanism': OPTIONS[name], 'specifier': value, 'option_index': position})
             else:
                 flags.append('--conditions=' + value)
-        elif name in ('--preserve-symlinks', '--no-preserve-symlinks'):
-            flags.append(name)
+        elif name in RESOLUTION_FLAGS:
+            flags.append(words[index])
         index += 1
     return ([item for item in requests if item['mechanism'] == 'require']
             + [item for item in requests if item['mechanism'] != 'require']), flags
