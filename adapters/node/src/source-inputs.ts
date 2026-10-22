@@ -1,16 +1,29 @@
 import { createHash } from 'node:crypto';
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync, writeSync, existsSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, realpathSync, writeSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import type { ISourcePlan } from './source-plan.ts';
+import type { ICompilerEvidence, ICompilerFile, ISourcePlan } from './source-plan.ts';
+import { readStableFile } from './source-file.ts';
+
+interface IRetainedFile {
+  path?: string; file: string; sha256: string; size: number;
+}
+
+interface IRetainedCompiler extends Omit<ICompilerEvidence, 'files'> {
+  files: Record<'input' | 'options' | 'output' | 'map', IRetainedFile> & { preparation_map?: IRetainedFile };
+}
 
 interface IInput {
   path: string; kind: 'source' | 'compiler_config' | 'absent_config' | 'package_context' | 'absent_package'
-    | 'compiled' | 'instrumented' | 'loaded';
+    | 'module_requested' | 'compilation' | 'compiled' | 'instrumented' | 'loaded';
   sha256?: string; size?: number;
-  format?: string; logical_source?: string; source_sha256?: string; map_sha256?: string;
+  format?: string; logical_source?: string; source_sha256?: string; map_sha256?: string; map_size?: number;
   url?: string;
   output_file?: string; map_file?: string;
   requested_path?: string;
+  text_sha256?: string;
+  load_id?: number;
+  module_type?: 'typescript' | 'javascript';
+  compiler?: IRetainedCompiler;
 }
 
 const digest = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex');
@@ -23,15 +36,16 @@ export class SourceInputs {
   private readonly directory: string;
   private readonly prefix: string;
   private readonly knownContext: Map<string, { sha256?: string; resolved_path?: string }>;
+  private nextLoad = 0;
 
   constructor(plan: ISourcePlan) {
     const prefix = plan.plain ? 'node-plain' : 'node';
     this.prefix = prefix;
     this.directory = plan.runtime.directory;
     const manifest = JSON.parse(readFileSync(path.join(plan.runtime.directory, prefix + '-launch.json'), 'utf8')) as
-      { launch_id: string; entry: { path: string; sha256: string };
+      { schema_version: number; launch_id: string; entry: { path: string; sha256: string };
         entry_context: { path: string; sha256?: string; resolved_path?: string }[] };
-    if (manifest.launch_id !== plan.launch_id) throw new Error('source input manifest belongs to another launch');
+    if (manifest.schema_version !== 2 || manifest.launch_id !== plan.launch_id) throw new Error('source input manifest has an unsupported schema or belongs to another launch');
     this.entry = manifest.entry;
     this.knownContext = new Map(manifest.entry_context.map(item => [item.path, item]));
     this.descriptor = openSync(path.join(plan.runtime.directory, prefix + '-sources.jsonl'),
@@ -40,7 +54,7 @@ export class SourceInputs {
   }
 
   private record(input: IInput): void {
-    const key = input.kind + ':' + (input.url ?? input.requested_path ?? input.path);
+    const key = input.kind + ':' + (input.load_id ?? input.url ?? input.requested_path ?? input.path);
     const previous = this.inputs.get(key);
     if (previous) {
       if (JSON.stringify(previous) !== JSON.stringify(input)) throw new Error('loaded input changed: ' + input.path);
@@ -58,21 +72,9 @@ export class SourceInputs {
   /** Read once and bind those same bytes; a later filesystem snapshot is insufficient. */
   read(filename: string, kind: 'source' | 'compiler_config' | 'package_context'): string {
     const resolved = realpathSync(filename);
-    const descriptor = openSync(resolved, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    let bytes: Buffer;
-    try {
-      const before = fstatSync(descriptor, { bigint: true });
-      if (!before.isFile()) throw new Error('loaded input is not a regular file');
-      bytes = readFileSync(descriptor);
-      const after = fstatSync(descriptor, { bigint: true });
-      const current = statSync(resolved, { bigint: true });
-      const stable = (value: typeof before): string => [value.dev, value.ino, value.size, value.mtimeNs, value.ctimeNs].join(':');
-      if (stable(before) !== stable(after) || stable(after) !== stable(current)) throw new Error('loaded input changed during read');
-    } finally {
-      // This descriptor is only the input read; the journal stays open until process exit.
-      closeSync(descriptor);
-    }
-    this.record({ path: resolved, requested_path: path.resolve(filename), kind, sha256: digest(bytes), size: bytes.length });
+    const bytes = readStableFile(resolved);
+    this.record({ path: resolved, requested_path: path.resolve(filename), kind, sha256: digest(bytes),
+      text_sha256: digest(bytes.toString('utf8')), size: bytes.length });
     return bytes.toString('utf8');
   }
 
@@ -96,16 +98,40 @@ export class SourceInputs {
     }
   }
 
+  /** A caught compiler/probe refusal still leaves an incomplete load in the evidence. */
+  beginModule(filename: string, logicalSource: string, url: string, moduleType: 'typescript' | 'javascript'): number {
+    const identity = ++this.nextLoad;
+    this.record({ path: realpathSync(filename), kind: 'module_requested', load_id: identity,
+      logical_source: logicalSource, url, module_type: moduleType });
+    return identity;
+  }
+
+  private compilerFile(file: ICompilerFile): IRetainedFile {
+    return { ...(file.path ? { path: file.path } : {}), file: this.retain(file.text),
+      sha256: digest(file.text), size: Buffer.byteLength(file.text) };
+  }
+
+  /** Preserve actual compiler inputs/options/raw outputs before private workspaces disappear. */
+  compilation(loadIdentity: number, filename: string, evidence: ICompilerEvidence): void {
+    const { files, ...metadata } = evidence;
+    this.record({ path: realpathSync(filename), kind: 'compilation', load_id: loadIdentity,
+      compiler: { ...metadata, files: {
+        input: this.compilerFile(files.input), options: this.compilerFile(files.options),
+        output: this.compilerFile(files.output), map: this.compilerFile(files.map),
+        ...(files.preparation_map ? { preparation_map: this.compilerFile(files.preparation_map) } : {}) } } });
+  }
+
   /** Retain the exact compiler/hook output separately from its original file bytes. */
-  emitted(filename: string, logicalSource: string, url: string, code: string, format: string | undefined,
+  emitted(loadIdentity: number, filename: string, logicalSource: string, url: string, code: string, format: string | undefined,
     kind: 'compiled' | 'instrumented' | 'loaded', map?: object): void {
     const source = this.inputs.get('source:' + realpathSync(filename));
     if (!source) throw new Error('emitted module has no source input');
     const outputFile = this.retain(code);
-    this.record({ path: realpathSync(filename), kind, sha256: digest(code), size: Buffer.byteLength(code),
+    const mapText = map ? JSON.stringify(map) : undefined;
+    this.record({ path: realpathSync(filename), kind, load_id: loadIdentity, sha256: digest(code), size: Buffer.byteLength(code),
       source_sha256: source.sha256, logical_source: logicalSource, url, format: format ?? 'node-detected',
       output_file: outputFile,
-      ...(map ? { map_sha256: digest(JSON.stringify(map)), map_file: this.retain(JSON.stringify(map)) } : {}) });
+      ...(mapText ? { map_sha256: digest(mapText), map_size: Buffer.byteLength(mapText), map_file: this.retain(mapText) } : {}) });
   }
 
   private retain(content: string): string {

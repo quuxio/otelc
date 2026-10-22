@@ -19,10 +19,12 @@ registerHooks({ load(url, context, nextLoad) {
   const file = realpathSync(fileURLToPath(url));
   const name = sourceName(file, root);
   if (!name || file.startsWith(producerRoot) || !/\.(?:ts|mts|cts)$/.test(file)) return nextLoad(url, context);
+  const loadIdentity = inputs.beginModule(file, name, url, 'typescript');
   const output = transpile(inputs.source(file), file, name, plan, root, context.format?.replace('-typescript', ''), inputs.config);
-  inputs.emitted(file, name, url, output.code, output.format, 'compiled', output.map);
+  inputs.compilation(loadIdentity, file, output.compilation);
+  inputs.emitted(loadIdentity, file, name, url, output.code, output.format, 'compiled', output.map);
   const source = output.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(output.map)).toString('base64');
-  inputs.emitted(file, name, url, source, output.format ?? 'module', 'loaded', output.map);
+  inputs.emitted(loadIdentity, file, name, url, source, output.format ?? 'module', 'loaded', output.map);
   return { format: output.format ?? 'module', shortCircuit: true,
     source };
 } });

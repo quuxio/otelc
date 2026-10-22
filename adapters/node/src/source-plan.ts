@@ -24,3 +24,20 @@ export interface IAsyncSite {
   id: number; name: string; filename: string;
   start: [number, number]; end: [number, number]; origin: [number, number];
 }
+
+export interface ICompilerFile {
+  path?: string;
+  text: string;
+}
+
+/** Exact arguments and byte strings at the qualified compiler invocation boundary. */
+export interface ICompilerEvidence {
+  backend: 'native' | 'api';
+  version: string;
+  compiler_path: string;
+  cwd: string;
+  argv?: string[];
+  method?: 'transpileModule';
+  transformer_profile: 'none' | 'original-identities-v1';
+  files: Record<'input' | 'options' | 'output' | 'map', ICompilerFile> & { preparation_map?: ICompilerFile };
+}

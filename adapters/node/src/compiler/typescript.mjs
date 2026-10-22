@@ -1,5 +1,6 @@
 // Preserve original function identities through the actual TypeScript compiler emit.
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript-api';
 import { IDENTITY } from './transform.mjs';
 import { identity, childNames } from './typescript-identities.mjs';
@@ -61,10 +62,15 @@ export function transpile(source, filename, sourceName, plan, root = process.cwd
     }
     return visit(file);
   };
+  const requestedOptions = JSON.stringify(options);
   const result = ts.transpileModule(source, { fileName: filename, compilerOptions: options, reportDiagnostics: true,
     transformers: plan.plain ? undefined : { before: [transformer] } });
   error(result.diagnostics ?? []);
   const map = JSON.parse(result.sourceMapText);
   map.sources = [filename];
-  return { code: result.outputText.replace(/\n\/\/# sourceMappingURL=.*(?:\n|$)/, '\n'), map, format };
+  return { code: result.outputText.replace(/\n\/\/# sourceMappingURL=.*(?:\n|$)/, '\n'), map, format,
+    compilation: { backend: 'api', version: ts.version, compiler_path: fileURLToPath(import.meta.resolve('typescript-api')),
+      cwd: process.cwd(), method: 'transpileModule', transformer_profile: plan.plain ? 'none' : 'original-identities-v1',
+      files: { input: { path: filename, text: source }, options: { text: requestedOptions },
+        output: { text: result.outputText }, map: { text: result.sourceMapText } } } };
 }

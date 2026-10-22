@@ -102,7 +102,7 @@ class NodeProvenanceTests(unittest.TestCase):
                     self.assertEqual(sources[str(imported)]['sha256'], hashlib.sha256(imported.read_bytes()).hexdigest())
                     if language == 'typescript':
                         configs = {item['path'] for item in records if item['kind'] == 'compiler_config'}
-                        self.assertTrue({str(base_config), str(application / 'tsconfig.json')} <= configs)
+                        self.assertLessEqual({str(base_config), str(application / 'tsconfig.json')}, configs)
                         stages = {item['kind'] for item in records}
                         self.assertIn('compiled', stages)
                     emissions = [item for item in records if item['kind'] in ('compiled', 'instrumented', 'loaded')]

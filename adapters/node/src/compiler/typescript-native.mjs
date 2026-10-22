@@ -10,6 +10,7 @@ import remapping from '@jridgewell/remapping';
 import { collectIdentities } from './typescript-identities.mjs';
 import { IDENTITY } from './transform.mjs';
 import { collectLifetimeClasses, TYPE_IDENTITY } from './typescript-lifetimes.mjs';
+import { readStableFile } from '../source-file.ts';
 
 const require = createRequire(import.meta.url);
 function nativeBinary() {
@@ -47,7 +48,7 @@ function writeCompilerConfig(directory, input, output, options) {
   // CommonJS emission uses Node resolution; this adapter does not type-check projects.
   if (settings.module === 'commonjs') Object.assign(settings, { moduleResolution: 'node16', module: 'node16' });
   const config = path.join(directory, 'tsconfig.json');
-  fs.writeFileSync(config, JSON.stringify({ compilerOptions: settings, files: [input] }));
+  fs.writeFileSync(config, JSON.stringify({ compilerOptions: settings, files: [input] }), { mode: 0o600, flag: 'wx' });
   return config;
 }
 
@@ -64,27 +65,40 @@ export function nativeEmit(source, filename, sourceName, plan, options, run = sp
   if (relative === '' || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) throw new Error('native TypeScript workspace must be outside the source project');
   const directory = fs.mkdtempSync(path.join(temporary, 'otelc-native-typescript-'));
   try {
-    const input = path.join(directory, path.basename(filename)), output = path.join(directory, 'emitted');
-    fs.writeFileSync(input, augmented.toString());
+    // Node16 emission consults package type for .ts. A private .cts fixes the
+    // requested CJS format even when an ancestor/private package says module.
+    const inputName = options.module === ts.ModuleKind.CommonJS
+      ? path.basename(filename).replace(/\.ts$/, '.cts') : path.basename(filename);
+    const input = path.join(directory, inputName), output = path.join(directory, 'emitted');
+    fs.writeFileSync(input, augmented.toString(), { mode: 0o600, flag: 'wx' });
     const config = writeCompilerConfig(directory, input, output, options);
-    const result = run(nativeBinary(), ['--project', config], { encoding: 'utf8', timeout: 30000, maxBuffer: 1048576 });
+    const inputBytes = readStableFile(input), configBytes = readStableFile(config);
+    const binary = fs.realpathSync(nativeBinary()), argv = [binary, '--project', config];
+    const result = run(binary, argv.slice(1), { encoding: 'utf8', timeout: 30000, maxBuffer: 1048576 });
+    if (!readStableFile(input).equals(inputBytes) || !readStableFile(config).equals(configBytes)) throw new Error('native compiler input or configuration changed during emission');
     if (result.error || result.status !== 0) throw new Error('TypeScript native emission failed for ' + filename + ': ' + (result.error?.message ?? result.stdout + result.stderr));
-    const format = emittedFormat(filename);
+    const format = emittedFormat(input);
     let extension = '.js';
     if (format === 'module') extension = '.mjs';
     if (format === 'commonjs') extension = '.cjs';
-    const generated = path.join(output, path.basename(filename).replace(/\.(?:ts|mts|cts)$/, extension));
-    const code = fs.readFileSync(generated, 'utf8');
+    const generated = path.join(output, path.basename(input).replace(/\.(?:ts|mts|cts)$/, extension));
+    const code = readStableFile(generated).toString('utf8');
     for (const item of classes) {
       if (!code.includes(TYPE_IDENTITY + Buffer.from(JSON.stringify(item.metadata)).toString('base64'))) throw new Error('native TypeScript emission lost an original class identity');
     }
     for (const item of identities) {
       if (!code.includes(IDENTITY + Buffer.from(JSON.stringify(item.metadata)).toString('base64'))) throw new Error('native TypeScript emission lost an original function identity');
     }
-    const emitted = JSON.parse(fs.readFileSync(generated + '.map', 'utf8'));
+    const rawMap = readStableFile(generated + '.map').toString('utf8');
+    const emitted = JSON.parse(rawMap);
     const original = augmented.generateMap({ source: filename, file: path.basename(input), includeContent: true, hires: true });
     const map = remapping([emitted, original], () => null);
-    return { code: code.replace(/\n\/\/# sourceMappingURL=.*(?:\n|$)/, '\n'), map,
-      format };
+    return { code: code.replace(/\n\/\/# sourceMappingURL=.*(?:\n|$)/, '\n'), map, format,
+      compilation: { backend: 'native', version: '7.0.2', compiler_path: binary, cwd: process.cwd(), argv,
+        transformer_profile: plan.plain ? 'none' : 'original-identities-v1',
+        files: { input: { path: input, text: inputBytes.toString('utf8') },
+          options: { path: config, text: configBytes.toString('utf8') },
+          output: { path: generated, text: code }, map: { path: generated + '.map', text: rawMap },
+          preparation_map: { text: JSON.stringify(original) } } } };
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
