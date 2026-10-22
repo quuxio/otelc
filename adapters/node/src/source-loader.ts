@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import type { ModuleSource } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { transform } from './compiler/transform.mjs';
+import { observeModuleEntry, transform } from './compiler/transform.mjs';
 import { transpile } from './compiler/typescript.mjs';
 import { LocalMetricControl } from './local-metric-control.ts';
 import { Selection, sourceName } from './selection.ts';
@@ -47,12 +47,13 @@ export function installSource(plan: ISourcePlan): {
       inputs.compilation(loadIdentity, prepared.compilation);
       inputs.emitted(loadIdentity, prepared.code, prepared.format, 'compiled', prepared.map);
       if (!selected) {
-        const source = prepared.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(prepared.map)).toString('base64');
-        inputs.emitted(loadIdentity, source, prepared.format ?? 'module', 'loaded', prepared.map);
-        return { format: prepared.format ?? 'module', shortCircuit: true, source };
+        const observed = observeModuleEntry(prepared.code, filename, prepared.map, prepared.format, loadIdentity.id);
+        const source = observed.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(observed.map)).toString('base64');
+        inputs.emitted(loadIdentity, source, prepared.format, 'loaded', observed.map, prepared.format);
+        return { format: prepared.format, shortCircuit: true, source };
       }
-      const output = transform(prepared.code, filename, name, execution, runtime, prepared);
-      inputs.emitted(loadIdentity, output.code, output.format, 'instrumented');
+      const output = transform(prepared.code, filename, name, execution, runtime, prepared, undefined, loadIdentity.id);
+      inputs.emitted(loadIdentity, output.code, output.format, 'instrumented', undefined, output.format);
       return { format: output.format, shortCircuit: true, source: output.code };
     }
     const loaded = nextLoad(url, context);
@@ -64,9 +65,9 @@ export function installSource(plan: ISourcePlan): {
       inputs.emitted(loadIdentity, source, loaded.format ?? undefined, 'loaded');
       return loaded;
     }
-    const output = transform(source, filename, name, plan, runtime).code;
-    inputs.emitted(loadIdentity, output, loaded.format ?? undefined, 'instrumented');
-    return { ...loaded, source: output };
+    const output = transform(source, filename, name, plan, runtime, null, loaded.format ?? undefined, loadIdentity.id);
+    inputs.emitted(loadIdentity, output.code, loaded.format ?? undefined, 'instrumented', undefined, output.format);
+    return { ...loaded, source: output.code };
   } });
   let closing: Promise<void> | undefined;
   return { runtime, control, close() {
