@@ -52,7 +52,7 @@ process.on('exit', () => console.log(JSON.stringify({fields:propagation.fields()
 """)
             runtime = root / 'instrumented'
             command = node.command(Policy.parse(data), runtime, 'javascript', root=root, entry=entry)
-            result = subprocess.run([command[0], '--import', str(preload), *command[1:]],
+            result = subprocess.run([command[0], '--require', str(preload), *command[1:]],
                 capture_output=True, text=True, timeout=15)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('an OpenTelemetry propagator is already installed', result.stderr)
@@ -81,7 +81,7 @@ process.on('exit', () => console.log(JSON.stringify({disabled,ownerPreserved:con
 """)
             runtime = root / 'instrumented'
             command = node.command(Policy.parse(data), runtime, 'javascript', root=root, entry=entry)
-            result = subprocess.run([command[0], '--import', str(preload), *command[1:]],
+            result = subprocess.run([command[0], '--require', str(preload), *command[1:]],
                 capture_output=True, text=True, timeout=15)
             self.assertNotEqual(result.returncode, 0, 'startup refusal must not silently succeed before application execution')
             self.assertIn('an OpenTelemetry context manager is already installed', result.stderr)
@@ -179,6 +179,50 @@ input.on('line', line => {
             self.assertFalse((runtime / 'control.json').exists())
             self.assertEqual((runtime / 'node-sdk.log').read_text(), '')
             self.assertEqual(hashlib.sha256(entry.read_bytes()).hexdigest(), digest)
+
+    def test_zero_delay_unref_timer_stays_dormant_after_startup(self) -> None:
+        self.compare_shutdown("""const fs = require('node:fs');
+function workload(value) { return value + 1; }
+setTimeout(() => fs.writeSync(1, 'UNREF_TIMER\\n'), 0).unref();
+fs.writeSync(1, 'main:' + workload(7) + '\\n');
+""", 1, 'main:8\n')
+
+    def test_microtask_exit_cleans_control_published_during_startup(self) -> None:
+        self.compare_shutdown("""const fs = require('node:fs');
+function workload(value) { return value + 1; }
+fs.writeSync(1, 'main:' + workload(7) + '\\n');
+queueMicrotask(() => process.exit(0));
+""", 1, 'main:8\n')
+
+    def test_due_unref_timer_and_referenced_immediate_keep_plain_order(self) -> None:
+        self.compare_shutdown("""const fs = require('node:fs');
+function workload(value) { return value + 1; }
+fs.writeSync(1, 'main:' + workload(7) + '\\n');
+setTimeout(() => fs.writeSync(1, 'TIMER\\n'), 0).unref();
+const started = Date.now();
+while (Date.now() - started < 20) {}
+setImmediate(() => fs.writeSync(1, 'IMMEDIATE\\n'));
+""", 1, 'main:8\nTIMER\nIMMEDIATE\n')
+
+    def test_stale_or_nonprivate_sdk_readiness_refuses_application_startup(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        with tempfile.TemporaryDirectory(prefix='otelc-ready-owner-', dir='/tmp') as temporary:
+            root = Path(temporary).resolve()
+            entry = root / 'app.cjs'
+            entry.write_text("console.log('APPLICATION RAN');\n")
+            for permission, diagnostic in ((0o600, 'readiness identity'), (0o644, 'owned private metadata')):
+                with self.subTest(permission=permission):
+                    runtime = root / str(permission)
+                    command = node.command(shutdown_policy(capture), runtime, 'javascript', root=root, entry=entry)
+                    marker = runtime / 'node-sdk-ready.json'
+                    marker.write_text(json.dumps({'schema_version': 1, 'pid': os.getpid(), 'launch_id': 'stale'}))
+                    marker.chmod(permission)
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=15)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertEqual(result.stdout, '')
+                    self.assertEqual(entry.read_text(), "console.log('APPLICATION RAN');\n")
 
     def test_slow_drain_does_not_run_unref_timer_or_repeat_before_exit(self) -> None:
         self.compare_shutdown("""function workload() { return 42; }

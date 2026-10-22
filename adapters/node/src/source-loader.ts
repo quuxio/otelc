@@ -12,17 +12,17 @@ const producerRoot = fileURLToPath(new URL('./', import.meta.url));
 const globals = globalThis as typeof globalThis & { [RUNTIME]?: SourceRuntime };
 
 /** Own a loader, SDK and controls; transformed modules retain their original execution URLs. */
-export async function installSource(plan: ISourcePlan): Promise<{
+export function installSource(plan: ISourcePlan): {
   runtime: SourceRuntime; control: LocalMetricControl; close(): Promise<void>;
-}> {
+} {
   if (globals[RUNTIME]) throw new Error('otelc source instrumentation is already installed');
   const root = realpathSync(plan.runtime.root);
   const selection = new Selection(plan.source_matchers, true);
-  const runtime = await SourceRuntime.start(plan);
+  const runtime = SourceRuntime.start(plan);
   let control: LocalMetricControl;
-  try { control = await LocalMetricControl.listen(plan.runtime.directory, runtime); }
-  catch (error) { await runtime.shutdown(); throw error; }
-  runtime.sdk.descriptor(control.cleanupDescriptor());
+  try { control = LocalMetricControl.start(plan.runtime.directory, runtime); }
+  catch (error) { void runtime.shutdown().catch(() => {}); throw error; }
+  void control.ready.catch(() => runtime.lose('invalid'));
   Object.defineProperty(globals, RUNTIME, { value: runtime, configurable: true });
   const hook = registerHooks({ load(url, context, nextLoad) {
     if (!url.startsWith('file:')) return nextLoad(url, context);

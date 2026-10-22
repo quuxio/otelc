@@ -3,7 +3,7 @@ import path from 'node:path';
 import { ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import type { Counter, Gauge, Histogram } from '@opentelemetry/api';
 import { contextFromWire, spanFromWire } from './export-wire.ts';
-import { removeControlDescriptor } from './local-metric-control.ts';
+import { publishDescriptor, removeControlDescriptor } from './local-metric-control.ts';
 import type { IControlDescriptor } from './local-metric-control.ts';
 import { OwnedSdkPipeline } from './sdk-pipeline.ts';
 import { SourceHandoffReader } from './source-handoff.ts';
@@ -68,7 +68,8 @@ const metadata = fstatSync(input);
 if (!metadata.isFIFO() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) {
   closeSync(input); throw new Error('source SDK input is not an owned private FIFO');
 }
-process.send?.('ready', () => { /* Parent startup may be cancelled; FIFO EOF still owns cleanup. */ });
+publishDescriptor(path.join(plan.runtime.directory, 'node-sdk-ready.json'),
+  JSON.stringify({ schema_version: 1, pid: process.pid, launch_id: plan.launch_id }) + '\n');
 // Parent disconnect is not a completion signal: buffered FIFO bytes still belong
 // to the application. Only actual EOF establishes the end of the record stream.
 process.on('disconnect', () => { /* Drain the FIFO before the SDK. */ });

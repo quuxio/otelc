@@ -274,6 +274,20 @@ describe('private loopback metric controls', () => {
     assert.equal(pipeline.status().phase, 'running', 'closing controls must not close either SDK signal');
   });
 
+  it('can close before pending control publication without leaving an endpoint', async t => {
+    const c = await collector(t);
+    const pipeline = new OwnedSdkPipeline(c.policy);
+    c.cleanup(() => pipeline.shutdown());
+    const directory = mkdtempSync(path.join(tmpdir(), 'otelc-pending-control-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const control = LocalMetricControl.start(directory, pipeline);
+    const closed = control.close();
+    await assert.rejects(control.ready, /closed before publication/);
+    await closed;
+    assert.throws(() => statSync(control.filename), { code: 'ENOENT' });
+    assert.equal(control.transportFailed, false);
+  });
+
   it('preserves a replaced or edited descriptor and refuses an occupied path', async t => {
     const c = await collector(t);
     const pipeline = new OwnedSdkPipeline(c.policy);

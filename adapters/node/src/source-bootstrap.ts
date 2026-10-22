@@ -7,7 +7,7 @@ const filename = process.env.OTELC_NODE_PLAN;
 if (!filename) throw new Error('otelc source bootstrap requires a generated plan');
 const plan = JSON.parse(readFileSync(filename, 'utf8')) as ISourcePlan;
 delete process.env.OTELC_NODE_PLAN;
-const application = await installSource(plan);
+const application = installSource(plan);
 
 // Observe after application exit listeners without adding asynchronous work to
 // beforeExit. Synthetic exit events only checkpoint: actual FIFO EOF owns drain.

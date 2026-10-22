@@ -74,13 +74,13 @@ def command(policy: Policy, runtime: Path, language: str, *, plain: bool = False
         os.mkfifo(runtime / 'node-events.fifo', 0o600)
     prefix = 'node-plain' if plain else 'node'
     plan_file = runtime / (prefix + '-plan.json')
-    bootstrap = runtime / (prefix + '-bootstrap.mjs')
+    bootstrap = runtime / (prefix + '-bootstrap.cjs')
     target = ROOT / 'adapters/node/src' / ('plain-source-loader.ts' if plain else 'source-bootstrap.ts')
     write_generated(runtime, plan_file.name, json.dumps(plan, sort_keys=True) + '\n')
     write_generated(runtime, bootstrap.name,
         'process.env.OTELC_NODE_PLAN = ' + json.dumps(str(plan_file.resolve())) + ';\n'
-        'await import(' + json.dumps(target.as_uri()) + ');\n')
-    return [selected, *flags, '--import', str(bootstrap), str(application)]
+        'require(' + json.dumps(str(target)) + ');\n')
+    return [selected, *flags, '--require', str(bootstrap), str(application)]
 
 
 def wait_report(runtime: Path, timeout: float = 15.) -> dict[str, Any]:

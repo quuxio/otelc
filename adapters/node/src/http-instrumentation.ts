@@ -6,7 +6,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import type { SourceSdk } from './source-sdk.ts';
 
 const require = createRequire(import.meta.url);
@@ -63,11 +63,11 @@ function httpMeterProvider(sdk: SourceSdk): MeterProvider {
 }
 
 /** Common context.http drives official node:http/node:https instrumentation and W3C propagation. */
-export async function installHttp(sdk: SourceSdk): Promise<IHttpInstallation> {
+export function installHttp(sdk: SourceSdk): IHttpInstallation {
   const product = loadHttpProduct(producerRoot);
   // This optional, generated preservation patch is loaded only for context.http. It retains
   // the official public API and all unmodified runtime files bound in its manifest.
-  const { HttpInstrumentation } = (await import(pathToFileURL(path.join(product.directory, 'build/src/index.js')).href)) as
+  const { HttpInstrumentation } = require(path.join(product.directory, 'build/src/index.js')) as
     typeof import('@opentelemetry/instrumentation-http');
   const propagator = new CompositePropagator({ propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()] });
   if (!propagation.setGlobalPropagator(propagator)) throw new Error('an OpenTelemetry propagator is already installed');

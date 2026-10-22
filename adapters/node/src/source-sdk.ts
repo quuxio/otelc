@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { closeSync, constants, openSync } from 'node:fs';
+import { closeSync, constants, openSync, readFileSync, fstatSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultResource, resourceFromAttributes } from '@opentelemetry/resources';
@@ -30,6 +30,32 @@ class SourceControls extends MetricControls {
 function randomId(size: number): string {
   const id = randomBytes(size).toString('hex');
   return /^0+$/.test(id) ? '0'.repeat(size * 2 - 1) + '1' : id;
+}
+
+function waitForReady(plan: ISourcePlan, pid: number): void {
+  const deadline = performance.now() + 10000;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  const filename = path.join(plan.runtime.directory, 'node-sdk-ready.json');
+  while (true) {
+    let descriptor: number | undefined;
+    try {
+      descriptor = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const metadata = fstatSync(descriptor);
+      if (!metadata.isFile() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) {
+        throw new Error('source SDK readiness is not owned private metadata');
+      }
+      const ready = JSON.parse(readFileSync(descriptor, 'utf8')) as Record<string, unknown>;
+      if (ready.schema_version !== 1 || ready.pid !== pid || ready.launch_id !== plan.launch_id
+          || Object.keys(ready).sort().join(',') !== 'launch_id,pid,schema_version') {
+        throw new Error('source SDK readiness identity does not match its owner');
+      }
+      return;
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    } finally { if (descriptor !== undefined) closeSync(descriptor); }
+    if (performance.now() >= deadline) throw new Error('source SDK startup timed out');
+    Atomics.wait(pause, 0, 0, 1);
+  }
 }
 
 /** The application owns scopes/probes; an independent child owns SDK aggregation and drain. */
@@ -84,8 +110,8 @@ export class SourceSdk {
     child.on('exit', () => this.#fail());
   }
 
-  /** Finish the private FIFO/IPC handshake before application modules execute. */
-  static async start(plan: ISourcePlan): Promise<SourceSdk> {
+  /** Wait before the application's first event-loop turn, without running its timers. */
+  static start(plan: ISourcePlan): SourceSdk {
     const filename = path.join(plan.runtime.directory, 'node-events.fifo');
     const reader = openSync(filename, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     let writer: SourceHandoffWriter | undefined;
@@ -98,19 +124,10 @@ export class SourceSdk {
         key !== 'NODE_OPTIONS' && !key.startsWith('OTEL_') && !key.startsWith('OTELC_')));
       child = spawn(process.execPath, [fileURLToPath(new URL('./source-sdk-child.ts', import.meta.url)),
         path.join(plan.runtime.directory, 'node-plan.json')], { env: environment, stdio: ['ignore', 'ignore', diagnostic, 'ipc'] });
-      await new Promise<void>((resolve, reject) => {
-        const owner = child!;
-        const finish = (error?: Error): void => {
-          clearTimeout(timer); owner.removeListener('error', onError);
-          owner.removeListener('exit', onExit); owner.removeListener('message', onMessage);
-          if (error) reject(error); else resolve();
-        };
-        const onError = (): void => finish(new Error('source SDK startup failed'));
-        const onExit = (): void => finish(new Error('source SDK exited before startup'));
-        const onMessage = (message: unknown): void => finish(message === 'ready' ? undefined : new Error('source SDK refused startup'));
-        const timer = setTimeout(() => finish(new Error('source SDK startup timed out')), 10000);
-        owner.once('error', onError); owner.once('exit', onExit); owner.once('message', onMessage);
-      });
+      // A spawn failure can emit after synchronous startup has already refused it.
+      child.on('error', () => { /* The checked startup failure belongs to the caller. */ });
+      if (!child.pid) throw new Error('source SDK startup could not create its owner');
+      waitForReady(plan, child.pid);
       const sdk = new SourceSdk(plan, writer, child);
       child.channel?.unref(); child.unref();
       return sdk;

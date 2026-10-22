@@ -11,6 +11,7 @@ export interface IControlledPipeline {
   readonly controls: MetricControls;
   status(): object | Promise<object>;
   flush(): Promise<void>;
+  descriptorPublished?(descriptor: IControlDescriptor): void;
 }
 
 function digest(data: Buffer | string): string { return createHash('sha256').update(data).digest('hex'); }
@@ -31,7 +32,8 @@ export function removeControlDescriptor(descriptor: IControlDescriptor): void {
     sha256: descriptor.sha256 });
 }
 
-function publishDescriptor(filename: string, contents: string): IDescriptorIdentity {
+/** Atomically publish complete private protocol metadata without replacing another owner. */
+export function publishDescriptor(filename: string, contents: string): IDescriptorIdentity {
   const temporary = filename + '.' + randomBytes(16).toString('hex');
   const file = openSync(temporary, 'wx', 0o600);
   const metadata = fstatSync(file, { bigint: true });
@@ -63,6 +65,7 @@ function commandFrom(data: Buffer, secret: Buffer): string | undefined {
 /** Private authenticated control transport shared by JS and TS owned pipelines. */
 export class LocalMetricControl {
   readonly filename: string;
+  readonly ready: Promise<void>;
   readonly #pipeline: IControlledPipeline;
   readonly #server: Server;
   readonly #secret = randomBytes(32).toString('hex');
@@ -79,32 +82,41 @@ export class LocalMetricControl {
     this.#server.maxConnections = 32;
     // Transport errors are exposed to the owner; they must not throw into app code.
     this.#server.on('error', () => { this.#transportFailed = true; });
+    this.#server.unref();
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.#server.once('error', reject);
+      this.#server.listen({ port: 0, host: '127.0.0.1', exclusive: true }, () => {
+        this.#server.removeListener('error', reject);
+        if (this.#closed) { reject(new Error('control closed before publication')); return; }
+        try {
+          const address = this.#server.address() as AddressInfo;
+          const contents = JSON.stringify({ schema_version: 1, kind: 'otelc.control.tcp', host: '127.0.0.1',
+            port: address.port, pid: process.pid, token: this.#secret }) + '\n';
+          this.#identity = publishDescriptor(this.filename, contents);
+          // Transfer cleanup ownership before user microtasks can exit the process.
+          this.#pipeline.descriptorPublished?.(this.cleanupDescriptor());
+          resolve();
+        } catch (error) { reject(error); }
+      });
+    });
+    void this.ready.catch(() => { if (!this.#closed) this.#transportFailed = true; });
   }
 
   get transportFailed(): boolean { return this.#transportFailed; }
 
-  /** Publish only after listening; the endpoint file never contains partial JSON. */
-  static async listen(directory: string, pipeline: IControlledPipeline): Promise<LocalMetricControl> {
+  /** Start unreferenced control setup without advancing the application's event loop. */
+  static start(directory: string, pipeline: IControlledPipeline): LocalMetricControl {
     const metadata = lstatSync(directory);
     if (!metadata.isDirectory() || metadata.uid !== process.getuid?.()
         || (metadata.mode & 0o7777) !== 0o700) throw new Error('control directory must be owned and mode 0700');
-    const control = new LocalMetricControl(directory, pipeline);
-    try {
-      await new Promise<void>((resolve, reject) => {
-        control.#server.once('error', reject);
-        control.#server.listen({ port: 0, host: '127.0.0.1', exclusive: true }, () => {
-          control.#server.removeListener('error', reject);
-          resolve();
-        });
-      });
-      // Only this class owns the server; the completed TCP listen supplies AddressInfo.
-      const address = control.#server.address() as AddressInfo;
-      const contents = JSON.stringify({ schema_version: 1, kind: 'otelc.control.tcp', host: '127.0.0.1',
-        port: address.port, pid: process.pid, token: control.#secret }) + '\n';
-      control.#identity = publishDescriptor(control.filename, contents);
-      control.#server.unref();
-      return control;
-    } catch (error) { await control.close(); throw error; }
+    return new LocalMetricControl(directory, pipeline);
+  }
+
+  /** Async owners can await publication; source preload uses start before main entry. */
+  static async listen(directory: string, pipeline: IControlledPipeline): Promise<LocalMetricControl> {
+    const control = LocalMetricControl.start(directory, pipeline);
+    try { await control.ready; return control; }
+    catch (error) { await control.close(); throw error; }
   }
 
   /** Share identity only, never the control authentication key, with the private SDK process. */
@@ -159,7 +171,7 @@ export class LocalMetricControl {
   /** Destroy idle peers before closing; preserve a replaced or edited descriptor. */
   close(): Promise<void> {
     this.#closed = true;
-    this.#closing ??= new Promise<void>((resolve, reject) => {
+    this.#closing ??= this.ready.catch(() => {}).then(() => new Promise<void>((resolve, reject) => {
       const finish = (error?: Error): void => {
         try {
           if (this.#identity) removeOwnedFile(this.filename, this.#identity);
@@ -170,7 +182,7 @@ export class LocalMetricControl {
       if (this.#server.listening) this.#server.close(finish);
       else finish();
       for (const connection of this.#connections) connection.destroy();
-    });
+    }));
     return this.#closing;
   }
 }

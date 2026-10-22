@@ -7,6 +7,7 @@ import type { MetricControls } from './metric-controls.ts';
 import { epochNs, monotonicNs, sdkTime } from './source-clock.ts';
 import { SourceLifetimes } from './source-lifetimes.ts';
 import { PromiseObserver } from './compiler/promise-observer.mjs';
+import type { IControlDescriptor } from './local-metric-control.ts';
 import type { IAsyncSite, ISourcePlan } from './source-plan.ts';
 import { installHttp } from './http-instrumentation.ts';
 import type { IHttpInstallation } from './http-instrumentation.ts';
@@ -49,16 +50,16 @@ export class SourceRuntime {
   }
 
   /** Refuse an existing owner and release our own SDKs without disabling that owner. */
-  static async start(plan: ISourcePlan): Promise<SourceRuntime> {
-    const runtime = new SourceRuntime(plan, await SourceSdk.start(plan));
+  static start(plan: ISourcePlan): SourceRuntime {
+    const runtime = new SourceRuntime(plan, SourceSdk.start(plan));
     if (context.setGlobalContextManager(runtime.#manager)) {
       runtime.#ownsContext = true;
       try {
-        if (plan.context.http) runtime.#http = await installHttp(runtime.sdk);
+        if (plan.context.http) runtime.#http = installHttp(runtime.sdk);
         return runtime;
-      } catch (error) { await runtime.shutdown(); throw error; }
+      } catch (error) { void runtime.shutdown().catch(() => {}); throw error; }
     }
-    await runtime.shutdown();
+    void runtime.shutdown().catch(() => {});
     throw new Error('an OpenTelemetry context manager is already installed');
   }
 
@@ -138,6 +139,9 @@ export class SourceRuntime {
       lifetimes: this.lifetimes?.status(), lifetime_lost: this.lifetimes?.status().lost ?? 0,
       handoff: this.sdk.handoffStatus(), span_observation: this.sdk.spanObservation(), http: this.#http?.identity };
   }
+
+  /** Publish cleanup ownership in the same turn that exposes the control endpoint. */
+  descriptorPublished(descriptor: IControlDescriptor): void { this.sdk.descriptor(descriptor); }
 
   async status(): Promise<object> { return { ...await this.sdk.status(), ...this.snapshot() }; }
 
