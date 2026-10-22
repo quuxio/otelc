@@ -6,9 +6,11 @@ One configuration for source-free instrumentation across languages, using offici
 
 This rebuild starts with **Java**. TypeScript/JavaScript, Python, Go, the LLVM backend, C, C++ and Rust follow in that order. The shared policy lists all targets; that does not mean each adapter is implemented. The [previous implementation](https://github.com/quuxio/otelc/tree/archive/pre-rebuild-2026-10-21) is retained for reuse and comparison. See the [rebuild plan and acceptance criteria](docs/rebuild-plan.md).
 
+The [Node SDK/control building block](docs/node-sdk-controls.md) is under construction for TypeScript/JavaScript: official SDK/exporters, independent live metric gates and the shared control client. It does not yet enable source-free JS/TS application launching, lifetimes or benchmarks.
+
 ## Java example and Grafana
 
-Requirements: Python 3.12+, a full JDK 21+, Maven, Node/npm for Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
+Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
 
 ```sh
 make setup java-build
