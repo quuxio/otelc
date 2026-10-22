@@ -61,3 +61,9 @@ class CliTests(unittest.TestCase):
             result = json.loads(self.invoke(["benchmark", "--output", "/tmp/bench", "--no-publish"]))
             self.assertEqual(result["run_id"], "test")
             self.assertFalse(run.call_args.kwargs["publish"])
+        with patch("otelc.node_benchmark.run", return_value=report) as run:
+            self.invoke(["benchmark", "--output", "/tmp/bench", "--language", "typescript",
+                         "--backend", "api", "--comparison-id", "shared", "--no-publish"])
+            self.assertEqual(run.call_args.kwargs["language"], "typescript")
+            self.assertEqual(run.call_args.kwargs["backend"], "api")
+            self.assertEqual(run.call_args.kwargs["comparison_id"], "shared")

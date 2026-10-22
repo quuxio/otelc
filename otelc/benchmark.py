@@ -88,21 +88,40 @@ def export_result(report: dict[str, Any], endpoint: str) -> None:
     provider = MeterProvider(resource=Resource.create({"service.name": "otelc-benchmark-driver"}), metric_readers=[reader])
     try:
         meter = provider.get_meter("io.quux.otelc.benchmark")
+        comparison_id = report.get("comparison_id", report["run_id"])
         meter.create_gauge("otelc.benchmark.run.timestamp", unit="s").set(
             report["recorded_at_unix_ns"] / 1_000_000_000.,
-            {"comparison_id": report["run_id"], "language": report["language"]},
+            {"comparison_id": comparison_id, "language": report["language"]},
         )
         duration = meter.create_histogram("otelc.benchmark.operation.duration", unit="s")
         for mode, values in report["samples_ns_per_operation"].items():
-            labels = {"language": report["language"], "mode": mode, "run_id": report["run_id"], "comparison_id": report["run_id"], "runtime": report["runtime"], "workload": "integer128-v1", "lifetimes": report["config"]["lifetimes"]["enabled"], "build": "javac default; JVM default"}
+            labels = {"language": report["language"], "mode": mode, "run_id": report["run_id"], "comparison_id": comparison_id, "runtime": report["runtime"], "workload": "integer128-v1", "lifetimes": report["config"]["lifetimes"]["enabled"], "build": "; ".join(report["build_flags"]), "compiler": report.get("compiler", "javac")}
             for value in values:
                 duration.record(value / 1_000_000_000., labels)
+        export_process_usage(meter, report, comparison_id)
         metrics = reader.get_metrics_data()
         if metrics is None or exporter.export(metrics) is not MetricExportResult.SUCCESS:
             raise ValueError("Collector did not accept benchmark metrics")
     finally:
         provider.shutdown(timeout_millis=5000)
         exporter.shutdown(timeout_millis=5000)
+
+
+def export_process_usage(meter: Any, report: dict[str, Any], comparison_id: str) -> None:
+    """Publish per-role CPU windows and RSS snapshots separately from application latency."""
+    if 'process_samples' not in report:
+        return
+    cpu = meter.create_histogram('otelc.benchmark.process.cpu.duration', unit='s')
+    rss = meter.create_histogram('otelc.benchmark.process.rss', unit='By')
+    for sample in report['process_samples']:
+        for role, usage in sample['process_usage'].items():
+            labels = {'comparison_id': comparison_id, 'run_id': report['run_id'],
+                      'language': report['language'], 'mode': sample['mode'], 'role': role,
+                      'window': 'batch_and_sdk_flush', 'compiler': report['compiler'],
+                      'runtime': report['runtime'], 'build': '; '.join(report['build_flags']),
+                      'workload': report['workload'], 'lifetimes': report['config']['lifetimes']['enabled']}
+            cpu.record(usage['cpu_ns'] / report['iterations'] / 1_000_000_000., labels)
+            rss.record(usage['rss_bytes'], labels)
 
 
 def switch_state(socket: Path, process: subprocess.Popen[str], mode: str) -> dict[str, Any]:
@@ -176,7 +195,8 @@ def measure_process(policy: Policy, output: Path, runtime: Path, *, plain: bool,
             stop(process)
 
 
-def run(policy: Policy, output: Path, *, publish: bool = True) -> dict[str, Any]:
+def run(policy: Policy, output: Path, *, publish: bool = True,
+        comparison_id: str | None = None) -> dict[str, Any]:
     """Compare plain and four live states of one unchanged Java application."""
     configuration = policy.data["benchmark"]
     count = configuration["iterations"]
@@ -196,7 +216,7 @@ def run(policy: Policy, output: Path, *, publish: bool = True) -> dict[str, Any]
     if before != after:
         raise ValueError("application source changed")
     version = subprocess.check_output([java.executable("java"), "-version"], stderr=subprocess.STDOUT, text=True).splitlines()[0]
-    report = {"schema_version": 1, "run_id": run_id, "language": "java", "runtime": version,
+    report = {"schema_version": 1, "run_id": run_id, "comparison_id": comparison_id or run_id, "language": "java", "runtime": version,
               "javaagent_version": java.AGENT_VERSION, "javaagent_sha256": java.AGENT_SHA256,
               "extension_sha256": hashlib.sha256((java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar").read_bytes()).hexdigest(),
               "config_sha256": hashlib.sha256(json.dumps(policy.data, sort_keys=True).encode()).hexdigest(),

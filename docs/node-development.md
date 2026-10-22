@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This adapter is under development. Java remains the delivered rebuilt language. The [public Node launch commands](node-source.md) are available as a candidate; prepared-launch provenance and benchmark/dashboard delivery remain open. Function/task instrumentation and HTTP/HTTPS propagation are tested on the qualified profiles. The previous implementation remains on the archive branch for reference.
+This adapter is under development. Java remains the delivered rebuilt language. The [public Node launch commands](node-source.md) and [paired benchmark/dashboard workflow](benchmarks.md) are available as a candidate; complete prepared-launch provenance and independent qualification remain open. Function/task instrumentation and HTTP/HTTPS propagation are tested on the qualified profiles. The previous implementation remains on the archive branch for reference.
 
 The same schema-3 policy drives ordinary JavaScript and Microsoft TypeScript examples. Tests exercise the actual Microsoft 7.0.2 native compiler and Microsoft 6.0.3 compiler API, with generated probes and original module execution URLs. Application sources contain no telemetry imports, annotations or bootstrap. Generated plans and bootstrap are producer-owned files.
 
@@ -40,7 +40,7 @@ No asynchronous SDK shutdown is scheduled in application `beforeExit`. Applicati
 
 The SDK process finishes after the application. A launcher/qualifier must retain both parent PID and `sdk_pid`, wait separately for `node-status.json`, and inspect application exit status and decoded downstream telemetry. Handoff acceptance does not mean HTTP success. SDK export success does not establish downstream receipt or absence of OTLP partial rejection; the report marks those as unavailable.
 
-Each FIFO chunk fits the POSIX 512-byte atomic-write minimum. Each record is bounded to 16 MiB and a full pipe has a 50 ms handoff deadline. Backpressure therefore has measurable application cost. Rejected or incomplete records are counted as loss and invalidate a qualified benchmark. Capacity and additional SDK-process CPU/memory must be retained in future benchmark reports.
+Each FIFO chunk fits the POSIX 512-byte atomic-write minimum. Each record is bounded to 16 MiB and a full pipe has a 50 ms handoff deadline. Backpressure therefore has measurable application cost. Rejected or incomplete records are counted as loss and invalidate a qualified benchmark. The benchmark driver retains capacity/drain evidence and separate application/SDK CPU and RSS windows; its OS measurement limits are documented in the benchmark guide.
 
 After a clean SDK shutdown, sampled spans received by the SDK process can be reconciled against exporter success counts. Queue loss remains visible even with metric collection/emission off. A failed or missing producer checkpoint, runtime/native failure, incomplete record or queue loss prevents a clean final report. Missing reports and unknown counts never become zero loss.
 
@@ -84,4 +84,4 @@ Selected collection classes in parameter initialisers and anonymous collection c
 
 Observed GC is distinct from destruction. Production instrumentation never forces GC. Fixture-only `--expose-gc` is used to test bounded observations; missing fixture collection is incomplete evidence, not proof of a leak. Resource observation currently requires an existing synchronous zero-argument void method. Failed/duplicate close and failed construction do not fabricate completions. Uncompleted lifetimes are retained as censored counts at process exit.
 
-The source adapter still needs broader CJS/ESM/compiler semantic cases, prepared manifests, equivalent benchmarks, Grafana proof, final review and required CI/Sonar gates. Browser execution, fetch/Undici, arbitrary VM contexts, inheritance, async/value-returning release methods, selected async generators and several source constructs remain unsupported. Do not present this development branch as a complete language release.
+The source adapter still needs broader CJS/ESM/compiler semantic cases, complete prepared manifests, independent qualification, final review and required CI/Sonar gates. Equivalent benchmark mechanisms do not establish final language acceptance. Browser execution, fetch/Undici, arbitrary VM contexts, inheritance, async/value-returning release methods, selected async generators and several source constructs remain unsupported. Do not present this development branch as a complete language release.

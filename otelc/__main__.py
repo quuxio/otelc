@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from otelc import benchmark, control, health, java, node, prepared_java
+from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java
 from otelc.config import LANGUAGES, Policy
 
 
@@ -35,6 +35,9 @@ def main() -> int:
     compare = commands.add_parser("benchmark")
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument("--no-publish", action="store_true")
+    compare.add_argument("--language", choices=("java", "javascript", "typescript"), default="java")
+    compare.add_argument("--backend", choices=("native", "api"), default="native")
+    compare.add_argument("--comparison-id", help="group equivalent language runs in Grafana")
     example = commands.add_parser("example")
     example.add_argument("language", choices=LANGUAGES)
     example.add_argument("--plain", action="store_true")
@@ -85,7 +88,12 @@ def main() -> int:
                               "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":
-            report = benchmark.run(policy, args.output, publish=not args.no_publish)
+            if args.language == "java":
+                report = benchmark.run(policy, args.output, publish=not args.no_publish,
+                                       comparison_id=args.comparison_id)
+            else:
+                report = node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
+                                            publish=not args.no_publish, comparison_id=args.comparison_id)
             print(json.dumps({"report": str(args.output / "report.json"), "run_id": report["run_id"], "medians_ns": report["median_ns_per_operation"]}, indent=2))
             return 0
         return run_example(policy, args.language, plain=args.plain)

@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-The Node source profile is a rebuild candidate. It launches ordinary files with the same schema-3 policy as Java. Developers add no telemetry imports, annotations or bootstrap. `plan` lists Java under `implemented` and JavaScript/TypeScript under `candidates` while final language qualification, launch provenance and benchmarks remain open.
+The Node source profile is a rebuild candidate. It launches ordinary files with the same schema-3 policy as Java. Developers add no telemetry imports, annotations or bootstrap. `plan` lists Java under `implemented` and JavaScript/TypeScript under `candidates` while complete prepared provenance and independent language qualification remain open. The [benchmark driver](benchmarks.md) compares equivalent Java, JS and TS workloads and retains separate application/SDK process evidence.
 
 ## Run the equivalent examples
 
@@ -84,4 +84,4 @@ The application process can exit before the independent SDK finishes exporting. 
 
 [Launch input evidence](node-launch-inputs.md) now retains the selected tooling closure, original loaded files, compiler configuration reads, emitted outputs and package context. The CLI rechecks these after SDK drain; changed or missing inputs prevent a successful launcher result. This candidate evidence does not provide action attribution or establish arbitrary loader/build-system support.
 
-This profile covers the tested Node runtime/compiler paths. Browser instrumentation, fetch/Undici, application-worker propagation, general build-system discovery and complete prepared-launch provenance remain work. Selected async generators, delegated yields, for-await tracing, direct eval and some lifetime/source constructs are refused or reported as unsupported. Object lifetimes are construction-to-observed-GC or matched successful resource release; they do not imply immediate destruction. Final cross-language benchmark and Grafana comparison qualification is still pending.
+This profile covers the tested Node runtime/compiler paths. Browser instrumentation, fetch/Undici, application-worker propagation, general build-system discovery and complete prepared-launch provenance remain work. Selected async generators, delegated yields, for-await tracing, direct eval and some lifetime/source constructs are refused or reported as unsupported. Object lifetimes are construction-to-observed-GC or matched successful resource release; they do not imply immediate destruction. Benchmark/Grafana mechanisms do not replace final independent cross-language qualification.

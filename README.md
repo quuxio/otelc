@@ -6,7 +6,7 @@ One configuration for source-free instrumentation across languages, using offici
 
 This rebuild starts with **Java**. TypeScript/JavaScript, Python, Go, the LLVM backend, C, C++ and Rust follow in that order. The shared policy lists all targets; that does not mean each adapter is implemented. The [previous implementation](https://github.com/quuxio/otelc/tree/archive/pre-rebuild-2026-10-21) is retained for reuse and comparison. See the [rebuild plan and acceptance criteria](docs/rebuild-plan.md).
 
-The [Node source candidate](docs/node-source.md) now provides public launches for ordinary JavaScript and both Microsoft TypeScript compiler profiles, with retained [launch input evidence](docs/node-launch-inputs.md). Its function/context/lifetime probes and live controls are being qualified; complete prepared provenance, paired benchmarks and final language acceptance remain open. `plan` reports these profiles separately from delivered adapters.
+The [Node source candidate](docs/node-source.md) now provides public launches for ordinary JavaScript and both Microsoft TypeScript compiler profiles, with retained [launch input evidence](docs/node-launch-inputs.md). Its function/context/lifetime probes and live controls are being qualified. [Paired benchmarks](docs/benchmarks.md) compare it with Java and retain separate application/SDK resource observations. Complete prepared provenance and final independent language acceptance remain open. `plan` reports these profiles separately from delivered adapters.
 
 The [development notes](docs/node-development.md) describe compiler/runtime checks, independent SDK drain, qualified source boundaries and remaining delivery gaps.
 
@@ -31,7 +31,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. Select one comparison run in Grafana. Later language examples will use this same workload and policy so Java can be compared with C++, Rust, C, Python, JavaScript, Go and Microsoft TypeScript. Only delivered adapters produce data; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript and Microsoft TypeScript runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 
