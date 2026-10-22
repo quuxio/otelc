@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 import site
 import sys
+import threading
+import weakref
 from pathlib import Path
 from types import CodeType, FrameType, ModuleType
 from typing import Protocol
@@ -13,6 +15,7 @@ from otelc.config import Policy
 from otelc.python_lifetimes import Lifetimes
 
 MAX_FUNCTIONS = 4096
+MAX_REJECTED_CODES = 4096
 
 
 class ObservationRuntime(Protocol):
@@ -40,6 +43,8 @@ class PythonMonitor:
         self.functions = policy.selection('functions')
         self._producer = Path(__file__).resolve().parent
         self._names: dict[int, tuple[CodeType, str | None]] = {}
+        self._rejected: dict[int, weakref.ReferenceType[CodeType]] = {}
+        self._rejected_lock = threading.RLock()
         self.tool: int | None = None
         self._callbacks: list[int] = []
         self._startup_module: ModuleType | None = None
@@ -53,6 +58,34 @@ class PythonMonitor:
         entry = self._names.get(id(code))
         if entry is not None:
             return entry[1]
+        rejected = self._rejected.get(id(code))
+        if rejected is not None and rejected() is code:
+            return None
+        name = self._selection_name(code)
+        if name is None:
+            self._cache_rejection(code)
+            return None
+        if len(name.encode()) > 1024 or len(self._names) >= MAX_FUNCTIONS:
+            self.runtime.reject('function_capacity')
+            return None
+        self._names[id(code)] = (code, name)
+        return name
+
+    def _cache_rejection(self, code: CodeType) -> None:
+        """Bound hot-path exclusions without retaining arbitrary code constants."""
+        with self._rejected_lock:
+            if len(self._rejected) < MAX_REJECTED_CODES:
+                identity = id(code)
+                self._rejected[identity] = weakref.ref(code,
+                    lambda reference: self._forget_rejection(identity, reference))
+
+    def _forget_rejection(self, identity: int, reference: weakref.ReferenceType[CodeType]) -> None:
+        with self._rejected_lock:
+            if self._rejected.get(identity) is reference:
+                self._rejected.pop(identity, None)
+
+    def _selection_name(self, code: CodeType) -> str | None:
+        """Resolve immutable code metadata against this process's fixed policy."""
         if not code.co_flags & inspect.CO_NEWLOCALS:
             return None
         source = Path(code.co_filename)
@@ -67,10 +100,6 @@ class PythonMonitor:
         name = relative.removesuffix('.py').replace('/', '.') + '.' + code.co_qualname
         if not self.functions.accepts(name):
             return None
-        if len(name.encode()) > 1024 or len(self._names) >= MAX_FUNCTIONS:
-            self.runtime.reject('function_capacity')
-            return None
-        self._names[id(code)] = (code, name)
         return name
 
     def _start(self, code: CodeType, offset: int) -> None:
@@ -178,6 +207,8 @@ class PythonMonitor:
 
     def close(self) -> None:
         """Disable callbacks explicitly before releasing the monitoring ID."""
+        with self._rejected_lock:
+            self._rejected.clear()
         if self.tool is None:
             return
         monitoring = sys.monitoring
