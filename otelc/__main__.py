@@ -13,6 +13,19 @@ from otelc import benchmark, control, health, java, node, prepared_java
 from otelc.config import LANGUAGES, Policy
 
 
+def run_example(policy: Policy, language: str, *, plain: bool) -> int:
+    """Keep example runtime files through the selected adapter's complete shutdown."""
+    if language not in ("java", "javascript", "typescript"):
+        raise ValueError(f"{language} is not implemented in the rebuild yet")
+    with tempfile.TemporaryDirectory(prefix="otelc-", dir="/tmp") as temporary:
+        if language != "java":
+            return node.run(policy, Path(temporary), language, plain=plain)
+        command = java.command(policy, Path(temporary), plain=plain)
+        if not plain:
+            print(f"Control socket: {temporary}/control.sock", file=sys.stderr)
+        return subprocess.call(command)
+
+
 def main() -> int:
     """Dispatch CLI work without embedding policy or instrumentation logic."""
     parser = argparse.ArgumentParser(prog="quux-otelc")
@@ -75,15 +88,7 @@ def main() -> int:
             report = benchmark.run(policy, args.output, publish=not args.no_publish)
             print(json.dumps({"report": str(args.output / "report.json"), "run_id": report["run_id"], "medians_ns": report["median_ns_per_operation"]}, indent=2))
             return 0
-        if args.language not in ("java", "javascript", "typescript"):
-            raise ValueError(f"{args.language} is not implemented in the rebuild yet")
-        with tempfile.TemporaryDirectory(prefix="otelc-", dir="/tmp") as temporary:
-            if args.language != "java":
-                return node.run(policy, Path(temporary), args.language, plain=args.plain)
-            command = java.command(policy, Path(temporary), plain=args.plain)
-            if not args.plain:
-                print(f"Control socket: {temporary}/control.sock", file=sys.stderr)
-            return subprocess.call(command)
+        return run_example(policy, args.language, plain=args.plain)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f"quux-otelc: {error}\n")
 
