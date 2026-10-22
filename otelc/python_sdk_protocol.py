@@ -154,10 +154,11 @@ def span_events(value: Any) -> None:
     if type(value) is not list or len(value) > 128:
         raise ValueError('invalid Python SDK span events')
     for event in value:
-        fields(event, {'name', 'timestamp'}, {'attributes'})
+        fields(event, {'name', 'timestamp'}, {'attributes', 'dropped_attributes'})
         text(event['name'])
         integer(event['timestamp'], minimum=1)
         attributes(event.get('attributes', {}))
+        integer(event.get('dropped_attributes', 0), maximum=2 ** 32 - 1)
 
 
 def span_links(value: Any) -> None:
@@ -165,7 +166,8 @@ def span_links(value: Any) -> None:
     if type(value) is not list or len(value) > 128:
         raise ValueError('invalid Python SDK span links')
     for link in value:
-        fields(link, {'context'}, {'attributes'})
+        fields(link, {'context'}, {'attributes', 'dropped_attributes'})
         if context(link['context']) is None:
             raise ValueError('invalid Python SDK span link')
         attributes(link.get('attributes', {}))
+        integer(link.get('dropped_attributes', 0), maximum=2 ** 32 - 1)
