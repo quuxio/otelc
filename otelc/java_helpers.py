@@ -16,14 +16,16 @@ CLASS_SUFFIX = ".class"
 def class_names(classpath: list[Path]) -> set[str]:
     """Inventory names without loading or initialising application classes."""
     names: set[str] = set()
+    from otelc import java_archives
+
+    resolution = java_archives.resolve(tuple(classpath))
+    if resolution is not None:
+        for archive in resolution["archives"]:
+            names.update(archive["classes"])
     for entry in classpath:
         if entry.is_dir():
             names.update(path.relative_to(entry).as_posix().removesuffix(CLASS_SUFFIX).replace("/", ".")
                          for path in entry.rglob("*" + CLASS_SUFFIX))
-        else:
-            with zipfile.ZipFile(entry) as archive:
-                names.update(name.removesuffix(CLASS_SUFFIX).replace("/", ".")
-                             for name in archive.namelist() if name.endswith(CLASS_SUFFIX))
     return names
 
 

@@ -220,7 +220,8 @@ def validate_http_type(owner: str, expected: tuple[str, ...]) -> None:
 
 def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_class: str,
                    bindings: dict[str, str], *, plain: bool = False,
-                   arguments: tuple[str, ...] = ()) -> list[str]:
+                   arguments: tuple[str, ...] = (),
+                   inspection_classpath: list[Path] | None = None) -> list[str]:
     """Translate one policy without compiling or changing application inputs."""
     if "java" not in policy.data["languages"]:
         raise ValueError("java is not enabled by this policy")
@@ -233,8 +234,9 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
         raise ValueError("build the Java extension with make java-build first")
     from otelc import java_helpers
 
-    extension = java_helpers.extension(classpath, extension, runtime)
-    selected, types, resources = resolve_bindings(classpath, bindings, policy)
+    inspected = classpath if inspection_classpath is None else inspection_classpath
+    extension = java_helpers.extension(inspected, extension, runtime)
+    selected, types, resources = resolve_bindings(inspected, bindings, policy)
     selection = json.dumps({"methods": selected, "types": types, "resources": resources}, sort_keys=True)
     (runtime / "selection.json").write_text(selection + "\n")
     data = policy.data

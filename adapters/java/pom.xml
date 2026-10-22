@@ -48,7 +48,7 @@
           <extraArtifact>org.ow2.asm:asm-tree:9.10.1</extraArtifact>
         </extraArtifacts>
         <filters>
-          <filter><artifact>io.quux.otelc:java-extension</artifact><includes><include>io/quux/otelc/tools/HelperRelocator*.class</include></includes></filter>
+          <filter><artifact>io.quux.otelc:java-extension</artifact><includes><include>io/quux/otelc/tools/HelperRelocator*.class</include><include>io/quux/otelc/tools/JarInventory*.class</include></includes></filter>
           <filter><artifact>org.ow2.asm:*</artifact><includes><include>org/objectweb/asm/**</include><include>META-INF/LICENSE*</include></includes></filter>
         </filters>
         <transformers>

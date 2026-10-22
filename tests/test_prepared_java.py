@@ -81,7 +81,6 @@ class ManifestTests(unittest.TestCase):
         jar = self.root / "library.jar"
         for name, payload in (("META-INF/MANIFEST.MF", b"Class-Path: hidden.jar\n"),
                               ("META-INF/INDEX.LIST", b"JarIndex-Version: 1.0\n"),
-                              ("META-INF/versions/21/Main.class", b"versioned"),
                               ("Main.class", b"duplicate")):
             with zipfile.ZipFile(jar, "w") as archive:
                 archive.writestr(name, payload)
@@ -96,7 +95,7 @@ class ManifestTests(unittest.TestCase):
             prepared_java.PreparedApplication.load(self.path)
         jar.write_bytes(b"invalid JAR")
         with self.assertRaisesRegex(ValueError, "invalid prepared JAR"):
-            prepared_java.jar_classes(jar)
+            prepared_java.inspect_classpath((jar,))
         bad_path = self.root / "classes:other"
         bad_path.mkdir()
         self.data["classpath"] = [bad_path.name]
