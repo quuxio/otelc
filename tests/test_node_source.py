@@ -29,6 +29,59 @@ def policy_for(capture: Capture) -> Policy:
 
 
 class NodeSourceTests(unittest.TestCase):
+    def test_lifetime_body_functions_keep_constructor_and_release_lexical_bindings(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        data = copy.deepcopy(policy_for(capture).data)
+        data['sources'] = {'include': ['**'], 'exclude': []}
+        data['functions'] = {'include': [], 'exclude': []}
+        data['lifetimes']['include'] = ['*Item']
+        data['traces']['enabled'] = False
+        data['metrics']['collection'] = True
+        policy = Policy.parse(data)
+        body = """function read() { return [constant, mutable, Local.value]; }
+var read;
+function early() { return before; }
+try { early(); } catch (error) { this.tdz = error instanceof ReferenceError; }
+const before = 11;
+this.tdz = this.tdz && early() === 11;
+const constant = 7;
+let mutable = 8;
+class Local { static value = 9; }
+const first = read();
+mutable = 10;
+this.snapshot = [first, read(), read.name];
+this.later = read;
+"""
+        expected = {'snapshot': [[7, 8, 9], [7, 10, 9], 'read'], 'later': [7, 10, 9], 'tdz': True, 'void_close': True}
+        for language, backend, extension in [('javascript', 'native', 'cjs'),
+                                             ('typescript', 'native', 'ts'), ('typescript', 'api', 'cts')]:
+            for site in ('constructor', 'release'):
+                with self.subTest(language=language, backend=backend, site=site), tempfile.TemporaryDirectory(dir='/tmp') as temporary:
+                    root = Path(temporary).resolve()
+                    entry = root / ('app.' + extension)
+                    constructor = body if site == 'constructor' else ''
+                    release = body if site == 'release' else ''
+                    entry.write_text('class Item { constructor() {\n' + constructor + '\n} close() {\n' + release + '\n} }\n'
+                        'const item = new Item(); const result = item.close();\n'
+                        'console.log(JSON.stringify({ snapshot: item.snapshot, later: item.later(), tdz: item.tdz, void_close: result === undefined }));\n')
+                    original = entry.read_bytes()
+                    for plain in (True, False):
+                        runtime = root / ('plain' if plain else 'instrumented')
+                        argv = node.command(policy, runtime, language, root=root, entry=entry, backend=backend, plain=plain)
+                        result = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+                        if not plain:
+                            report = node.wait_report(runtime)
+                            self.assertEqual(report['phase'], 'closed')
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads(result.stdout), expected)
+                        self.assertEqual(entry.read_bytes(), original)
+                        if not plain:
+                            self.assertEqual(report['lifetimes']['admitted'], 1)
+                            self.assertEqual(report['lifetimes']['resource_completed'], 1)
+                            self.assertEqual(report['lifetimes']['failed_releases'], 0)
+                            self.assertEqual(report['lifetime_lost'], 0)
+
     def test_async_metrics_can_enable_from_startup_off_with_tracing_also_disabled(self) -> None:
         capture = Capture()
         self.addCleanup(capture.close)

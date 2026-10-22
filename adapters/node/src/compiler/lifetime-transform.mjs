@@ -65,9 +65,9 @@ function instrumentReleaseBody(method, helper, name, site, owner, ownerIsClass) 
   const call = action => t.expressionStatement(t.callExpression(t.memberExpression(t.cloneNode(helper), t.identifier(action)),
     [t.thisExpression(), t.stringLiteral(name), t.numericLiteral(site), t.cloneNode(owner)]));
   method.node.body = t.blockStatement([
-    ...initializers,
     t.variableDeclaration('let', [t.variableDeclarator(t.cloneNode(failed), t.booleanLiteral(false))]),
-    t.tryStatement(t.blockStatement(body.body.filter(statement => !t.isFunctionDeclaration(statement))),
+    // Initialise the function-scoped vars within the body's lexical scope.
+    t.tryStatement(t.blockStatement([...initializers, ...body.body.filter(statement => !t.isFunctionDeclaration(statement))]),
       t.catchClause(t.cloneNode(error), t.blockStatement([
         t.expressionStatement(t.assignmentExpression('=', t.cloneNode(failed), t.booleanLiteral(true))),
         call('lifetimeReleaseFailed'), t.throwStatement(t.cloneNode(error))
@@ -133,12 +133,11 @@ export function instrumentLifetime(path, helper, name, plan, tag) {
   const body = constructor.node.body;
   const declarations = body.body.filter(statement => t.isFunctionDeclaration(statement));
   const initializers = declarations.map(declaration => t.variableDeclaration('var', [t.variableDeclarator(t.cloneNode(declaration.id), t.functionExpression(null, declaration.params, declaration.body, declaration.generator, declaration.async))]));
-  const original = body.body.filter(statement => !t.isFunctionDeclaration(statement));
+  const original = [...initializers, ...body.body.filter(statement => !t.isFunctionDeclaration(statement))];
   const creation = constructor.scope.generateUidIdentifier('otelc_creation');
   const failed = constructor.scope.generateUidIdentifier('otelc_failed');
   const error = constructor.scope.generateUidIdentifier('otelc_failure');
   constructor.node.body = t.blockStatement([
-    ...initializers,
     t.variableDeclaration('const', [t.variableDeclarator(creation, call('lifetimeCreation', []))]),
     t.variableDeclaration('let', [t.variableDeclarator(failed, t.booleanLiteral(false))]),
     t.tryStatement(t.blockStatement(original), t.catchClause(error, t.blockStatement([
