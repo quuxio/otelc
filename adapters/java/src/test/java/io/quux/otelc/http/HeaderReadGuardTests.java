@@ -12,6 +12,7 @@ import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import java.lang.ref.WeakReference;
+import java.lang.ref.ReferenceQueue;
 import java.net.URI;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpClient;
@@ -64,22 +65,23 @@ class HeaderReadGuardTests {
     assertSame(original, HeaderReadGuard.wireHeaders(request, original));
   }
 
-  private static WeakReference<HttpRequest> capturedRequest() {
+  private static WeakReference<HttpRequest> capturedRequest(ReferenceQueue<HttpRequest> queue) {
     HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost/collectable")).build();
     var span = SpanContext.create("55555555555555555555555555555555", "6666666666666666",
         TraceFlags.getSampled(), TraceState.getDefault());
     HeaderReadGuard.capture(request, Context.root().with(Span.wrap(span)), W3CTraceContextPropagator.getInstance());
     assertTrue(HeaderReadGuard.wireHeaders(request, request.headers()).firstValue("traceparent").isPresent());
-    return new WeakReference<>(request);
+    return new WeakReference<>(request, queue);
   }
 
   @Test void carrierMetadataDoesNotKeepItsRequestAlive() throws InterruptedException {
-    WeakReference<HttpRequest> reference = capturedRequest();
-    for (int attempt = 0; attempt < 100 && reference.get() != null; attempt++) {
+    ReferenceQueue<HttpRequest> queue = new ReferenceQueue<>();
+    WeakReference<HttpRequest> reference = capturedRequest(queue);
+    for (int attempt = 0; attempt < 10; attempt++) {
       // Explicit collection belongs only to this isolated retention regression fixture.
       System.gc();
-      Thread.sleep(10);
+      if (queue.remove(100) == reference) return;
     }
-    assertNull(reference.get(), "carrier metadata retained the request");
+    fail("carrier metadata retained the request");
   }
 }
