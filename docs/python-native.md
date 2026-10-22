@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This candidate adds selected function metrics/spans, weak object/resource lifetime observations and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling and metric/OTLP pipeline. The public `plan` still reports Python as remaining: official library instrumentors, complete source evidence, benchmarks, independent review and oteleq qualification are delivery work.
+This candidate adds selected function metrics/spans, weak object/resource lifetime observations, configured thread propagation and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling, threading instrumentor and metric/OTLP pipeline. The public `plan` still reports Python as remaining: HTTP/library integration, complete source evidence, benchmarks, independent review and oteleq qualification are delivery work.
 
 ## An unchanged application
 
@@ -84,13 +84,29 @@ Module entry is also native: replace `--entry ...` with `--module package.module
 
 Sources use the common root-relative glob selectors. Function identity is the dotted relative filename, without `.py`, followed by the code object's qualified name. Exclusions take precedence. The tool does not replace functions, code objects, signatures, arguments, return values or exceptions. Native `sys.monitoring` distinguishes completion, unwinding, suspension and resume. Suspended/censored work is never reported as a finished span.
 
-The app-side official tracer has a public OS-entropy ID generator and a primitive span processor. It does not run the OTLP exporter or metric aggregator. The [owned SDK process](python-sdk-process.md) handles aggregation, batching, retries and export without consuming app pseudo-random state. Tracing uses parent-based ratio sampling. Native asyncio task contexts preserve selected-call parentage; that is distinct from qualifying official asyncio/thread/HTTP library instrumentors.
+The app-side official tracer has a public OS-entropy ID generator and a primitive span processor. It does not run the OTLP exporter or metric aggregator. The [owned SDK process](python-sdk-process.md) handles aggregation, batching, retries and export without consuming app pseudo-random state. Tracing uses parent-based ratio sampling.
 
 Selected calls produce `otelc.function.calls`, `otelc.function.duration` and `otelc.function.exceptions`. Duration uses a monotonic clock and stops before completion-side telemetry work. A call must enter and complete with collection enabled to contribute function metrics. An off/on interval inside a call can remain part of its elapsed time; these counters do not claim continuous recording during that gap. Metric records carry the existing span context to the official SDK exemplar pipeline. Export state and source completion counts are separate from downstream receipt.
 
 Exception probes read only the raw exception type name; they do not invoke application `str`, `repr` or exception message getters. Failure recovery abandons the probe's context without inventing a completed span and retains the loss in final evidence. SDK span, event and link attribute-drop counts survive the process bridge.
 
 The generated startup hook restores original import paths/PYTHONPATH, chains the original `sitecustomize` through CPython, and removes only its temporary module when no original exists. Startup failure exits before application code rather than allowing CPython to swallow a failed instrumentation hook. An incomplete control client has a total read deadline and cannot hold up app shutdown.
+
+## Task and thread context
+
+`[context] tasks=true` installs the pinned [official OpenTelemetry threading instrumentor](https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/threading/threading.html) before application code starts. It transfers the current OpenTelemetry context through ordinary `Thread`, `Timer` and `ThreadPoolExecutor.submit` calls. It adds no spans itself: selected application functions provide the visible parent/child spans. The same mechanism carries baggage and restores context after a worker returns or raises.
+
+Native [asyncio tasks](https://docs.python.org/3.12/library/asyncio-task.html#asyncio.Task) already copy the current context. Their existing behaviour remains when `tasks=false`; that setting disables our additional thread patches and does not remove application-installed instrumentation. Context switches are launch-time settings. Metric collection/emission still switch live without disabling context or tracing.
+
+The ordinary [TaskApp.py](../examples/python/TaskApp.py) reuses one executor, starts a thread/timer, awaits asyncio work and preserves a future exception. It contains no telemetry imports or annotations. Run it with the shared [task-only policy](../examples/tasks.toml):
+
+```sh
+runtime="$(mktemp -d /tmp/otelc-python-tasks.XXXXXX)/runtime"
+.venv/bin/python -m otelc --config examples/tasks.toml python \
+  --root "$PWD" --entry examples/python/TaskApp.py --runtime "$runtime"
+```
+
+It prints `{"results": [70, 98], "failure": "negative seed"}`. The policy uses common function-name globs; qualified nested functions that match them are also selected. The test suite checks both policy states with a real receiver, plus baggage and context isolation on reused workers. Thread subclasses which replace `run`, custom executors, process pools, forks and arbitrary scheduler implementations are not qualified. HTTP remains explicitly refused until its separate integration is implemented.
 
 ## Object and resource lifetimes
 
@@ -128,14 +144,14 @@ Enter `10` for ordinary work, `lifecycle` for constructor failure/release retry,
 
 Local integration tests use CPython 3.12 and the locked SDK. They compare original script/module metadata, arguments, source hashes, seeded random values, signatures, output, tracebacks and exit codes against native baselines. Real receivers decode the four-state example's metric counts and spans, bound to the actual application PID rather than the CLI/SDK PID. Separate tests cover recursion/context boundaries, async suspension/cancellation, occupied monitoring IDs, controlled startup/probe failures, queue/transport evidence and open control connections. These are tested profiles, not a claim about arbitrary applications.
 
-The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. Enabled library-context policy currently causes a pre-launch refusal. Benchmark/Grafana comparisons for Python remain outstanding; function/lifetime telemetry uses the configured Collector endpoint, but no Python performance result is claimed by these tests.
+The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. Enabled HTTP-context policy currently causes a pre-launch refusal. Benchmark/Grafana comparisons for Python remain outstanding; function/lifetime telemetry uses the configured Collector endpoint, but no Python performance result is claimed by these tests.
 
 Run the focused tests from a prepared checkout:
 
 ```sh
 PYTHONPATH=tests .venv/bin/python -m unittest \
   test_python_monitor test_python_native test_python_frontend_components \
-  test_python_lifetimes test_python_lifetime_components -v
+  test_python_lifetimes test_python_lifetime_components test_python_tasks -v
 make check
 ```
 

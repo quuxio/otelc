@@ -15,7 +15,17 @@ from otelc import python_sdk_io as io
 from otelc.python_control import ControlServer
 from otelc.python_monitor import PythonMonitor
 from otelc.python_runtime import PythonRuntime
+from otelc.python_tasks import PythonTaskContext
 from otelc.python_sdk_process import SdkChannel, policy_digest
+
+
+def close_task_context(tasks: PythonTaskContext | None, runtime: PythonRuntime) -> None:
+    """A library teardown failure must not prevent the final SDK checkpoint."""
+    if tasks is not None:
+        try:
+            tasks.close()
+        except Exception:
+            runtime.reject('task_context_shutdown')
 
 
 @dataclass
@@ -25,6 +35,7 @@ class PythonApplication:
     runtime: PythonRuntime
     monitor: PythonMonitor
     server: ControlServer
+    tasks: PythonTaskContext | None = None
     _closed: bool = field(default=False, init=False)
 
     def close(self) -> None:
@@ -33,6 +44,7 @@ class PythonApplication:
             atexit.unregister(self.close)
             self.server.close()
             self.monitor.close()
+            close_task_context(self.tasks, self.runtime)
             self.runtime.close()
 
 
@@ -60,10 +72,11 @@ def initialise(plan_fd: int) -> PythonApplication:
         raise ValueError('Python frontend policy identity differs')
     channel = SdkChannel(plan['events_fd'], plan['replies_fd'], sdk_pid=plan['sdk_pid'],
                          launch_id=plan['launch_id'], policy_sha256=plan['policy_sha256'])
-    runtime = monitor = None
+    runtime = monitor = tasks = None
     try:
         channel.bind(os.getpid())
         runtime = PythonRuntime(policy, channel, root=Path(plan['root']))
+        tasks = PythonTaskContext(policy.data['context']['tasks'])
         monitor = PythonMonitor(policy, Path(plan['root']), runtime, lifetimes=runtime.lifetimes)
         if bootstrap := sys.modules.get('sitecustomize'):
             monitor.retire_startup_module(bootstrap)
@@ -73,11 +86,12 @@ def initialise(plan_fd: int) -> PythonApplication:
         if monitor is not None:
             monitor.close()
         if runtime is not None:
+            close_task_context(tasks, runtime)
             runtime.reject('bootstrap')
             runtime.close()
         channel.close()
         raise
 
-    application = PythonApplication(runtime, monitor, server)
+    application = PythonApplication(runtime, monitor, server, tasks)
     atexit.register(application.close)
     return application

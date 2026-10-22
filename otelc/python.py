@@ -106,8 +106,8 @@ def run(policy: Policy, directory: Path, *, root: Path, entry: Path | None = Non
         return subprocess.call(command, cwd=root)
     if 'python' not in policy.data['languages']:
         raise ValueError('Python is disabled by policy')
-    if any(policy.data['context'].values()):
-        raise ValueError('Python candidate library-context integration is not available yet')
+    if policy.data['context']['http']:
+        raise ValueError('Python candidate HTTP-context integration is not available yet')
     directory = directory.resolve()
     directory.mkdir(mode=0o700)
     sdk = SdkProcess.start(policy, directory / 'sdk', bind=False)

@@ -12,7 +12,7 @@ The [development notes](docs/node-development.md) describe compiler/runtime chec
 
 The merged [Node SDK/control foundation](docs/node-sdk-controls.md) supplies official SDK/exporters, independent live metric gates and the shared control client. Source probes and application launching belong to the separate Node candidate.
 
-The [Python frontend candidate](docs/python-native.md) launches original CPython sources with selected function metrics/spans, weak object/resource lifetime observations and live controls. The [SDK metric gates](docs/python-sdk-controls.md) and [process bridge](docs/python-sdk-process.md) isolate aggregation/export and retain checked drain evidence. Broader lifetime shapes, library integration, full source evidence, benchmarks and language qualification remain work. Python is still reported as remaining by `plan`.
+The [Python frontend candidate](docs/python-native.md) launches original CPython sources with selected function metrics/spans, weak object/resource lifetime observations, official thread propagation and live controls. The [SDK metric gates](docs/python-sdk-controls.md) and [process bridge](docs/python-sdk-process.md) isolate aggregation/export and retain checked drain evidence. Broader lifetime shapes, HTTP/library integration, full source evidence, benchmarks and language qualification remain work. Python is still reported as remaining by `plan`.
 
 ## Java example and Grafana
 
