@@ -116,3 +116,13 @@ class PythonSdkProtocolTests(unittest.TestCase):
             wire.fields([], set())
         self.assertEqual(wire.number(-2 ** 63), -2 ** 63)
         self.assertEqual(wire.number(.25), .25)
+
+    def test_event_and_link_drop_counts_are_optional_bounded_unsigned_integers(self) -> None:
+        for field, item in (('events', {'name': 'event', 'timestamp': 1500}),
+                            ('links', {'context': context()})):
+            wire.span(span(**{field: [item]}))
+            for count in (0, 1, 2 ** 32 - 1):
+                wire.span(span(**{field: [{**item, 'dropped_attributes': count}]}))
+            for count in (True, -1, 2 ** 32, 1.0, '1', None):
+                with self.subTest(field=field, count=count), self.assertRaises(ValueError):
+                    wire.span(span(**{field: [{**item, 'dropped_attributes': count}]}))

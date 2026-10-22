@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, constants, openSync, readFileSync, realpathSync, writeSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ICompilerEvidence, ICompilerFile, ISourcePlan } from './source-plan.ts';
 import { readStableFile } from './source-file.ts';
 
@@ -21,7 +22,8 @@ interface IModuleLoad {
 
 interface IInput {
   path: string; kind: 'source' | 'compiler_config' | 'absent_config' | 'package_context' | 'absent_package'
-    | 'startup' | 'module_requested' | 'compilation' | 'compiled' | 'instrumented' | 'loaded';
+    | 'startup' | 'module_requested' | 'compilation' | 'compiled' | 'instrumented' | 'loaded'
+    | 'module_reentered' | 'execution_started';
   sha256?: string; size?: number;
   format?: string; logical_source?: string; source_sha256?: string; map_sha256?: string; map_size?: number;
   url?: string;
@@ -31,8 +33,20 @@ interface IInput {
   load_id?: number;
   module_type?: 'typescript' | 'javascript';
   compiler?: IRetainedCompiler;
+  previous_load_id?: number;
+  body_entry?: { schema_version: 1; goal: string; helper: string };
+  pid?: number; emission_kind?: string; emission_sha256?: string;
+  execution_protocol?: 1;
   startup?: { pid: number; node: string; cwd: string; argv: string[]; exec_argv: string[];
     environment: Record<string, { state: 'absent' } | { state: 'present'; value: string; sha256: string }> };
+}
+
+let activeInputs: SourceInputs | undefined;
+
+/** The injected prolog identifies body entry, never module completion or action delivery. */
+export function moduleEntered(loadId: number, format: string): void {
+  if (!activeInputs) throw new Error('module body entry has no source recorder');
+  activeInputs.entered(loadId, format);
 }
 
 const digest = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex');
@@ -49,6 +63,8 @@ export class SourceInputs {
   private readonly prefix: string;
   private readonly knownContext: Map<string, { sha256?: string; resolved_path?: string }>;
   private nextLoad = 0;
+  private readonly lastLoad = new Map<string, IModuleLoad>();
+  private readonly entryAttempted = new Set<number>();
 
   constructor(plan: ISourcePlan) {
     const prefix = plan.plain ? 'node-plain' : 'node';
@@ -58,7 +74,7 @@ export class SourceInputs {
       { schema_version: number; launch_id: string; entry: { path: string; sha256: string };
         resolved_plan: ISourcePlan;
         entry_context: { path: string; sha256?: string; resolved_path?: string }[] };
-    if (manifest.schema_version !== 4 || manifest.launch_id !== plan.launch_id) throw new Error('source input manifest has an unsupported schema or belongs to another launch');
+    if (manifest.schema_version !== 5 || manifest.launch_id !== plan.launch_id) throw new Error('source input manifest has an unsupported schema or belongs to another launch');
     if (JSON.stringify(manifest.resolved_plan) !== JSON.stringify(plan)) throw new Error('source plan differs from the retained launch manifest');
     this.entry = manifest.entry;
     this.knownContext = new Map(manifest.entry_context.map(item => [item.path, item]));
@@ -71,6 +87,7 @@ export class SourceInputs {
         return [key, value === undefined ? { state: 'absent' } : { state: 'present', value, sha256: digest(value) }];
       })) } });
     this.packageContext(this.entry.path);
+    activeInputs = this;
   }
 
   private record(input: IInput): void {
@@ -123,7 +140,27 @@ export class SourceInputs {
     const identity = Object.freeze({ id: ++this.nextLoad, path: realpathSync(filename), logicalSource, url });
     this.record({ path: identity.path, kind: 'module_requested', load_id: identity.id,
       logical_source: logicalSource, url, module_type: moduleType });
+    const previous = this.lastLoad.get(url);
+    if (previous && !this.entryAttempted.has(previous.id)) {
+      this.record({ path: identity.path, kind: 'module_reentered', load_id: identity.id,
+        previous_load_id: previous.id, logical_source: logicalSource, url });
+    }
+    this.lastLoad.set(url, identity);
     return identity;
+  }
+
+  /** Bind a real prolog call to bytes already returned by this loader instance. */
+  entered(loadId: number, format: string): void {
+    if (this.entryAttempted.has(loadId)) throw new Error('duplicate module body entry');
+    this.entryAttempted.add(loadId);
+    const emission = this.inputs.get('instrumented:' + loadId) ?? this.inputs.get('loaded:' + loadId);
+    if (!emission?.body_entry || emission.body_entry.goal !== format || !['module', 'commonjs'].includes(format)) {
+      throw new Error('module entry does not match its returned emission');
+    }
+    this.record({ path: emission.path, kind: 'execution_started', load_id: loadId,
+      pid: process.pid, url: emission.url, logical_source: emission.logical_source,
+      source_sha256: emission.source_sha256, emission_kind: emission.kind,
+      emission_sha256: emission.sha256, format, execution_protocol: 1 });
   }
 
   private compilerFile(file: ICompilerFile): IRetainedFile {
@@ -143,7 +180,7 @@ export class SourceInputs {
 
   /** Retain the exact compiler/hook output separately from its original file bytes. */
   emitted(load: IModuleLoad, code: string, format: string | undefined,
-    kind: 'compiled' | 'instrumented' | 'loaded', map?: object): void {
+    kind: 'compiled' | 'instrumented' | 'loaded', map?: object, executionGoal?: string): void {
     const source = this.inputs.get('source:' + load.path);
     if (!source) throw new Error('emitted module has no source input');
     const outputFile = this.retain(code);
@@ -151,6 +188,8 @@ export class SourceInputs {
     this.record({ path: load.path, kind, load_id: load.id, sha256: digest(code), size: Buffer.byteLength(code),
       source_sha256: source.sha256, logical_source: load.logicalSource, url: load.url, format: format ?? 'node-detected',
       output_file: outputFile,
+      ...(executionGoal ? { body_entry: { schema_version: 1 as const, goal: executionGoal,
+        helper: fileURLToPath(new URL('./source-inputs.ts', import.meta.url)) } } : {}),
       ...(mapText ? { map_sha256: digest(mapText), map_size: Buffer.byteLength(mapText), map_file: this.retain(mapText) } : {}) });
   }
 
