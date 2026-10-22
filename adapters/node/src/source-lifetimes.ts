@@ -108,8 +108,8 @@ export class SourceLifetimes {
     this.gauges();
   }
 
-  released(value: object, name: string, site: number, owner: object): void {
-    if (this.#closed) return;
+  released(value: object, name: string, site: number, owner: object | undefined): void {
+    if (this.#closed || owner === undefined) return;
     const token = this.#identities.get(value);
     const item = token === undefined ? undefined : this.#instances.get(token);
     if (item?.name !== name || !item.resource || item.released
@@ -119,10 +119,11 @@ export class SourceLifetimes {
     this.gauges();
   }
 
-  failedRelease(value: object, name: string, site: number, owner: object): void {
+  failedRelease(value: object, name: string, site: number, owner: object | undefined): void {
+    if (this.#closed || owner === undefined) return;
     const token = this.#identities.get(value);
     const item = token === undefined ? undefined : this.#instances.get(token);
-    if (!this.#closed && item?.name === name && (item.type === this.#constructors.get(owner) || item.type.keys === owner) && item.type.sites.has(site)) this.#failedReleases++;
+    if (item?.name === name && (item.type === this.#constructors.get(owner) || item.type.keys === owner) && item.type.sites.has(site)) this.#failedReleases++;
   }
 
   lose(reason: string): void {
