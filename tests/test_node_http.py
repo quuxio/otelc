@@ -149,7 +149,8 @@ class NodeHttpTests(unittest.TestCase):
                 expected_counts = (28, 12, 16)
             if not tracing:
                 expected_counts = (0, 0, 0)
-            self.assertEqual((len(observed), len(clients), len(servers)), expected_counts)
+            actual_counts = (len(observed), len(clients), len(servers))
+            self.assertEqual(actual_counts, expected_counts)
             self.assertEqual(len([span for span in servers if span.parent_span_id in clients]),
                              8 if enabled and tracing and ratio else 0)
             self.assertEqual(histogram_count(capture, 'http.client.request.duration'), 6 if enabled else 0)

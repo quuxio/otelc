@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript-api';
 import { IDENTITY } from './transform.mjs';
-import { identity, functionName } from './typescript-identities.mjs';
+import { identity, childNames } from './typescript-identities.mjs';
 import { nativeEmit } from './typescript-native.mjs';
 import { collectLifetimeClasses, markLifetimeClass, TYPE_IDENTITY } from './typescript-lifetimes.mjs';
 
@@ -23,20 +23,25 @@ export function compilerOptions(root = process.cwd()) {
   }
   if (options.paths || options.baseUrl || options.jsx || options.emitDecoratorMetadata || options.outFile) throw new Error('TypeScript paths/baseUrl, JSX, decorator metadata and outFile are unsupported by the Node source adapter');
   if (options.target !== undefined && options.target < ts.ScriptTarget.ES2018) throw new Error('TypeScript target must be ES2018 or newer to preserve async and generator timing');
-  if ([ts.ModuleKind.AMD, ts.ModuleKind.UMD, ts.ModuleKind.System, ts.ModuleKind.None].includes(options.module)) throw new Error('TypeScript module format is unsupported by the Node source adapter');
+  if (['AMD', 'UMD', 'System', 'None'].includes(ts.ModuleKind[options.module])) throw new Error('TypeScript module format is unsupported by the Node source adapter');
   return { ...options, target: options.target ?? ts.ScriptTarget.ES2022, module: options.module ?? ts.ModuleKind.Preserve,
     sourceMap: true, inlineSourceMap: false, inlineSources: true, removeComments: false,
     declaration: false, declarationMap: false, emitDeclarationOnly: false, noEmit: false,
     // Modules execute at original URLs; rewritten output extensions have no file.
     allowImportingTsExtensions: false, rewriteRelativeImportExtensions: false, verbatimModuleSyntax: true, isolatedModules: true };
 }
-export function transpile(source, filename, sourceName, plan, root = process.cwd(), hintedFormat) {
-  if (/\.d\.(?:ts|mts|cts)$/.test(filename) || /\.tsx$/.test(filename)) throw new Error('TypeScript declarations and JSX are not executable adapter inputs');
+function executionFormat(filename, moduleKind, hint) {
+  if (filename.endsWith('.cts')) return 'commonjs';
+  if (filename.endsWith('.mts')) return 'module';
+  if (['module', 'commonjs'].includes(hint)) return hint;
+  if (moduleKind === ts.ModuleKind.CommonJS) return 'commonjs';
+  return undefined;
+}
+export function transpile(source, filename, sourceName, plan, root = process.cwd(), hintedFormat = undefined) {
+  if (/\.d\.(?:ts|mts|cts)$/.test(filename) || filename.endsWith('.tsx')) throw new Error('TypeScript declarations and JSX are not executable adapter inputs');
   if (source.includes(IDENTITY) || source.includes(TYPE_IDENTITY)) throw new Error('TypeScript source is already prepared for instrumentation');
   const options = compilerOptions(root);
-  const format = /\.cts$/.test(filename) ? 'commonjs' : /\.mts$/.test(filename) ? 'module'
-    : ['module', 'commonjs'].includes(hintedFormat) ? hintedFormat
-    : options.module === ts.ModuleKind.CommonJS ? 'commonjs' : undefined;
+  const format = executionFormat(filename, options.module, hintedFormat);
   // Emit the format Node will execute, before parsing or inserting probes.
   options.module = format === 'commonjs' ? ts.ModuleKind.CommonJS : ts.ModuleKind.Preserve;
   options.verbatimModuleSyntax = format !== 'commonjs';
@@ -46,12 +51,7 @@ export function transpile(source, filename, sourceName, plan, root = process.cwd
     const prefix = sourceName.replace(/\.(?:ts|mts|cts)$/, '').replaceAll('/', '.');
     function visit(node, parents = [], names = []) {
       const callable = ts.isFunctionLike(node) && node.body;
-      const name = callable ? (ts.isGetAccessorDeclaration(node) ? 'get ' : ts.isSetAccessorDeclaration(node) ? 'set ' : '') + functionName(node, parents, file) : null;
-      const container = ts.isClassLike(node) || ts.isModuleDeclaration(node);
-      const position = file.getLineAndCharacterOfPosition(node.getStart(file));
-      const owner = parents.at(-1);
-      const object = ts.isObjectLiteralExpression(node) ? owner && (ts.isVariableDeclaration(owner) || ts.isPropertyAssignment(owner)) && ts.isIdentifier(owner.name) ? owner.name.text : `<object>@${position.line + 1}:${position.character + 1}` : null;
-      const nested = callable ? [...names, name] : container ? [...names, node.name?.text ?? '<class>'] : object ? [...names, object] : names;
+      const nested = childNames(node, parents, names, file);
       let updated = ts.visitEachChild(node, child => visit(child, [...parents, node], nested), context);
       if (ts.isClassLike(node) && classes.has(node.getStart(file))) updated = markLifetimeClass(updated, classes.get(node.getStart(file)));
       if (callable) {

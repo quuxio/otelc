@@ -76,6 +76,13 @@ function instrumentReleaseBody(method, helper, name, site, owner, ownerIsClass) 
   method.node.body.directives = body.directives;
 }
 
+function knownKeyName(method) {
+  const { key, computed } = method.node;
+  if (!computed && t.isIdentifier(key)) return key.name;
+  if (t.isStringLiteral(key)) return key.value;
+  return undefined;
+}
+
 function instrumentReleases(classPath, helper, name, plan) {
   const members = classPath.get('body.body').filter(member => (member.isClassMethod() || member.isClassProperty() || member.isClassAccessorProperty()) && !member.node.static
     && !t.isPrivateName(member.node.key) && member.node.kind !== 'constructor');
@@ -84,8 +91,7 @@ function instrumentReleases(classPath, helper, name, plan) {
   for (const [index, method] of members.entries()) {
     const site = index + 1;
     const originalKey = method.node.key;
-    const knownName = !method.node.computed && t.isIdentifier(originalKey) ? originalKey.name
-      : t.isStringLiteral(originalKey) ? originalKey.value : undefined;
+    const knownName = knownKeyName(method);
     const supported = releaseSupported(method, classPath.node.id?.name);
     const expression = !method.node.computed && t.isIdentifier(originalKey) ? t.stringLiteral(originalKey.name) : originalKey;
     const token = index === 0 ? t.assignmentExpression('=', t.cloneNode(keys), t.arrayExpression([])) : t.cloneNode(keys);

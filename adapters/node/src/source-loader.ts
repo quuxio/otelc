@@ -1,5 +1,6 @@
 import { realpathSync, readFileSync } from 'node:fs';
 import { registerHooks } from 'node:module';
+import type { ModuleSource } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { transform } from './compiler/transform.mjs';
 import { transpile } from './compiler/typescript.mjs';
@@ -10,6 +11,12 @@ import type { ISourcePlan } from './source-plan.ts';
 
 const producerRoot = fileURLToPath(new URL('./', import.meta.url));
 const globals = globalThis as typeof globalThis & { [RUNTIME]?: SourceRuntime };
+
+function sourceText(source: ModuleSource | undefined | null, filename: string): string {
+  if (source === undefined || source === null) return readFileSync(filename, 'utf8');
+  if (typeof source === 'string') return source;
+  return new TextDecoder('utf-8', { ignoreBOM: true }).decode(source);
+}
 
 /** Own a loader, SDK and controls; transformed modules retain their original execution URLs. */
 export function installSource(plan: ISourcePlan): {
@@ -42,8 +49,7 @@ export function installSource(plan: ISourcePlan): {
     }
     const loaded = nextLoad(url, context);
     if (!selection.accepts(name) || !/\.(?:mjs|cjs|js)$/.test(filename)) return loaded;
-    const source = loaded.source === undefined || loaded.source === null ? readFileSync(filename, 'utf8')
-      : typeof loaded.source === 'string' ? loaded.source : new TextDecoder('utf-8', { ignoreBOM: true }).decode(loaded.source);
+    const source = sourceText(loaded.source, filename);
     return { ...loaded, source: transform(source, filename, name, plan, runtime).code };
   } });
   let closing: Promise<void> | undefined;

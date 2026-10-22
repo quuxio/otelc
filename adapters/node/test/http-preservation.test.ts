@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import test, { after } from 'node:test';
+import test, { after, before } from 'node:test';
 import { propagation, ROOT_CONTEXT, trace, createTraceState } from '@opentelemetry/api';
 import { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core';
 import { errorType, injectHeaders } from '../src/http-preservation.ts';
 
-assert.equal(propagation.setGlobalPropagator(new CompositePropagator({
+before(() => assert.equal(propagation.setGlobalPropagator(new CompositePropagator({
   propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()],
-})), true);
+})), true));
 after(() => propagation.disable());
 const active = propagation.setBaggage(trace.setSpanContext(ROOT_CONTEXT, {
   traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1, traceState: createTraceState('vendor=opaque'),

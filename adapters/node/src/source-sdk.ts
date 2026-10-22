@@ -32,27 +32,37 @@ function randomId(size: number): string {
   return /^0+$/.test(id) ? '0'.repeat(size * 2 - 1) + '1' : id;
 }
 
+function readReadiness(filename: string): Record<string, unknown> | undefined {
+  let descriptor: number;
+  try { descriptor = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  try {
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600
+        || metadata.size > 4096) throw new Error('source SDK readiness is not owned private metadata');
+    return JSON.parse(readFileSync(descriptor, 'utf8')) as Record<string, unknown>;
+  } finally { closeSync(descriptor); }
+}
+
+function matchesReadyOwner(ready: Record<string, unknown>, plan: ISourcePlan, pid: number): boolean {
+  return Object.keys(ready).length === 3 && Object.hasOwn(ready, 'schema_version')
+    && Object.hasOwn(ready, 'pid') && Object.hasOwn(ready, 'launch_id')
+    && ready.schema_version === 1 && ready.pid === pid && ready.launch_id === plan.launch_id;
+}
+
 function waitForReady(plan: ISourcePlan, pid: number): void {
   const deadline = performance.now() + 10000;
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const filename = path.join(plan.runtime.directory, 'node-sdk-ready.json');
   while (true) {
-    let descriptor: number | undefined;
-    try {
-      descriptor = openSync(filename, constants.O_RDONLY | constants.O_NOFOLLOW);
-      const metadata = fstatSync(descriptor);
-      if (!metadata.isFile() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) {
-        throw new Error('source SDK readiness is not owned private metadata');
-      }
-      const ready = JSON.parse(readFileSync(descriptor, 'utf8')) as Record<string, unknown>;
-      if (ready.schema_version !== 1 || ready.pid !== pid || ready.launch_id !== plan.launch_id
-          || Object.keys(ready).sort().join(',') !== 'launch_id,pid,schema_version') {
-        throw new Error('source SDK readiness identity does not match its owner');
-      }
+    const ready = readReadiness(filename);
+    if (ready !== undefined) {
+      if (!matchesReadyOwner(ready, plan, pid)) throw new Error('source SDK readiness identity does not match its owner');
       return;
-    } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-    } finally { if (descriptor !== undefined) closeSync(descriptor); }
+    }
     if (performance.now() >= deadline) throw new Error('source SDK startup timed out');
     Atomics.wait(pause, 0, 0, 1);
   }
@@ -117,13 +127,19 @@ export class SourceSdk {
     let writer: SourceHandoffWriter | undefined;
     let child: ChildProcess | undefined;
     let diagnostic: number | undefined;
+    let preparedPlan: number | undefined;
     try {
       diagnostic = openSync(path.join(plan.runtime.directory, 'node-sdk.log'), 'wx', 0o600);
       writer = new SourceHandoffWriter(filename);
       const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
         key !== 'NODE_OPTIONS' && !key.startsWith('OTEL_') && !key.startsWith('OTELC_')));
-      child = spawn(process.execPath, [fileURLToPath(new URL('./source-sdk-child.ts', import.meta.url)),
-        path.join(plan.runtime.directory, 'node-plan.json')], { env: environment, stdio: ['ignore', 'ignore', diagnostic, 'ipc'] });
+      preparedPlan = openSync(path.join(plan.runtime.directory, 'node-plan.json'), constants.O_RDONLY | constants.O_NOFOLLOW);
+      const metadata = fstatSync(preparedPlan);
+      if (!metadata.isFile() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) {
+        throw new Error('source SDK plan is not owned private metadata');
+      }
+      child = spawn(process.execPath, [fileURLToPath(new URL('./source-sdk-child.ts', import.meta.url))], {
+        env: environment, stdio: ['ignore', 'ignore', diagnostic, 'ipc', preparedPlan] });
       // A spawn failure can emit after synchronous startup has already refused it.
       child.on('error', () => { /* The checked startup failure belongs to the caller. */ });
       if (!child.pid) throw new Error('source SDK startup could not create its owner');
@@ -132,7 +148,11 @@ export class SourceSdk {
       child.channel?.unref(); child.unref();
       return sdk;
     } catch (error) { writer?.close(); child?.kill(); throw error; }
-    finally { closeSync(reader); if (diagnostic !== undefined) closeSync(diagnostic); }
+    finally {
+      closeSync(reader);
+      if (diagnostic !== undefined) closeSync(diagnostic);
+      if (preparedPlan !== undefined) closeSync(preparedPlan);
+    }
   }
 
   send(record: SourceSdkRecordType): boolean {

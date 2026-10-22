@@ -24,6 +24,13 @@ export interface IHttpInstallation {
 
 function digest(filename: string): string { return createHash('sha256').update(readFileSync(filename)).digest('hex'); }
 
+// Protocol fingerprints use Python-compatible code-unit order for these ASCII keys.
+// Locale collation would change identities (for example LICENSE versus build/src).
+function compareIdentityKeys(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
 /** Refuse stale/corrupt generated products before any application or upstream patch executes. */
 export function loadHttpProduct(root: string): { directory: string; manifest: IHttpProduct } {
   const manifest = JSON.parse(readFileSync(path.join(root, 'build/tools/otelc-http.json'), 'utf8')) as IHttpProduct;
@@ -34,14 +41,14 @@ export function loadHttpProduct(root: string): { directory: string; manifest: IH
   }
   const directory = path.join(root, 'build/tools', manifest.directory);
   const expected = ['LICENSE', 'package.json', ...['http', 'index', 'internal-types', 'semconv', 'types', 'utils', 'version']
-    .map(name => 'build/src/' + name + '.js')].sort();
-  if (Object.keys(manifest.files).sort().join('\n') !== expected.join('\n')
+    .map(name => 'build/src/' + name + '.js')].sort(compareIdentityKeys);
+  if (Object.keys(manifest.files).sort(compareIdentityKeys).join('\n') !== expected.join('\n')
       || expected.some(filename => !/^[a-f0-9]{64}$/.test(manifest.files[filename])
         || digest(path.join(directory, filename)) !== manifest.files[filename])) {
     throw new Error('qualified HTTP instrumentation product checksum mismatch');
   }
   const sorted = (record: Record<string, string>): Record<string, string> =>
-    Object.fromEntries(Object.keys(record).sort().map(key => [key, record[key]]));
+    Object.fromEntries(Object.keys(record).sort(compareIdentityKeys).map(key => [key, record[key]]));
   const canonical = JSON.stringify({ files: sorted(manifest.files), helper_sha256: manifest.helper_sha256,
     patch_version: manifest.patch_version, schema_version: manifest.schema_version,
     upstream_sha256: sorted(manifest.upstream_sha256), upstream_version: manifest.upstream_version });

@@ -1,7 +1,7 @@
 // Original type identities must survive both compiler lowering paths.
 import ts from 'typescript-api';
 import { Selection } from './policy.mjs';
-import { functionName, identity } from './typescript-identities.mjs';
+import { childNames, identity } from './typescript-identities.mjs';
 import { TYPE_IDENTITY } from './lifetime-transform.mjs';
 export { TYPE_IDENTITY } from './lifetime-transform.mjs';
 
@@ -18,16 +18,6 @@ function classRecord(node, parents, names, file, prefix, plan, selection) {
   return { start: node.getStart(file), position: constructor ? constructor.body.getStart(file) + 1 : node.end - 1,
     implicit: !constructor, metadata };
 }
-function childNames(node, parents, names, file) {
-  if (ts.isFunctionLike(node) && node.body) return [...names, (ts.isGetAccessorDeclaration(node) ? 'get ' : ts.isSetAccessorDeclaration(node) ? 'set ' : '') + functionName(node, parents, file)];
-  if (ts.isClassLike(node) || ts.isModuleDeclaration(node)) return [...names, node.name?.text ?? '<class>'];
-  if (!ts.isObjectLiteralExpression(node)) return names;
-  const owner = parents.at(-1);
-  if (owner && (ts.isVariableDeclaration(owner) || ts.isPropertyAssignment(owner)) && ts.isIdentifier(owner.name)) return [...names, owner.name.text];
-  const position = file.getLineAndCharacterOfPosition(node.getStart(file));
-  return [...names, `<object>@${position.line + 1}:${position.character + 1}`];
-}
-
 /** Collect selected classes before lowering changes names, fields or namespaces. */
 export function collectLifetimeClasses(source, filename, sourceName, plan) {
   if (!plan.lifetimes?.enabled) return [];

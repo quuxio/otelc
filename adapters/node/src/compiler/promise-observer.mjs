@@ -61,7 +61,7 @@ export class PromiseObserver {
     const index = frames.findIndex(frame => physical(frame[0]) === site.filename && compare(position(frame), site.start) >= 0 && compare(position(frame), site.end) <= 0);
     const key = index < 0 ? null : caller(frames, index, site.origin);
     const record = frames.length === 128 ? null : this.roots.get(key);
-    if (!record || !record.promise.deref()) {
+    if (!record?.promise.deref()) {
       if (this.roots.size + this.active.size >= this.runtime.plan.runtime.max_active_calls) this.runtime.losses.active_call_capacity++;
       else this.runtime.losses.async_origin++;
       return this.runtime.rejectTrace('async_origin');

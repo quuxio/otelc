@@ -32,6 +32,18 @@ console.log(JSON.stringify({ native_version: nativeVersion(), api_version: ts.ve
 """
 
 
+def checked_process(command: list[str], directory: Path, environment: dict[str, str],
+                    timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+    """Keep captured tool diagnostics attached to a failed production check."""
+    try:
+        return subprocess.run(command, cwd=directory, env=environment, check=True,
+                              capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.CalledProcessError as error:
+        if error.stderr:
+            error.add_note(error.stderr)
+        raise
+
+
 def check() -> dict[str, object]:
     """Use the lockfile's production closure, without writing application inputs."""
     selected = executable()
@@ -40,25 +52,23 @@ def check() -> dict[str, object]:
     environment.pop('NODE_V8_COVERAGE', None)
     build = ROOT / 'build'
     build.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='otelc-production-', dir='/tmp') as temporary:
+    with tempfile.TemporaryDirectory(prefix='otelc-production-', dir=build) as temporary:
         directory = Path(temporary).resolve()
         provider = directory / 'provider'
         provider.mkdir()
         for filename in ('package.json', 'package-lock.json'):
             shutil.copyfile(ROOT / filename, provider / filename)
         shutil.copytree(ROOT / 'adapters/node/src', provider / 'adapters/node/src')
-        subprocess.run(['npm', 'ci', '--omit=dev', '--ignore-scripts', '--prefer-offline', '--no-audit', '--no-fund',
-                        '--cache', str(build / 'npm-cache')], cwd=provider, env=environment,
-                       check=True, capture_output=True, text=True, timeout=120)
+        checked_process(['npm', 'ci', '--omit=dev', '--ignore-scripts', '--prefer-offline', '--no-audit', '--no-fund',
+                        '--cache', str(build / 'npm-cache')], provider, environment, 120)
         application = directory / 'application'
         application.mkdir()
         entry = application / 'app.ts'
         source = 'export function workload(value: number): number { return (value + 1) * 7; }\n'
         entry.write_text(source)
         original_bytes = entry.read_bytes()
-        result = subprocess.run([selected, '--input-type=module', '-e', COMPILER_CHECK, str(entry)],
-                                cwd=provider, env=environment, check=True, capture_output=True,
-                                text=True, timeout=60)
+        result = checked_process([selected, '--input-type=module', '-e', COMPILER_CHECK, str(entry)],
+                                 provider, environment, 60)
         report = json.loads(result.stdout)
         if (report != {'native_version': '7.0.2', 'api_version': '6.0.3', 'results': {'native': 56, 'api': 56}}
                 or entry.read_bytes() != original_bytes):

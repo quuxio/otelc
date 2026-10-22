@@ -22,7 +22,7 @@ export function nativeVersion(run = spawnSync) {
   if (result.error || result.status !== 0 || result.stdout.trim() !== 'Version 7.0.2') throw new Error('TypeScript native backend requires the pinned executable compiler 7.0.2');
   return '7.0.2';
 }
-export function nativeEmit(source, filename, sourceName, plan, options, run = spawnSync, root = process.cwd()) {
+function prepareSource(source, filename, sourceName, plan) {
   const augmented = new MagicString(source);
   const identities = plan.plain ? [] : collectIdentities(source, filename, sourceName, plan);
   const classes = plan.plain ? [] : collectLifetimeClasses(source, filename, sourceName, plan);
@@ -36,6 +36,29 @@ export function nativeEmit(source, filename, sourceName, plan, options, run = sp
     // directive survives emission and is removed before probes or application execution.
     augmented.appendLeft(item.position, item.block ? JSON.stringify(marker) + ';' : '/*' + marker + '*/');
   }
+  return { augmented, identities, classes };
+}
+
+function writeCompilerConfig(directory, input, output, options) {
+  const settings = Object.fromEntries(ts.serializeCompilerOptions(options));
+  delete settings.tsBuildInfoFile;
+  Object.assign(settings, { rootDir: directory, outDir: output, noEmit: false, noEmitOnError: false,
+    noCheck: true, noResolve: true, incremental: false, composite: false, types: [], moduleResolution: 'bundler' });
+  // CommonJS emission uses Node resolution; this adapter does not type-check projects.
+  if (settings.module === 'commonjs') Object.assign(settings, { moduleResolution: 'node16', module: 'node16' });
+  const config = path.join(directory, 'tsconfig.json');
+  fs.writeFileSync(config, JSON.stringify({ compilerOptions: settings, files: [input] }));
+  return config;
+}
+
+function emittedFormat(filename) {
+  if (filename.endsWith('.cts')) return 'commonjs';
+  if (filename.endsWith('.mts')) return 'module';
+  return undefined;
+}
+
+export function nativeEmit(source, filename, sourceName, plan, options, run = spawnSync, root = process.cwd()) {
+  const { augmented, identities, classes } = prepareSource(source, filename, sourceName, plan);
   const temporary = fs.realpathSync(os.tmpdir());
   const relative = path.relative(fs.realpathSync(root), temporary);
   if (relative === '' || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) throw new Error('native TypeScript workspace must be outside the source project');
@@ -43,17 +66,13 @@ export function nativeEmit(source, filename, sourceName, plan, options, run = sp
   try {
     const input = path.join(directory, path.basename(filename)), output = path.join(directory, 'emitted');
     fs.writeFileSync(input, augmented.toString());
-    const settings = Object.fromEntries(ts.serializeCompilerOptions(options));
-    delete settings.tsBuildInfoFile;
-    Object.assign(settings, { rootDir: directory, outDir: output, noEmit: false, noEmitOnError: false,
-      noCheck: true, noResolve: true, incremental: false, composite: false, types: [], moduleResolution: 'bundler' });
-    // CommonJS emission uses Node resolution; this adapter does not type-check projects.
-    if (settings.module === 'commonjs') Object.assign(settings, { moduleResolution: 'node16', module: 'node16' });
-    const config = path.join(directory, 'tsconfig.json');
-    fs.writeFileSync(config, JSON.stringify({ compilerOptions: settings, files: [input] }));
+    const config = writeCompilerConfig(directory, input, output, options);
     const result = run(nativeBinary(), ['--project', config], { encoding: 'utf8', timeout: 30000, maxBuffer: 1048576 });
     if (result.error || result.status !== 0) throw new Error('TypeScript native emission failed for ' + filename + ': ' + (result.error?.message ?? result.stdout + result.stderr));
-    const extension = /\.mts$/.test(filename) ? '.mjs' : /\.cts$/.test(filename) ? '.cjs' : '.js';
+    const format = emittedFormat(filename);
+    let extension = '.js';
+    if (format === 'module') extension = '.mjs';
+    if (format === 'commonjs') extension = '.cjs';
     const generated = path.join(output, path.basename(filename).replace(/\.(?:ts|mts|cts)$/, extension));
     const code = fs.readFileSync(generated, 'utf8');
     for (const item of classes) {
@@ -66,6 +85,6 @@ export function nativeEmit(source, filename, sourceName, plan, options, run = sp
     const original = augmented.generateMap({ source: filename, file: path.basename(input), includeContent: true, hires: true });
     const map = remapping([emitted, original], () => null);
     return { code: code.replace(/\n\/\/# sourceMappingURL=.*(?:\n|$)/, '\n'), map,
-      format: /\.cts$/.test(filename) ? 'commonjs' : /\.mts$/.test(filename) ? 'module' : undefined };
+      format };
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }

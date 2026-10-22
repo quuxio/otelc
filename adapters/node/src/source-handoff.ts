@@ -44,20 +44,24 @@ export class SourceHandoffWriter {
         chunk.writeUInt32BE(MAGIC, 0); chunk.writeUInt32BE(id, 4);
         chunk.writeUInt16BE(part, 8); chunk.writeUInt16BE(total, 10); chunk.writeUInt16BE(payload.length, 12);
         payload.copy(chunk, HEADER);
-        for (;;) {
-          try {
-            if (writeSync(this.#descriptor, chunk) !== chunk.length) { this.close(); throw new Error('partial atomic write'); }
-            break;
-          } catch (error) {
-            if (!(error instanceof Error) || !('code' in error) || error.code !== 'EAGAIN'
-                || monotonicNs() >= deadline) throw error;
-            wait(sleeper, 0, 0, 1);
-          }
-        }
+        this.#writeChunk(chunk, deadline);
       }
       this.accepted++;
       return true;
     } catch { this.lost++; return false; }
+  }
+
+  #writeChunk(chunk: Buffer, deadline: bigint): void {
+    for (;;) {
+      try {
+        if (writeSync(this.#descriptor, chunk) !== chunk.length) { this.close(); throw new Error('partial atomic write'); }
+        return;
+      } catch (error) {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'EAGAIN'
+            || monotonicNs() >= deadline) throw error;
+        wait(sleeper, 0, 0, 1);
+      }
+    }
   }
 
   status() { return { attempted: this.attempted, accepted: this.accepted, lost: this.lost, deadline_ms: 50 }; }
@@ -87,10 +91,7 @@ export class SourceHandoffReader {
       }
       if (chunk.length < HEADER + length) break;
       this.#buffer = chunk.subarray(HEADER + length);
-      if (id !== this.#id) {
-        if (this.#record.length) this.lost++;
-        this.#id = id; this.#part = 0; this.#total = total; this.#size = 0; this.#record = [];
-      }
+      if (id !== this.#id) this.#beginRecord(id, total);
       if (part !== this.#part || total !== this.#total || this.#size + length > MAX_RECORD) {
         throw new Error('invalid source handoff record');
       }
@@ -101,6 +102,11 @@ export class SourceHandoffReader {
       messages.push(value); this.accepted++; this.#record = [];
     }
     return messages;
+  }
+
+  #beginRecord(id: number, total: number): void {
+    if (this.#record.length) this.lost++;
+    this.#id = id; this.#part = 0; this.#total = total; this.#size = 0; this.#record = [];
   }
 
   finish(): void { if (this.#buffer.length || this.#record.length) this.lost++; }

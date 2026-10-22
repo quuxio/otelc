@@ -65,7 +65,8 @@ function commandFrom(data: Buffer, secret: Buffer): string | undefined {
 /** Private authenticated control transport shared by JS and TS owned pipelines. */
 export class LocalMetricControl {
   readonly filename: string;
-  readonly ready: Promise<void>;
+  readonly #publication = Promise.withResolvers<void>();
+  readonly ready = this.#publication.promise;
   readonly #pipeline: IControlledPipeline;
   readonly #server: Server;
   readonly #secret = randomBytes(32).toString('hex');
@@ -83,7 +84,11 @@ export class LocalMetricControl {
     // Transport errors are exposed to the owner; they must not throw into app code.
     this.#server.on('error', () => { this.#transportFailed = true; });
     this.#server.unref();
-    this.ready = new Promise<void>((resolve, reject) => {
+  }
+
+  #listen(): void {
+    const { resolve, reject } = this.#publication;
+    try {
       this.#server.once('error', reject);
       this.#server.listen({ port: 0, host: '127.0.0.1', exclusive: true }, () => {
         this.#server.removeListener('error', reject);
@@ -98,7 +103,7 @@ export class LocalMetricControl {
           resolve();
         } catch (error) { reject(error); }
       });
-    });
+    } catch (error) { reject(error); }
     void this.ready.catch(() => { if (!this.#closed) this.#transportFailed = true; });
   }
 
@@ -109,7 +114,9 @@ export class LocalMetricControl {
     const metadata = lstatSync(directory);
     if (!metadata.isDirectory() || metadata.uid !== process.getuid?.()
         || (metadata.mode & 0o7777) !== 0o700) throw new Error('control directory must be owned and mode 0700');
-    return new LocalMetricControl(directory, pipeline);
+    const control = new LocalMetricControl(directory, pipeline);
+    control.#listen();
+    return control;
   }
 
   /** Async owners can await publication; source preload uses start before main entry. */

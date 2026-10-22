@@ -89,7 +89,7 @@ export class SourceLifetimes {
   admit(value: object, constructor: object, name: string, parent?: SpanContext): void {
     if (this.#closed || !this.#observing()) return;
     const type = this.#constructors.get(constructor);
-    if (!type || type.name !== name) { this.lose('unsupported_constructor'); return; }
+    if (type?.name !== name) { this.lose('unsupported_constructor'); return; }
     if (this.#identities.has(value)) return;
     if (this.#instances.size >= this.#plan.lifetimes.max_live || this.#next >= Number.MAX_SAFE_INTEGER) {
       this.lose('lifetime_capacity'); return;
@@ -112,7 +112,7 @@ export class SourceLifetimes {
     if (this.#closed) return;
     const token = this.#identities.get(value);
     const item = token === undefined ? undefined : this.#instances.get(token);
-    if (!item || item.name !== name || !item.resource || item.released
+    if (item?.name !== name || !item.resource || item.released
         || (item.type !== this.#constructors.get(owner) && item.type.keys !== owner) || !item.type.sites.has(site)) return;
     item.released = true; this.#resourceCompleted++; this.#openResources--;
     this.#complete(item, 'resource');

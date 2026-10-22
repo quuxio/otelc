@@ -2,15 +2,19 @@ import path from 'node:path';
 
 export interface IPatterns { include: string[]; exclude: string[] }
 
+function characterExpression(character: string, paths: boolean): string {
+  if (character === '*') return paths ? '[^/]*' : '.*';
+  if (character === '?') return paths ? '[^/]' : '.';
+  return /[\\^$.*+?()[\]{}|]/.test(character) ? '\\' + character : character;
+}
+
 function expression(pattern: string, paths: boolean): RegExp {
   let result = '';
   for (let index = 0; index < pattern.length;) {
     if (paths && pattern.startsWith('**/', index)) { result += '(?:.*/)?'; index += 3; continue; }
     if (paths && pattern.startsWith('**', index)) { result += '.*'; index += 2; continue; }
     const character = String.fromCodePoint(pattern.codePointAt(index)!);
-    if (character === '*') result += paths ? '[^/]*' : '.*';
-    else if (character === '?') result += paths ? '[^/]' : '.';
-    else result += /[\\^$.*+?()[\]{}|]/.test(character) ? '\\' + character : character;
+    result += characterExpression(character, paths);
     index += character.length;
   }
   return new RegExp('^' + result + '$', 'su');

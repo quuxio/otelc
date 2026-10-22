@@ -10,7 +10,18 @@ import { SourceHandoffReader } from './source-handoff.ts';
 import type { ISourcePlan } from './source-plan.ts';
 import type { ISourceMetric, SourceCheckpointType, SourceSdkRecordType } from './source-sdk-protocol.ts';
 
-const plan = JSON.parse(readFileSync(process.argv[2], 'utf8')) as ISourcePlan;
+function inheritedPlan(): ISourcePlan {
+  // FD 4 is the parent's verified private plan, not an application/CLI pathname.
+  const descriptor = 4;
+  const metadata = fstatSync(descriptor);
+  if (!metadata.isFile() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) {
+    throw new Error('source SDK requires an inherited private plan descriptor');
+  }
+  try { return JSON.parse(readFileSync(descriptor, 'utf8')) as ISourcePlan; }
+  finally { closeSync(descriptor); }
+}
+
+const plan = inheritedPlan();
 const pipeline = new OwnedSdkPipeline(plan, { language: plan.language, instanceId: plan.launch_id });
 const reader = new SourceHandoffReader();
 const metrics = new Map<string, Counter | Histogram | Gauge>();
@@ -21,14 +32,20 @@ let failed = false;
 let stopping = false;
 let spansReceived = 0;
 
+function createInstrument(record: ISourceMetric): Counter | Histogram | Gauge {
+  const meter = pipeline.meterProvider.getMeter(record.scope, record.version, { schemaUrl: record.schemaUrl });
+  switch (record.instrument) {
+    case 'counter': return meter.createCounter(record.name, record.options);
+    case 'histogram': return meter.createHistogram(record.name, record.options);
+    case 'gauge': return meter.createGauge(record.name, record.options);
+  }
+}
+
 function recordMetric(record: ISourceMetric): void {
   const key = JSON.stringify([record.scope, record.version, record.schemaUrl, record.instrument, record.name, record.options]);
   let instrument = metrics.get(key);
   if (!instrument) {
-    const meter = pipeline.meterProvider.getMeter(record.scope, record.version, { schemaUrl: record.schemaUrl });
-    instrument = record.instrument === 'counter' ? meter.createCounter(record.name, record.options)
-      : record.instrument === 'histogram' ? meter.createHistogram(record.name, record.options)
-        : meter.createGauge(record.name, record.options);
+    instrument = createInstrument(record);
     metrics.set(key, instrument);
   }
   const active = record.context ? trace.setSpanContext(ROOT_CONTEXT, contextFromWire(record.context)) : ROOT_CONTEXT;
@@ -63,6 +80,14 @@ async function consume(record: SourceSdkRecordType): Promise<void> {
   }
 }
 
+function consumeBatch(chunk: Buffer): Promise<boolean> {
+  // Commands are barriers in the FIFO, never parallel export operations. A
+  // shutdown completes its current decoded batch and refuses subsequent ones.
+  if (stopping) return Promise.resolve(true);
+  return reader.push(chunk).reduce<Promise<void>>((previous, record) =>
+    previous.then(() => consume(record as SourceSdkRecordType)), Promise.resolve()).then(() => stopping);
+}
+
 const input = openSync(path.join(plan.runtime.directory, 'node-events.fifo'), constants.O_RDONLY | constants.O_NOFOLLOW);
 const metadata = fstatSync(input);
 if (!metadata.isFIFO() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) {
@@ -74,9 +99,10 @@ publishDescriptor(path.join(plan.runtime.directory, 'node-sdk-ready.json'),
 // to the application. Only actual EOF establishes the end of the record stream.
 process.on('disconnect', () => { /* Drain the FIFO before the SDK. */ });
 try {
-  for await (const chunk of createReadStream('', { fd: input, autoClose: true })) {
-    for (const record of reader.push(chunk as Buffer)) await consume(record as SourceSdkRecordType);
-    if (stopping) break;
+  const batches = createReadStream('', { fd: input, autoClose: true })
+    .map(consumeBatch, { concurrency: 1 });
+  for await (const stopped of batches) {
+    if (stopped) break;
   }
   reader.finish();
 } catch { failed = true; }
