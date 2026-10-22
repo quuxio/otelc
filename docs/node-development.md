@@ -18,6 +18,8 @@ make node-check
 
 `make node-check` builds the public-V8 Promise observer, enforces its own 80% LLVM line-coverage floor, checks types with Microsoft TypeScript 7, and runs Node tests with an 80% source-component coverage floor. Ordinary application integration tests contribute actual loader/compiler/runtime coverage. The coverage build restores the ordinary binary before other checks or benchmarks. Both builds publish atomically so an existing mapped binary is preserved.
 
+The ordinary integration suite also makes an isolated `npm ci --omit=dev` installation and runs a typed application through both actual compiler profiles. The native Microsoft compiler and its matching platform package are runtime dependencies, not development-only tools. This packaging check verifies compiler availability and unchanged input/output; it does not replace prepared-launch provenance or full application qualification.
+
 It also generates the pinned HTTP preservation product with `make node-http`. Its manifest binds exact upstream runtime files, the helper and the private product identity. Changed upstream source, stale helpers or modified products fail validation before application execution. Installed upstream packages remain unchanged.
 
 Select another installed runtime explicitly:
