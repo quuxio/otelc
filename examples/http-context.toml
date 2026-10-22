@@ -13,7 +13,7 @@ include = ["examples/**"]
 exclude = []
 
 [functions]
-include = ["*.workloadRequest", "*.workloadHandle", "*.request", "*.handle"]
+include = ["*.workloadRequest", "*.workloadHandle", "HttpContextApp.request(*)", "HttpContextApp.handle(*)"]
 
 [context]
 http = true
