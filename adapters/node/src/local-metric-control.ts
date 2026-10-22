@@ -3,9 +3,16 @@ import { closeSync, fchmodSync, fstatSync, linkSync, lstatSync, openSync, readFi
 import { createServer } from 'node:net';
 import type { AddressInfo, Server, Socket } from 'node:net';
 import path from 'node:path';
-import type { OwnedSdkPipeline } from './sdk-pipeline.ts';
+import type { MetricControls } from './metric-controls.ts';
 
 interface IDescriptorIdentity { device: bigint; inode: bigint; sha256?: string }
+export interface IControlDescriptor { filename: string; device: string; inode: string; sha256: string }
+export interface IControlledPipeline {
+  readonly controls: MetricControls;
+  status(): object | Promise<object>;
+  flush(): Promise<void>;
+  descriptorPublished?(descriptor: IControlDescriptor): void;
+}
 
 function digest(data: Buffer | string): string { return createHash('sha256').update(data).digest('hex'); }
 
@@ -19,7 +26,14 @@ function removeOwnedFile(filename: string, identity: IDescriptorIdentity): void 
   }
 }
 
-function publishDescriptor(filename: string, contents: string): IDescriptorIdentity {
+/** A surviving SDK owner removes only the unchanged descriptor published by its parent. */
+export function removeControlDescriptor(descriptor: IControlDescriptor): void {
+  removeOwnedFile(descriptor.filename, { device: BigInt(descriptor.device), inode: BigInt(descriptor.inode),
+    sha256: descriptor.sha256 });
+}
+
+/** Atomically publish complete private protocol metadata without replacing another owner. */
+export function publishDescriptor(filename: string, contents: string): IDescriptorIdentity {
   const temporary = filename + '.' + randomBytes(16).toString('hex');
   const file = openSync(temporary, 'wx', 0o600);
   const metadata = fstatSync(file, { bigint: true });
@@ -51,7 +65,9 @@ function commandFrom(data: Buffer, secret: Buffer): string | undefined {
 /** Private authenticated control transport shared by JS and TS owned pipelines. */
 export class LocalMetricControl {
   readonly filename: string;
-  readonly #pipeline: OwnedSdkPipeline;
+  readonly #publication = Promise.withResolvers<void>();
+  readonly ready = this.#publication.promise;
+  readonly #pipeline: IControlledPipeline;
   readonly #server: Server;
   readonly #secret = randomBytes(32).toString('hex');
   readonly #connections = new Set<Socket>();
@@ -60,39 +76,61 @@ export class LocalMetricControl {
   #transportFailed = false;
   #closing: Promise<void> | undefined;
 
-  private constructor(directory: string, pipeline: OwnedSdkPipeline) {
+  private constructor(directory: string, pipeline: IControlledPipeline) {
     this.filename = path.join(directory, 'control.json');
     this.#pipeline = pipeline;
     this.#server = createServer(socket => this.#accept(socket));
     this.#server.maxConnections = 32;
     // Transport errors are exposed to the owner; they must not throw into app code.
     this.#server.on('error', () => { this.#transportFailed = true; });
+    this.#server.unref();
+  }
+
+  #listen(): void {
+    const { resolve, reject } = this.#publication;
+    try {
+      this.#server.once('error', reject);
+      this.#server.listen({ port: 0, host: '127.0.0.1', exclusive: true }, () => {
+        this.#server.removeListener('error', reject);
+        if (this.#closed) { reject(new Error('control closed before publication')); return; }
+        try {
+          const address = this.#server.address() as AddressInfo;
+          const contents = JSON.stringify({ schema_version: 1, kind: 'otelc.control.tcp', host: '127.0.0.1',
+            port: address.port, pid: process.pid, token: this.#secret }) + '\n';
+          this.#identity = publishDescriptor(this.filename, contents);
+          // Transfer cleanup ownership before user microtasks can exit the process.
+          this.#pipeline.descriptorPublished?.(this.cleanupDescriptor());
+          resolve();
+        } catch (error) { reject(error); }
+      });
+    } catch (error) { reject(error); }
+    void this.ready.catch(() => { if (!this.#closed) this.#transportFailed = true; });
   }
 
   get transportFailed(): boolean { return this.#transportFailed; }
 
-  /** Publish only after listening; the endpoint file never contains partial JSON. */
-  static async listen(directory: string, pipeline: OwnedSdkPipeline): Promise<LocalMetricControl> {
+  /** Start unreferenced control setup without advancing the application's event loop. */
+  static start(directory: string, pipeline: IControlledPipeline): LocalMetricControl {
     const metadata = lstatSync(directory);
     if (!metadata.isDirectory() || metadata.uid !== process.getuid?.()
         || (metadata.mode & 0o7777) !== 0o700) throw new Error('control directory must be owned and mode 0700');
     const control = new LocalMetricControl(directory, pipeline);
-    try {
-      await new Promise<void>((resolve, reject) => {
-        control.#server.once('error', reject);
-        control.#server.listen({ port: 0, host: '127.0.0.1', exclusive: true }, () => {
-          control.#server.removeListener('error', reject);
-          resolve();
-        });
-      });
-      // Only this class owns the server; the completed TCP listen supplies AddressInfo.
-      const address = control.#server.address() as AddressInfo;
-      const contents = JSON.stringify({ schema_version: 1, kind: 'otelc.control.tcp', host: '127.0.0.1',
-        port: address.port, pid: process.pid, token: control.#secret }) + '\n';
-      control.#identity = publishDescriptor(control.filename, contents);
-      control.#server.unref();
-      return control;
-    } catch (error) { await control.close(); throw error; }
+    control.#listen();
+    return control;
+  }
+
+  /** Async owners can await publication; source preload uses start before main entry. */
+  static async listen(directory: string, pipeline: IControlledPipeline): Promise<LocalMetricControl> {
+    const control = LocalMetricControl.start(directory, pipeline);
+    try { await control.ready; return control; }
+    catch (error) { await control.close(); throw error; }
+  }
+
+  /** Share identity only, never the control authentication key, with the private SDK process. */
+  cleanupDescriptor(): IControlDescriptor {
+    if (!this.#identity?.sha256) throw new Error('control endpoint is not published');
+    return { filename: this.filename, device: String(this.#identity.device), inode: String(this.#identity.inode),
+      sha256: this.#identity.sha256 };
   }
 
   #accept(socket: Socket): void {
@@ -113,7 +151,8 @@ export class LocalMetricControl {
       completed = true;
       socket.setTimeout(0);
       const command = newline === data.length - 1 ? commandFrom(data.subarray(0, newline), Buffer.from(this.#secret, 'ascii')) : undefined;
-      void this.#execute(command).then(reply => socket.end(JSON.stringify(reply) + '\n'));
+      void this.#execute(command).catch(() => ({ error: 'owned SDK control failed' }))
+        .then(reply => socket.end(JSON.stringify(reply) + '\n'));
     });
   }
 
@@ -132,13 +171,14 @@ export class LocalMetricControl {
         break;
       default: return { error: 'invalid control request' };
     }
-    return this.#pipeline.status();
+    try { return await this.#pipeline.status(); }
+    catch { return { error: 'owned SDK status failed' }; }
   }
 
   /** Destroy idle peers before closing; preserve a replaced or edited descriptor. */
   close(): Promise<void> {
     this.#closed = true;
-    this.#closing ??= new Promise<void>((resolve, reject) => {
+    this.#closing ??= this.ready.catch(() => {}).then(() => new Promise<void>((resolve, reject) => {
       const finish = (error?: Error): void => {
         try {
           if (this.#identity) removeOwnedFile(this.filename, this.#identity);
@@ -149,7 +189,7 @@ export class LocalMetricControl {
       if (this.#server.listening) this.#server.close(finish);
       else finish();
       for (const connection of this.#connections) connection.destroy();
-    });
+    }));
     return this.#closing;
   }
 }

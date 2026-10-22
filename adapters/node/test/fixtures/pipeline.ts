@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
-import { ValueType } from '@opentelemetry/api';
+import { createTraceState, ROOT_CONTEXT, SpanStatusCode, trace, TraceFlags, ValueType } from '@opentelemetry/api';
 import { OwnedSdkPipeline } from '../../src/sdk-pipeline.ts';
 import type { ISdkPolicy } from '../../src/sdk-pipeline.ts';
 import { LocalMetricControl } from '../../src/local-metric-control.ts';
@@ -24,6 +24,20 @@ for await (const line of input) {
   if (line === 'quit') break;
   if (line === 'callbacks') {
     process.stdout.write(JSON.stringify({ callback_calls: callbackCalls }) + '\n');
+    continue;
+  }
+  if (line === 'linked') {
+    const parent = trace.setSpanContext(ROOT_CONTEXT, { traceId: '1'.repeat(32), spanId: '2'.repeat(16),
+      traceFlags: TraceFlags.SAMPLED, isRemote: true, traceState: createTraceState('vendor=kept') });
+    const linked = tracer.startSpan('SDK fixture linked', {
+      links: [{ context: { traceId: '3'.repeat(32), spanId: '4'.repeat(16), traceFlags: TraceFlags.SAMPLED,
+        traceState: createTraceState('other=kept') }, attributes: { 'link.fixture': 'kept' } }],
+      attributes: { 'span.fixture': 'kept' },
+    }, parent);
+    linked.addEvent('fixture event', { 'event.fixture': 'kept' });
+    linked.setStatus({ code: SpanStatusCode.ERROR, message: 'controlled fixture status' });
+    linked.end();
+    process.stdout.write('{"linked":true}\n');
     continue;
   }
   const count = Number(line);

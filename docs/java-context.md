@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-The common policy enables task and HTTP propagation separately. These are launch-time choices; the installed metric collection and emission switches remain live and independent. Enabling propagation currently requires `traces.enabled=true`. The defaults are both false. Setting a language name in this policy does not implement its adapter: this rebuild currently supports Java.
+The common policy enables task and HTTP propagation separately. These are launch-time choices; the installed metric collection and emission switches remain live and independent. Propagation can remain enabled with `traces.enabled=false`: the agent preserves unsampled context and HTTP metrics without exporting spans. The context defaults are both false. Setting a language name in this policy does not implement its adapter: this rebuild currently supports Java.
 
 ```toml
 [traces]

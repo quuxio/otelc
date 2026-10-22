@@ -2,7 +2,7 @@
   "uid": "otelc-comparison",
   "title": "otelc language performance comparison",
   "schemaVersion": 42,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "time": {
     "from": "now-1h",
@@ -242,6 +242,88 @@
         "tooltip": {
           "mode": "multi"
         }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Node CPU time per operation, including SDK flush window",
+      "type": "bargauge",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. These process windows currently cover Node only.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ns"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum by(language, mode, role) (otelc_benchmark_process_cpu_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode, role) (otelc_benchmark_process_cpu_duration_seconds_count{comparison_id=~\"$comparison_id\"})) * 1e9",
+          "legendFormat": "{{language}} {{mode}} {{role}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "id": 8,
+      "title": "Node process RSS snapshots; not allocation or peak memory",
+      "type": "bargauge",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. These process windows currently cover Node only.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(language, mode, role) (otelc_benchmark_process_rss_bytes_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode, role) (otelc_benchmark_process_rss_bytes_count{comparison_id=~\"$comparison_id\"})",
+          "legendFormat": "{{language}} {{mode}} {{role}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
       }
     }
   ]

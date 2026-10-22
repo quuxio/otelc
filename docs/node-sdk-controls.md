@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This is the first building block of the TypeScript/JavaScript rebuild. It does **not** enable a source-free application adapter or change the CLI's implemented-language list. Original-source compiler/probe integration, automatic context propagation, lifetimes, ordinary examples, benchmarks and independent oteleq qualification remain separate work. The archive's Microsoft compiler and probe components will be reused where qualified.
+This delivered foundation supplies the official SDK pipeline and live controls for the TypeScript/JavaScript rebuild. Source-free application launching, function/context/lifetime probes and compiler integration belong to the separate [Node source candidate](node-source.md), not this SDK component. The CLI keeps delivered languages separate from candidates while final benchmark and independent oteleq qualification remain open.
 
 ## Delivered building block
 

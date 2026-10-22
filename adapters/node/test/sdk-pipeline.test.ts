@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
+import { once } from 'node:events';
+import type { Worker } from 'node:worker_threads';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, it } from 'node:test';
@@ -14,6 +16,7 @@ import type { ISdkPolicy } from '../src/sdk-pipeline.ts';
 async function collector(t: TestContext) {
   const requests: Array<{ path: string; body: Buffer }> = [];
   let failMetrics = false;
+  let retryMetricAttempts = 0;
   let holdTraces = false;
   const traceSeen = Promise.withResolvers<void>();
   const heldResponses: Array<import('node:http').ServerResponse> = [];
@@ -29,7 +32,9 @@ async function collector(t: TestContext) {
         traceSeen.resolve();
         return;
       }
-      response.writeHead(failMetrics && request.url === '/v1/metrics' ? 400 : 200);
+      let status = failMetrics && request.url === '/v1/metrics' ? 400 : 200;
+      if (request.url === '/v1/metrics' && retryMetricAttempts > 0) { retryMetricAttempts--; status = 503; }
+      response.writeHead(status);
       response.end();
     });
   });
@@ -46,6 +51,7 @@ async function collector(t: TestContext) {
     export: { endpoint: `http://127.0.0.1:${address.port}`, interval_ms: 60_000,
       timeout_ms: 1000, shutdown_timeout_ms: 2000 } };
   return { policy, requests, failMetrics: (value: boolean) => { failMetrics = value; },
+    retryMetricsOnce: () => { retryMetricAttempts = 1; },
     cleanup: (operation: () => void | Promise<void>) => { cleanups.push(operation); },
     traceSeen: traceSeen.promise,
     holdTraces: () => { holdTraces = true; },
@@ -66,6 +72,71 @@ async function rpc(filename: string, command: string, alteredToken = false): Pro
 }
 
 describe('official owned SDK pipeline', () => {
+  it('fails an interrupted export honestly and drains every pending worker acknowledgement', async t => {
+    const c = await collector(t);
+    c.holdTraces();
+    const created = once(process, 'worker');
+    const pipeline = new OwnedSdkPipeline(c.policy);
+    const [worker] = await created as [Worker];
+    pipeline.tracerProvider.getTracer('fixture').startSpan('interrupted').end();
+    const failed = assert.rejects(pipeline.flush(), /owned OpenTelemetry SDK/);
+    await c.traceSeen;
+    assert.equal(pipeline.status().traces.pending, 1);
+    await worker.terminate();
+    await failed;
+    assert.equal(pipeline.status().phase, 'failed');
+    assert.equal(pipeline.status().traces.pending, 0);
+    assert.equal(pipeline.status().traces.failed, 1);
+    await assert.rejects(pipeline.shutdown(), /owned OpenTelemetry SDK/);
+  });
+
+  it('refuses excess concurrent flush work without leaving the SDK unusable', async t => {
+    const c = await collector(t);
+    const pipeline = new OwnedSdkPipeline(c.policy);
+    c.cleanup(() => pipeline.shutdown());
+    const outcomes = await Promise.allSettled(Array.from({ length: 256 }, () => pipeline.flush()));
+    assert(outcomes.some(result => result.status === 'fulfilled'));
+    assert(outcomes.some(result => result.status === 'rejected'));
+    await pipeline.flush();
+    assert.equal(pipeline.status().phase, 'running');
+  });
+
+  it('does not advance an application random generator when creating trace identities', async t => {
+    const c = await collector(t);
+    const pipeline = new OwnedSdkPipeline(c.policy);
+    c.cleanup(() => pipeline.shutdown());
+    const original = Math.random;
+    let calls = 0;
+    try {
+      Math.random = () => { calls++; return .25; };
+      const first = pipeline.tracerProvider.getTracer('fixture').startSpan('first');
+      const second = pipeline.tracerProvider.getTracer('fixture').startSpan('second');
+      first.end(); second.end();
+      await pipeline.flush();
+      assert.equal(calls, 0);
+      assert.notEqual(first.spanContext().traceId, second.spanContext().traceId);
+    } finally { Math.random = original; }
+  });
+
+  it('does not advance an application random generator during official exporter retries', async t => {
+    const c = await collector(t);
+    c.policy.metrics.collection = true; c.policy.metrics.emission = true;
+    c.policy.export.timeout_ms = 3000;
+    c.retryMetricsOnce();
+    const pipeline = new OwnedSdkPipeline(c.policy);
+    c.cleanup(() => pipeline.shutdown());
+    const original = Math.random;
+    let calls = 0;
+    try {
+      Math.random = () => { calls++; return .25; };
+      pipeline.meterProvider.getMeter('fixture').createCounter('calls').add(1);
+      await pipeline.flush();
+      assert.equal(c.requests.filter(request => request.path === '/v1/metrics').length, 2);
+      assert.equal(pipeline.status().export_succeeded, 1);
+      assert.equal(calls, 0);
+    } finally { Math.random = original; }
+  });
+
   it('keeps traces independent across all four metric states and reports real exporter responses', async t => {
     const c = await collector(t);
     const pipeline = new OwnedSdkPipeline(c.policy);
@@ -201,6 +272,20 @@ describe('private loopback metric controls', () => {
     const closed = new Promise<void>(resolve => idle.once('close', () => resolve()));
     await Promise.all([control.close(), control.close(), closed]);
     assert.equal(pipeline.status().phase, 'running', 'closing controls must not close either SDK signal');
+  });
+
+  it('can close before pending control publication without leaving an endpoint', async t => {
+    const c = await collector(t);
+    const pipeline = new OwnedSdkPipeline(c.policy);
+    c.cleanup(() => pipeline.shutdown());
+    const directory = mkdtempSync(path.join(tmpdir(), 'otelc-pending-control-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const control = LocalMetricControl.start(directory, pipeline);
+    const closed = control.close();
+    await assert.rejects(control.ready, /closed before publication/);
+    await closed;
+    assert.throws(() => statSync(control.filename), { code: 'ENOENT' });
+    assert.equal(control.transportFailed, false);
   });
 
   it('preserves a replaced or edited descriptor and refuses an occupied path', async t => {

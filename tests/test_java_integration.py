@@ -41,6 +41,9 @@ class Capture:
         self.metric_response_gate = threading.Event()
         self.metric_response_gate.set()
         self.metric_request_seen = threading.Event()
+        self.trace_response_gate = threading.Event()
+        self.trace_response_gate.set()
+        self.trace_request_seen = threading.Event()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -76,6 +79,8 @@ class Capture:
                     message = ExportTraceServiceRequest()
                     message.ParseFromString(payload)
                     owner.traces.append(message)
+                    owner.trace_request_seen.set()
+                    owner.trace_response_gate.wait(timeout=10)
                 else:
                     self.send_error(404)
                     return
@@ -93,6 +98,7 @@ class Capture:
 
     def close(self) -> None:
         self.metric_response_gate.set()
+        self.trace_response_gate.set()
         self.server.shutdown()
         self.server.server_close()
         self.worker.join(2)

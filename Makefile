@@ -1,14 +1,15 @@
 PYTHON ?= .venv/bin/python
+OTELC_TEST_PYTHON ?= $(PYTHON)
 MAVEN ?= mvn
 NODE ?= $(if $(CI),node,$(if $(wildcard /opt/homebrew/opt/node@24/bin/node),/opt/homebrew/opt/node@24/bin/node,node))
 NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
 
-.PHONY: help setup check lint test node-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
+.PHONY: help setup check lint test node-check node-observer node-native-coverage node-http java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
 
 help:
-	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint and Java/Node/Python tests with component coverage gates' 'node-check  Check Microsoft TypeScript 7 types and Node SDK/control regressions' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile offline diagnostic action bindings (no runtime witness yet)' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
+	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint and Java/Node/Python tests with component coverage gates' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile offline diagnostic action bindings (no runtime witness yet)' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
 setup:
 	python3 -m venv .venv
@@ -16,9 +17,18 @@ setup:
 	PATH="$(NODE_PATH_PREFIX)$$PATH" npm ci --ignore-scripts --no-audit --cache "$(NPM_CACHE)"
 	PATH="$(NODE_PATH_PREFIX)$$PATH" npm ci --ignore-scripts --no-audit --cache "$(NPM_CACHE)" --prefix ci/markdownlint
 
-node-check:
+node-check: node-native-coverage node-http
 	mkdir -p build
-	PATH="$(NODE_PATH_PREFIX)$$PATH" npm run check:node
+	OTELC_TEST_PYTHON="$(OTELC_TEST_PYTHON)" PATH="$(NODE_PATH_PREFIX)$$PATH" npm run check:node
+
+node-observer:
+	OTELC_NODE="$(NODE)" $(PYTHON) ci/build_node_observer.py
+
+node-http:
+	$(PYTHON) ci/build_node_http.py
+
+node-native-coverage: node-observer
+	OTELC_NODE="$(NODE)" $(PYTHON) ci/check_node_native_coverage.py
 
 java-build:
 	$(MAVEN) -q -f adapters/java/pom.xml -DskipTests package
@@ -43,9 +53,9 @@ lint:
 	ci/markdownlint/node_modules/.bin/markdownlint '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore '**/target/**' --ignore 'build/**'
 	$(PYTHON) -m compileall -q otelc ci tests
 
-test: java-build
+test: java-build node-observer node-http
 	mkdir -p build
-	$(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
+	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
 	$(PYTHON) -m coverage report --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 
