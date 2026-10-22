@@ -411,8 +411,8 @@ def loaded_inputs(runtime: Path, prefix: str, expected: dict[str, Any]) -> list[
         if record['kind'] == 'source':
             sources.add((record['path'], record['sha256']))
         records.append(record)
-    verify_module_records(runtime, prefix, records, expected)
     node_recipe.verify_startup(records, expected)
+    verify_module_records(runtime, prefix, records, expected)
     return records
 
 
