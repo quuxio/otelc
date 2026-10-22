@@ -7,6 +7,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import uuid
 import time
 from pathlib import Path
@@ -102,3 +103,25 @@ def wait_report(runtime: Path, timeout: float = 15.) -> dict[str, Any]:
                 return report
         time.sleep(.01)
     raise TimeoutError('independent Node SDK final report was not completed')
+
+
+def run(policy: Policy, runtime: Path, language: str, *, entry: Path | None = None,
+        root: Path = ROOT, backend: str = 'native', plain: bool = False,
+        arguments: tuple[str, ...] = ()) -> int:
+    """Keep generated inputs alive through SDK drain and retain application failures."""
+    invocation = command(policy, runtime, language, entry=entry, root=root,
+                         backend=backend, plain=plain)
+    if not plain:
+        print(f'Control descriptor: {runtime.resolve()}/control.json', file=sys.stderr)
+    result = subprocess.call([*invocation, *arguments])
+    if plain:
+        return result
+    try:
+        report = wait_report(runtime, timeout=policy.data['export']['shutdown_timeout_ms'] / 1000 + 2.)
+    except TimeoutError:
+        print(f'Node SDK final report unavailable: {runtime.resolve()}/node-status.json', file=sys.stderr)
+        return result or 1
+    if report['phase'] != 'closed':
+        print(f'Node SDK drain failed: {runtime.resolve()}/node-status.json', file=sys.stderr)
+        return result or 1
+    return result

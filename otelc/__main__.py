@@ -9,7 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from otelc import benchmark, control, health, java, prepared_java
+from otelc import benchmark, control, health, java, node, prepared_java
 from otelc.config import LANGUAGES, Policy
 
 
@@ -32,6 +32,14 @@ def main() -> int:
     prepared.add_argument("--prepare-only", action="store_true", help="emit JSON launch identity without starting Java")
     prepared.add_argument("--diagnostic-profile", action="store_true", help="disable JVM CDS in both comparison lanes")
     prepared.add_argument("arguments", nargs=argparse.REMAINDER)
+    original = commands.add_parser("node", help="launch original JavaScript or Microsoft TypeScript sources")
+    original.add_argument("--language", choices=("javascript", "typescript"), required=True)
+    original.add_argument("--root", type=Path, default=Path.cwd())
+    original.add_argument("--entry", type=Path, required=True)
+    original.add_argument("--runtime", type=Path, required=True, help="new private directory retained for reports")
+    original.add_argument("--backend", choices=("native", "api"), default="native")
+    original.add_argument("--plain", action="store_true")
+    original.add_argument("arguments", nargs=argparse.REMAINDER)
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--socket", type=Path, required=True)
     metrics.add_argument("operation", nargs="+", choices=("on", "off", "collection", "emission", "status", "flush"))
@@ -49,21 +57,29 @@ def main() -> int:
             print(json.dumps(value, indent=2))
             return 0
         policy = Policy.load(args.config)
+        if args.command == "node":
+            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            return node.run(policy, args.runtime, args.language, root=args.root, entry=args.entry,
+                            backend=args.backend, plain=args.plain, arguments=tuple(arguments))
         if args.command == "java":
             arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
             return prepared_java.run(args.manifest, policy, args.runtime, plain=args.plain,
                                      prepare_only=args.prepare_only, arguments=tuple(arguments),
                                      diagnostic_profile=args.diagnostic_profile)
         if args.command == "plan":
-            print(json.dumps({"policy": policy.data, "implemented": ["java"], "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
+            print(json.dumps({"policy": policy.data, "implemented": ["java"],
+                              "candidates": ["typescript", "javascript"],
+                              "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":
             report = benchmark.run(policy, args.output, publish=not args.no_publish)
             print(json.dumps({"report": str(args.output / "report.json"), "run_id": report["run_id"], "medians_ns": report["median_ns_per_operation"]}, indent=2))
             return 0
-        if args.language != "java":
+        if args.language not in ("java", "javascript", "typescript"):
             raise ValueError(f"{args.language} is not implemented in the rebuild yet")
         with tempfile.TemporaryDirectory(prefix="otelc-", dir="/tmp") as temporary:
+            if args.language != "java":
+                return node.run(policy, Path(temporary), args.language, plain=args.plain)
             command = java.command(policy, Path(temporary), plain=args.plain)
             if not args.plain:
                 print(f"Control socket: {temporary}/control.sock", file=sys.stderr)

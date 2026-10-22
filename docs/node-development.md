@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This adapter is under development. Java remains the delivered rebuilt language. The source-free Node adapter's command-line integration, prepared-launch provenance and benchmark/dashboard delivery are not complete. Function/task instrumentation and HTTP/HTTPS propagation are locally tested. The previous implementation remains on the archive branch for reference.
+This adapter is under development. Java remains the delivered rebuilt language. The [public Node launch commands](node-source.md) are available as a candidate; prepared-launch provenance and benchmark/dashboard delivery remain open. Function/task instrumentation and HTTP/HTTPS propagation are tested on the qualified profiles. The previous implementation remains on the archive branch for reference.
 
 The same schema-3 policy drives ordinary JavaScript and Microsoft TypeScript examples. Tests exercise the actual Microsoft 7.0.2 native compiler and Microsoft 6.0.3 compiler API, with generated probes and original module execution URLs. Application sources contain no telemetry imports, annotations or bootstrap. Generated plans and bootstrap are producer-owned files.
 
@@ -32,7 +32,7 @@ The integration tests use the selected Node executable. `OTELC_NODE_INCLUDE` can
 
 ## Runtime ownership and final evidence
 
-Function probes and the official trace SDK retain application scopes in the application process. Primitive measurements and ended SDK spans cross a private framed FIFO. A separate process owns official SDK metric aggregation, span batching, OTLP transport, retries and final drain. It has its own globals and does not run application code. Trace identity generation uses cryptographic randomness, leaving application `Math.random` state unchanged.
+Function probes and the official trace SDK retain application scopes in the application process. Primitive measurements and ended SDK spans cross a private framed FIFO. A separate process owns official SDK metric aggregation, span batching, OTLP transport, retries and final drain. It has its own globals and does not run application code. The verified private plan crosses an inherited file descriptor; the child does not open a CLI-selected plan pathname. FIFO control, flush and shutdown requests remain sequential, including within a decoded batch. Trace identity generation uses cryptographic randomness, leaving application `Math.random` state unchanged.
 
 Startup uses a generated synchronous `--require` preload. It waits on complete, private readiness metadata from the owned SDK process, with an exact PID/launch binding and a bounded startup deadline. The parent does not run a readiness I/O turn before CommonJS main. Its unreferenced control listener publishes on the normal next-tick queue. This preserves zero-delay unreferenced timers and the qualified ordering of a due timer versus a referenced immediate callback. Application timers are not intercepted or rewritten.
 
@@ -84,4 +84,4 @@ Selected collection classes in parameter initialisers and anonymous collection c
 
 Observed GC is distinct from destruction. Production instrumentation never forces GC. Fixture-only `--expose-gc` is used to test bounded observations; missing fixture collection is incomplete evidence, not proof of a leak. Resource observation currently requires an existing synchronous zero-argument void method. Failed/duplicate close and failed construction do not fabricate completions. Uncompleted lifetimes are retained as censored counts at process exit.
 
-The source adapter still needs broader CJS/ESM/compiler semantic cases, public CLI/prepared manifests, equivalent benchmarks, Grafana proof, final review and required CI/Sonar gates. Browser execution, fetch/Undici, arbitrary VM contexts, inheritance, async/value-returning release methods, selected async generators and several source constructs remain unsupported. Do not present this development branch as a complete language release.
+The source adapter still needs broader CJS/ESM/compiler semantic cases, prepared manifests, equivalent benchmarks, Grafana proof, final review and required CI/Sonar gates. Browser execution, fetch/Undici, arbitrary VM contexts, inheritance, async/value-returning release methods, selected async generators and several source constructs remain unsupported. Do not present this development branch as a complete language release.
