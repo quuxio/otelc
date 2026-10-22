@@ -1,4 +1,4 @@
-import { realpathSync, readFileSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import type { ModuleSource } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -8,12 +8,12 @@ import { LocalMetricControl } from './local-metric-control.ts';
 import { Selection, sourceName } from './selection.ts';
 import { RUNTIME, SourceRuntime } from './source-runtime.ts';
 import type { ISourcePlan } from './source-plan.ts';
+import { SourceInputs } from './source-inputs.ts';
 
 const producerRoot = fileURLToPath(new URL('./', import.meta.url));
 const globals = globalThis as typeof globalThis & { [RUNTIME]?: SourceRuntime };
 
-function sourceText(source: ModuleSource | undefined | null, filename: string): string {
-  if (source === undefined || source === null) return readFileSync(filename, 'utf8');
+function sourceText(source: ModuleSource): string {
   if (typeof source === 'string') return source;
   return new TextDecoder('utf-8', { ignoreBOM: true }).decode(source);
 }
@@ -24,6 +24,7 @@ export function installSource(plan: ISourcePlan): {
 } {
   if (globals[RUNTIME]) throw new Error('otelc source instrumentation is already installed');
   const root = realpathSync(plan.runtime.root);
+  const inputs = new SourceInputs(plan);
   const selection = new Selection(plan.source_matchers, true);
   const runtime = SourceRuntime.start(plan);
   let control: LocalMetricControl;
@@ -40,17 +41,29 @@ export function installSource(plan: ISourcePlan): {
       const selected = selection.accepts(name);
       const execution = selected ? plan : { ...plan, plain: true, functions: { include: [], exclude: [] },
         function_matchers: { include: [], exclude: [] }, lifetimes: { ...plan.lifetimes, enabled: false } };
-      const prepared = transpile(readFileSync(filename, 'utf8'), filename, name, execution, root,
-        context.format?.replace('-typescript', ''));
-      if (!selected) return { format: prepared.format ?? 'module', shortCircuit: true,
-        source: prepared.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(prepared.map)).toString('base64') };
+      const prepared = transpile(inputs.source(filename), filename, name, execution, root,
+        context.format?.replace('-typescript', ''), inputs.config);
+      inputs.emitted(filename, name, url, prepared.code, prepared.format, 'compiled', prepared.map);
+      if (!selected) {
+        const source = prepared.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(prepared.map)).toString('base64');
+        inputs.emitted(filename, name, url, source, prepared.format ?? 'module', 'loaded', prepared.map);
+        return { format: prepared.format ?? 'module', shortCircuit: true, source };
+      }
       const output = transform(prepared.code, filename, name, execution, runtime, prepared);
+      inputs.emitted(filename, name, url, output.code, output.format, 'instrumented');
       return { format: output.format, shortCircuit: true, source: output.code };
     }
     const loaded = nextLoad(url, context);
-    if (!selection.accepts(name) || !/\.(?:mjs|cjs|js)$/.test(filename)) return loaded;
-    const source = sourceText(loaded.source, filename);
-    return { ...loaded, source: transform(source, filename, name, plan, runtime).code };
+    if (!/\.(?:mjs|cjs|js)$/.test(filename)) return loaded;
+    const source = inputs.source(filename, loaded.source === undefined || loaded.source === null
+      ? undefined : sourceText(loaded.source));
+    if (!selection.accepts(name)) {
+      inputs.emitted(filename, name, url, source, loaded.format ?? undefined, 'loaded');
+      return loaded;
+    }
+    const output = transform(source, filename, name, plan, runtime).code;
+    inputs.emitted(filename, name, url, output, loaded.format ?? undefined, 'instrumented');
+    return { ...loaded, source: output };
   } });
   let closing: Promise<void> | undefined;
   return { runtime, control, close() {

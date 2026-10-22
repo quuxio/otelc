@@ -1,5 +1,4 @@
 // Preserve original function identities through the actual TypeScript compiler emit.
-import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript-api';
 import { IDENTITY } from './transform.mjs';
@@ -11,13 +10,13 @@ function error(diagnostics) {
   const failures = diagnostics.filter(value => value.category === ts.DiagnosticCategory.Error);
   if (failures.length) throw new Error(failures.map(value => ts.flattenDiagnosticMessageText(value.messageText, '\n')).join('\n'));
 }
-export function compilerOptions(root = process.cwd()) {
+export function compilerOptions(root = process.cwd(), readFile = ts.sys.readFile) {
   const config = path.join(root, 'tsconfig.json');
   let options = {};
-  if (fs.existsSync(config)) {
-    const read = ts.readConfigFile(config, ts.sys.readFile);
+  if (readFile(config) !== undefined) {
+    const read = ts.readConfigFile(config, readFile);
     if (read.error) error([read.error]);
-    const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, root);
+    const parsed = ts.parseJsonConfigFileContent(read.config, { ...ts.sys, readFile }, root);
     error(parsed.errors.filter(value => value.code !== 18003));
     options = parsed.options;
   }
@@ -37,10 +36,10 @@ function executionFormat(filename, moduleKind, hint) {
   if (moduleKind === ts.ModuleKind.CommonJS) return 'commonjs';
   return undefined;
 }
-export function transpile(source, filename, sourceName, plan, root = process.cwd(), hintedFormat = undefined) {
+export function transpile(source, filename, sourceName, plan, root = process.cwd(), hintedFormat = undefined, readFile = ts.sys.readFile) {
   if (/\.d\.(?:ts|mts|cts)$/.test(filename) || filename.endsWith('.tsx')) throw new Error('TypeScript declarations and JSX are not executable adapter inputs');
   if (source.includes(IDENTITY) || source.includes(TYPE_IDENTITY)) throw new Error('TypeScript source is already prepared for instrumentation');
-  const options = compilerOptions(root);
+  const options = compilerOptions(root, readFile);
   const format = executionFormat(filename, options.module, hintedFormat);
   // Emit the format Node will execute, before parsing or inserting probes.
   options.module = format === 'commonjs' ? ts.ModuleKind.CommonJS : ts.ModuleKind.Preserve;

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from otelc.config import Policy
+from otelc import node_provenance
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,7 +30,7 @@ def executable() -> str:
     version = subprocess.check_output([selected, '-p', 'process.versions.node'], text=True, env=environment).strip()
     if tuple(map(int, version.split('.'))) < (24, 11, 0):
         raise ValueError('Node 24.11+ is required')
-    return selected
+    return str(Path(shutil.which(selected) or selected).resolve(strict=True))
 
 
 def write_generated(directory: Path, filename: str, data: str) -> None:
@@ -65,14 +66,17 @@ def prepare(policy: Policy, runtime: Path, language: str, *, root: Path = ROOT,
 
 def command(policy: Policy, runtime: Path, language: str, *, plain: bool = False,
             entry: Path | None = None, root: Path = ROOT, backend: str = 'native',
-            gc_fixture: bool = False) -> list[str]:
+            gc_fixture: bool = False, arguments: tuple[str, ...] = ()) -> list[str]:
     """Launch ordinary original URLs; compiler outputs and bootstrap are producer-owned."""
     selected = executable()
     application = (entry or ROOT / 'examples' / language / ('BenchmarkApp.ts' if language == 'typescript' else 'BenchmarkApp.js')).resolve(strict=True)
     plan = prepare(policy, runtime, language, root=root, backend=backend, plain=plain)
     flags = ['--enable-source-maps', *(['--expose-gc'] if gc_fixture else [])]
     if plain and language == 'javascript':
-        return [selected, *flags, str(application)]
+        invocation = [selected, *flags, str(application), *arguments]
+        manifest = node_provenance.capture(ROOT, application, selected, plan, [], invocation)
+        write_generated(runtime, 'node-plain-launch.json', json.dumps(manifest, sort_keys=True) + '\n')
+        return invocation
     if not plain:
         os.mkfifo(runtime / 'node-events.fifo', 0o600)
     prefix = 'node-plain' if plain else 'node'
@@ -83,7 +87,10 @@ def command(policy: Policy, runtime: Path, language: str, *, plain: bool = False
     write_generated(runtime, bootstrap.name,
         'process.env.OTELC_NODE_PLAN = ' + json.dumps(str(plan_file.resolve())) + ';\n'
         'require(' + json.dumps(str(target)) + ');\n')
-    return [selected, *flags, '--require', str(bootstrap), str(application)]
+    invocation = [selected, *flags, '--require', str(bootstrap.resolve(strict=True)), str(application), *arguments]
+    manifest = node_provenance.capture(ROOT, application, selected, plan, [plan_file, bootstrap], invocation)
+    write_generated(runtime, prefix + '-launch.json', json.dumps(manifest, sort_keys=True) + '\n')
+    return invocation
 
 
 def wait_report(runtime: Path, timeout: float = 15.) -> dict[str, Any]:
@@ -112,18 +119,27 @@ def run(policy: Policy, runtime: Path, language: str, *, entry: Path | None = No
         arguments: tuple[str, ...] = ()) -> int:
     """Keep generated inputs alive through SDK drain and retain application failures."""
     invocation = command(policy, runtime, language, entry=entry, root=root,
-                         backend=backend, plain=plain)
+                         backend=backend, plain=plain, arguments=arguments)
+    prefix = 'node-plain' if plain else 'node'
+    manifest = json.loads((runtime / (prefix + '-launch.json')).read_text())
     if not plain:
         print(f'Control descriptor: {runtime.resolve()}/control.json', file=sys.stderr)
-    result = subprocess.call([*invocation, *arguments])
-    if plain:
-        return result
+    result = subprocess.call(invocation)
+    if not plain:
+        try:
+            report = wait_report(runtime, timeout=policy.data['export']['shutdown_timeout_ms'] / 1000 + 2.)
+            if report['phase'] != 'closed':
+                print(f'Node SDK drain failed: {runtime.resolve()}/node-status.json', file=sys.stderr)
+                result = result or 1
+        except TimeoutError:
+            print(f'Node SDK final report unavailable: {runtime.resolve()}/node-status.json', file=sys.stderr)
+            result = result or 1
     try:
-        report = wait_report(runtime, timeout=policy.data['export']['shutdown_timeout_ms'] / 1000 + 2.)
-    except TimeoutError:
-        print(f'Node SDK final report unavailable: {runtime.resolve()}/node-status.json', file=sys.stderr)
+        verified = node_provenance.finish(runtime, manifest)
+    except OSError:
+        print(f'Node launch input evidence could not be written: {runtime.resolve()}/{prefix}-inputs.json', file=sys.stderr)
         return result or 1
-    if report['phase'] != 'closed':
-        print(f'Node SDK drain failed: {runtime.resolve()}/node-status.json', file=sys.stderr)
-        return result or 1
+    if not verified:
+        print(f'Node launch input verification failed: {runtime.resolve()}/{prefix}-inputs.json', file=sys.stderr)
+        result = result or 1
     return result

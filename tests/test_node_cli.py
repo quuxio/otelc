@@ -204,7 +204,8 @@ class NodeCliTests(unittest.TestCase):
                 runtime = root / ('plain' if plain else 'instrumented')
                 invocation = [sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
                     '--language', language, '--entry', str(entry), '--root', str(root),
-                    '--runtime', str(runtime), '--backend', backend, *(['--plain'] if plain else []),
+                    '--runtime', str(runtime.relative_to(ROOT) if language == 'javascript' else runtime),
+                    '--backend', backend, *(['--plain'] if plain else []),
                     '--', *arguments]
                 result = subprocess.run(invocation, cwd=ROOT, capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, 7, result.stderr)
@@ -238,6 +239,8 @@ class NodeCliTests(unittest.TestCase):
                 with self.subTest(application_exit=application_exit, report=type(report).__name__):
                     with patch('otelc.node.command', return_value=['node', 'app']), \
                             patch('otelc.node.subprocess.call', return_value=application_exit), \
+                            patch('otelc.node.Path.read_text', return_value='{}'), \
+                            patch('otelc.node.node_provenance.finish', return_value=True), \
                             contextlib.redirect_stderr(io.StringIO()) as diagnostics:
                         if isinstance(report, Exception):
                             response = patch('otelc.node.wait_report', side_effect=report)

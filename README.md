@@ -6,7 +6,7 @@ One configuration for source-free instrumentation across languages, using offici
 
 This rebuild starts with **Java**. TypeScript/JavaScript, Python, Go, the LLVM backend, C, C++ and Rust follow in that order. The shared policy lists all targets; that does not mean each adapter is implemented. The [previous implementation](https://github.com/quuxio/otelc/tree/archive/pre-rebuild-2026-10-21) is retained for reuse and comparison. See the [rebuild plan and acceptance criteria](docs/rebuild-plan.md).
 
-The [Node source candidate](docs/node-source.md) now provides public launches for ordinary JavaScript and both Microsoft TypeScript compiler profiles. Its function/context/lifetime probes and live controls are being qualified; prepared provenance, paired benchmarks and final language acceptance remain open. `plan` reports these profiles separately from delivered adapters.
+The [Node source candidate](docs/node-source.md) now provides public launches for ordinary JavaScript and both Microsoft TypeScript compiler profiles, with retained [launch input evidence](docs/node-launch-inputs.md). Its function/context/lifetime probes and live controls are being qualified; complete prepared provenance, paired benchmarks and final language acceptance remain open. `plan` reports these profiles separately from delivered adapters.
 
 The [development notes](docs/node-development.md) describe compiler/runtime checks, independent SDK drain, qualified source boundaries and remaining delivery gaps.
 
