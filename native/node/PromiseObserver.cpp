@@ -162,8 +162,11 @@ void Initialize(Local<Object> exports, Local<Value>, Local<v8::Context> context,
   auto* state = new ObserverState(isolate);
   node::AddEnvironmentCleanupHook(isolate, Cleanup, state);
   const auto data = v8::External::New(isolate, state);
-  for (const auto& method : {std::pair{"checkpoint", Checkpoint}, {"stopCheckpoint", StopCheckpoint},
-      {"checkpointStats", CheckpointStats}, {"state", State}, {"typeName", TypeName}, {"frames", Frames}}) {
+  const std::pair<const char*, v8::FunctionCallback> methods[] = {
+      {"checkpoint", Checkpoint}, {"stopCheckpoint", StopCheckpoint},
+      {"checkpointStats", CheckpointStats}, {"state", State},
+      {"typeName", TypeName}, {"frames", Frames}};
+  for (const auto& method : methods) {
     exports->CreateDataProperty(context, String::NewFromUtf8(isolate, method.first).ToLocalChecked(),
         v8::Function::New(context, method.second, data).ToLocalChecked()).Check();
   }
