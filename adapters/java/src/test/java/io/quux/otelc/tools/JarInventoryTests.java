@@ -2,9 +2,7 @@ package io.quux.otelc.tools;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -135,15 +133,13 @@ class JarInventoryTests {
     var result = JarInventory.inspect(path);
     assertFalse(result.versionedMembers());
     assertThrows(IllegalArgumentException.class, () -> JarInventory.main(new String[0]));
-    String[] duplicate = {path.toString(), path.toString()};
+    Path output = root.resolve("inventory.json");
+    String[] duplicate = {"--output", output.toString(), path.toString(), path.toString()};
     assertThrows(IllegalArgumentException.class, () -> JarInventory.main(duplicate));
-    PrintStream previous = System.out;
-    ByteArrayOutputStream output = new ByteArrayOutputStream();
-    try (var stream = new PrintStream(output, true, StandardCharsets.UTF_8)) {
-      System.setOut(stream);
-      JarInventory.main(new String[] {path.toString()});
-    } finally { System.setOut(previous); }
-    assertEquals(JarInventory.json(List.of(result)) + System.lineSeparator(), output.toString(StandardCharsets.UTF_8));
-    assertTrue(output.toString(StandardCharsets.UTF_8).contains("\"jdk_feature\":" + Runtime.version().feature()));
+    String[] command = {"--output", output.toString(), path.toString()};
+    JarInventory.main(command);
+    assertEquals(JarInventory.json(List.of(result)) + "\n", Files.readString(output));
+    assertTrue(Files.readString(output).contains("\"jdk_feature\":" + Runtime.version().feature()));
+    assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> JarInventory.main(command));
   }
 }

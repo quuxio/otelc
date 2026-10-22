@@ -21,6 +21,8 @@ from test_prepared_java import binding
 
 
 class RuntimeArchiveTests(unittest.TestCase):
+    KINDS = ("ordinary", "inactive", "active", "folded", "identical", "intermediate", "future")
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.temporary = tempfile.TemporaryDirectory(prefix="otelc-mr-", dir="/tmp")
@@ -77,6 +79,7 @@ public final class App {
     def archive(self, kind: str) -> Path:
         path = self.directory / (kind + ".jar")
         flag = {"active": "Multi-Release: true\r\n", "identical": "Multi-Release: true\r\n",
+                "intermediate": "Multi-Release: true\r\n", "future": "Multi-Release: true\r\n",
                 "folded": "Multi-Release: tr\r\n ue\r\n", "inactive": "Multi-Release: false\r\n"}.get(kind, "")
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\r\n" + flag + "\r\n")
@@ -84,13 +87,17 @@ public final class App {
             archive.write(self.outputs[8] / "demo/App$WorkItem.class", "demo/App$WorkItem.class")
             archive.writestr("value.txt", "base")
             if kind != "ordinary":
-                archive.write(self.outputs[9] / "demo/App.class", "META-INF/versions/9/demo/App.class")
-                current = self.outputs[8] if kind == "identical" else self.outputs[self.feature]
-                archive.write(current / "demo/App.class", f"META-INF/versions/{self.feature}/demo/App.class")
-                archive.write(current / "demo/App$WorkItem.class", f"META-INF/versions/{self.feature}/demo/App$WorkItem.class")
-                archive.write(self.outputs[self.feature] / "io/quux/otelc/methods/Observer.class",
-                              f"META-INF/versions/{self.feature}/io/quux/otelc/methods/Observer.class")
-                archive.writestr(f"META-INF/versions/{self.feature}/value.txt", "current")
+                if kind != "future":
+                    for name in ("App", "App$WorkItem"):
+                        archive.write(self.outputs[9] / ("demo/" + name + ".class"), "META-INF/versions/9/demo/" + name + ".class")
+                    archive.writestr("META-INF/versions/9/value.txt", "intermediate")
+                if kind not in ("intermediate", "future"):
+                    current = self.outputs[8] if kind == "identical" else self.outputs[self.feature]
+                    archive.write(current / "demo/App.class", f"META-INF/versions/{self.feature}/demo/App.class")
+                    archive.write(current / "demo/App$WorkItem.class", f"META-INF/versions/{self.feature}/demo/App$WorkItem.class")
+                    archive.write(self.outputs[self.feature] / "io/quux/otelc/methods/Observer.class",
+                                  f"META-INF/versions/{self.feature}/io/quux/otelc/methods/Observer.class")
+                    archive.writestr(f"META-INF/versions/{self.feature}/value.txt", "current")
                 archive.write(self.outputs[self.feature] / "demo/App.class", f"META-INF/versions/{self.feature + 1}/demo/App.class")
         return path
 
@@ -102,7 +109,7 @@ public final class App {
         return prepared_java.PreparedApplication.load(manifest)
 
     def test_plain_and_instrumented_effective_members_resources_helpers_and_live_states(self) -> None:
-        for kind in ("ordinary", "inactive", "active", "folded", "identical"):
+        for kind in self.KINDS:
             with self.subTest(kind=kind):
                 self.exercise(kind)
 
@@ -111,7 +118,7 @@ public final class App {
         inventory = java_archives.resolve((path,))
         archive = inventory["archives"][0]
         selected = archive["classes"]["demo.App"]["entry"]
-        release = self.feature if selected.startswith("META-INF/versions/") and kind != "identical" else 8
+        release = int(selected.split("/")[2]) if selected.startswith("META-INF/versions/") and kind != "identical" else 8
         application = self.application(path, release)
         # The ordinary JVM is an independent outcome reference, not the instrumented launcher.
         reference = subprocess.run([java.executable("java"), "-cp", str(path), "demo.App"],
@@ -163,7 +170,7 @@ public final class App {
             launch.verify_inputs()
             self.assertIn(path.name, (runtime / "class-load.log").read_text())
             if not plain:
-                self.assertEqual((runtime / "helpers.json").exists(), archive["multi_release"])
+                self.assertEqual((runtime / "helpers.json").exists(), "io.quux.otelc.methods.Observer" in archive["classes"])
                 self.assertEqual(wait_for_count(capture.calls, 6), 6)
                 resources = lambda: capture.lifetime_count("otelc.lifetime.completed", "resource", "demo.App$WorkItem")
                 self.assertEqual(wait_for_count(resources, 6), 6)
@@ -212,9 +219,10 @@ public final class App {
         runtime = self.directory / "runtime"
         runtime.mkdir(mode=0o700)
         original = java.executable
+        policy = Policy.parse({"schema_version": 3})
         with patch("otelc.java.executable", side_effect=lambda name: "/usr/bin/true" if name == "javap" else original(name)):
             with self.assertRaisesRegex(ValueError, "same full JDK"):
-                prepared_java.prepare(application, Policy.parse({"schema_version": 3}), runtime)
+                prepared_java.prepare(application, policy, runtime)
         self.assertFalse((runtime / "launch.json").exists())
 
     def test_selected_return_metadata_uses_runtime_member_before_main_executes(self) -> None:
@@ -292,7 +300,8 @@ public final class App {
         with java_archives.metadata_classpath(classpath, resolution, runtime) as views:
             self.assertEqual((views[0], views[2]), (first, middle))
             member = resolution["archives"][0]["classes"]["demo.App"]
-            self.assertEqual(hashlib.sha256((views[1] / "demo/App.class").read_bytes()).hexdigest(), member["sha256"])
+            with zipfile.ZipFile(views[1]) as view:
+                self.assertEqual(hashlib.sha256(view.read("demo/App.class")).hexdigest(), member["sha256"])
             output = subprocess.check_output([java.executable("javap"), "-c", "-classpath", os.pathsep.join(map(str, views)), "demo.App"], text=True)
             self.assertIn("bipush        " + ("21" if resolution["archives"][0]["multi_release"] else "8"), output)
         self.assertFalse(views[1].exists())
@@ -335,7 +344,7 @@ public final class App {
         member["entry"] = original_entry
         record["classes"]["demo.App"]["sha256"] = "0" * 64
         with self.assertRaisesRegex(ValueError, "member digest changed"):
-            java_archives.copy_members(record, self.directory / "view")
+            java_archives.copy_members(record, self.directory / "view-digest.jar")
         with patch.dict(os.environ, {"JDK_JAVA_OPTIONS": "-Djdk.util.jar.version=8"}):
             with self.assertRaisesRegex(ValueError, "ambient JVM"):
                 java_archives.resolve((path,))

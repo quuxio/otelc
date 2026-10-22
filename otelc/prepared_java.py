@@ -35,6 +35,13 @@ def file_identity(path: Path) -> dict[str, Any]:
             "mtime_ns": after.st_mtime_ns}
 
 
+def verify_tooling(identities: list[dict[str, Any]]) -> None:
+    """Check the exact products and configuration consumed by launch preparation."""
+    for expected in identities:
+        if file_identity(Path(expected["path"])) != expected:
+            raise ValueError("prepared launch tooling or configuration changed")
+
+
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     """Refuse duplicate JSON keys instead of silently replacing a binding."""
     result = {}
@@ -184,16 +191,24 @@ class PreparedLaunch:
         """Refuse stale inputs before launch or a changed result after execution."""
         if self.application.input_identity() != self.identity["application"]:
             raise ValueError("prepared application inputs changed")
-        for expected in self.identity["tooling"]:
-            if file_identity(Path(expected["path"])) != expected:
-                raise ValueError("prepared launch tooling or configuration changed")
+        verify_tooling(self.identity["tooling"])
 
 
-def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
-            plain: bool = False, arguments: tuple[str, ...] = (),
-            diagnostic_profile: bool = False) -> PreparedLaunch:
-    """Create a launch plan in a fresh private directory, without compiling."""
-    runtime = runtime.resolve(strict=True)
+def archive_tooling(classpath: tuple[Path, ...], executable: Path, plain: bool) -> list[dict[str, Any]]:
+    """Bind the archive resolver and, when consumed, its selected-JDK metadata tool."""
+    if not any(path.is_file() and path.suffix.lower() == ".jar" for path in classpath):
+        return []
+    identities = [file_identity(java_archives.tool())]
+    if not plain:
+        javap = Path(java.executable("javap")).resolve(strict=True)
+        if javap != (executable.parent / "javap").resolve(strict=True):
+            raise ValueError("runtime archive metadata requires java and javap from the same full JDK")
+        identities.append(file_identity(javap))
+    return identities
+
+
+def validate_runtime(runtime: Path, arguments: tuple[str, ...]) -> None:
+    """Require private fresh output and JVM-safe diagnostic paths before writing files."""
     metadata = runtime.stat()
     if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700 or any(runtime.iterdir()):
         raise ValueError("prepared runtime must be a fresh, owned 0700 directory")
@@ -203,14 +218,37 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
     if (any(character in log_path for character in ":,=%") or any(ord(char) < 32 for char in log_path)
             or len(os.fsencode(runtime / "control.sock")) > 100):
         raise ValueError("use a short runtime path without JVM log delimiters (:,=)")
+
+
+def launch_tooling(executable: Path, runtime: Path, archive_tools: list[dict[str, Any]],
+                   plain: bool) -> list[dict[str, Any]]:
+    """Retain each actual product once, including archive inspection without relocation."""
+    verify_tooling(archive_tools)
+    tooling = [file_identity(executable), *archive_tools]
+    if plain:
+        return tooling
+    tooling.extend(file_identity(path) for path in (
+        java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
+        runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
+    if (runtime / "helpers-extension.jar").exists():
+        from otelc import java_helpers
+
+        tooling.extend(file_identity(runtime / name) for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
+        helper_tool = file_identity(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"))
+        if helper_tool not in tooling:
+            tooling.append(helper_tool)
+    return tooling
+
+
+def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
+            plain: bool = False, arguments: tuple[str, ...] = (),
+            diagnostic_profile: bool = False) -> PreparedLaunch:
+    """Create a launch plan in a fresh private directory, without compiling."""
+    runtime = runtime.resolve(strict=True)
+    validate_runtime(runtime, arguments)
+    log_path = str(runtime / "class-load.log")
     executable = Path(java.executable("java")).resolve(strict=True)
-    archive_tool = file_identity(java_archives.tool()) if any(path.is_file() for path in application.classpath) else None
-    metadata_tool = None
-    if archive_tool is not None and not plain:
-        javap = Path(java.executable("javap")).resolve(strict=True)
-        if javap != (executable.parent / "javap").resolve(strict=True):
-            raise ValueError("runtime archive metadata requires java and javap from the same full JDK")
-        metadata_tool = file_identity(javap)
+    archive_tools = archive_tooling(application.classpath, executable, plain)
     application_identity = copy.deepcopy(application.input_identity())
     resolution = application_identity.get("archive_resolution")
     bindings = {name: binding["policy_path"] for name, binding in application.bindings.items()}
@@ -229,23 +267,7 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
         # application logger and not a redirection/filter of System.err.
         argv[1:1] = ["-Dotel.javaagent.logging=simple",
                      f"-Dio.opentelemetry.javaagent.slf4j.simpleLogger.logFile={agent_log}"]
-    tooling = [file_identity(executable)]
-    for expected in (archive_tool, metadata_tool):
-        if expected is not None:
-            if file_identity(Path(expected["path"])) != expected:
-                raise ValueError("runtime archive tooling changed during launch preparation")
-            tooling.append(expected)
-    if not plain:
-        tooling.extend(file_identity(path) for path in (
-            java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
-            runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
-        if (runtime / "helpers-extension.jar").exists():
-            from otelc import java_helpers
-
-            tooling.extend(file_identity(runtime / name) for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
-            helper_tool = file_identity(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"))
-            if helper_tool not in tooling:
-                tooling.append(helper_tool)
+    tooling = launch_tooling(executable, runtime, archive_tools, plain)
     identity = {"schema_version": 2 if resolution is not None else 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
                 "agent_diagnostics": agent_log,

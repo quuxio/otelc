@@ -110,14 +110,16 @@ public final class JarInventory {
   }
 
   public static void main(String[] arguments) throws IOException, NoSuchAlgorithmException {
-    if (arguments.length == 0) throw new IllegalArgumentException("expected explicit JAR paths");
+    if (arguments.length < 3 || !"--output".equals(arguments[0])) {
+      throw new IllegalArgumentException("expected --output NEW_JSON_FILE followed by explicit JAR paths");
+    }
     List<Archive> archives = new ArrayList<>();
     var paths = new HashSet<String>();
-    for (String argument : arguments) {
-      Archive archive = inspect(Path.of(argument));
+    for (int index = 2; index < arguments.length; index++) {
+      Archive archive = inspect(Path.of(arguments[index]));
       if (!paths.add(archive.path())) throw new IllegalArgumentException("duplicate JAR path");
       archives.add(archive);
     }
-    System.out.println(json(archives));
+    Files.writeString(Path.of(arguments[1]), json(archives) + "\n", java.nio.file.StandardOpenOption.CREATE_NEW);
   }
 }

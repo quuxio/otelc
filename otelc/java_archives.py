@@ -61,7 +61,7 @@ def validate_members(archive: dict[str, Any], feature: int) -> None:
         entry = member["entry"]
         if entry == expected:
             continue
-        version = re.fullmatch(r"META-INF/versions/([0-9]+)/" + re.escape(expected), entry) if isinstance(entry, str) else None
+        version = re.fullmatch(r"META-INF/versions/((?a:\d+))/" + re.escape(expected), entry) if isinstance(entry, str) else None
         if not version or not archive["multi_release"] or not 9 <= int(version[1]) <= feature:
             raise ValueError("invalid effective runtime archive member")
 
@@ -101,23 +101,27 @@ def resolve(classpath: tuple[Path, ...]) -> dict[str, Any] | None:
     executable = Path(java.executable("java")).resolve(strict=True)
     tools = [file_identity(path) for path in (executable, compiler)]
     identities = {str(path): file_identity(path) for _, path in indexed}
-    checked = subprocess.run([str(executable), "-cp", str(compiler), "io.quux.otelc.tools.JarInventory",
-                              *(str(path) for _, path in indexed)], capture_output=True, text=True, timeout=30)
-    if checked.returncode:
-        raise ValueError("invalid prepared JAR or unsupported runtime archive: " + checked.stderr.strip())
+    with tempfile.TemporaryDirectory(prefix="otelc-jars-") as temporary:
+        output = Path(temporary) / "inventory.json"
+        checked = subprocess.run([str(executable), "-cp", str(compiler), "io.quux.otelc.tools.JarInventory",
+                                  "--output", str(output), *(str(path) for _, path in indexed)],
+                                 capture_output=True, text=True, timeout=30)
+        if checked.returncode:
+            raise ValueError("invalid prepared JAR or unsupported runtime archive: " + checked.stderr.strip())
+        data = json.loads(output.read_text(), object_pairs_hook=unique_object)
     version = subprocess.check_output([str(executable), "-version"], stderr=subprocess.STDOUT, text=True, timeout=30)
-    matched = re.search(r'version "([0-9]+)', version)
+    matched = re.search(r'version "(\d+)', version)
     if not matched:
         raise ValueError("cannot identify the selected runtime archive JDK feature")
-    result = validate_protocol(json.loads(checked.stdout, object_pairs_hook=unique_object), indexed, identities, int(matched[1]))
+    result = validate_protocol(data, indexed, identities, int(matched[1]))
     if (any(file_identity(Path(identity["path"])) != identity for identity in tools)
             or any(file_identity(Path(path)) != identity for path, identity in identities.items())):
         raise ValueError("runtime archive inputs or tooling changed during resolution")
     return result
 
 
-def copy_members(archive: dict[str, Any], directory: Path) -> None:
-    """Materialise only unmodified, hash-checked effective classes in a private view."""
+def copy_members(archive: dict[str, Any], output: Path) -> None:
+    """Keep exact effective bytes and case-distinct names in a private ordinary JAR."""
     from otelc.prepared_java import file_identity
 
     path = Path(archive["path"])
@@ -125,15 +129,15 @@ def copy_members(archive: dict[str, Any], directory: Path) -> None:
     if original["sha256"] != archive["sha256"]:
         raise ValueError("runtime archive changed before metadata inspection")
     try:
-        with zipfile.ZipFile(path) as source:
+        with zipfile.ZipFile(path) as source, zipfile.ZipFile(output, "x") as target:
             for name, member in archive["classes"].items():
                 payload = source.read(member["entry"])
                 if hashlib.sha256(payload).hexdigest() != member["sha256"]:
                     raise ValueError("effective runtime archive member digest changed")
-                output = directory / class_path(name)
-                output.parent.mkdir(parents=True, exist_ok=True)
-                output.write_bytes(payload)
-                if hashlib.sha256(output.read_bytes()).hexdigest() != member["sha256"]:
+                target.writestr(class_path(name), payload)
+        with zipfile.ZipFile(output) as target:
+            for name, member in archive["classes"].items():
+                if hashlib.sha256(target.read(class_path(name))).hexdigest() != member["sha256"]:
                     raise ValueError("private runtime archive metadata copy changed")
     except (zipfile.BadZipFile, KeyError) as error:
         raise ValueError("invalid effective runtime archive member") from error
@@ -151,8 +155,7 @@ def metadata_classpath(classpath: tuple[Path, ...], resolution: dict[str, Any] |
     with tempfile.TemporaryDirectory(prefix="metadata-", dir=runtime) as temporary:
         views = list(classpath)
         for archive in resolution["archives"]:
-            directory = Path(temporary) / str(archive["classpath_index"])
-            directory.mkdir(mode=0o700)
-            copy_members(archive, directory)
-            views[archive["classpath_index"]] = directory
+            view = Path(temporary) / f"{archive['classpath_index']}.jar"
+            copy_members(archive, view)
+            views[archive["classpath_index"]] = view
         yield views
