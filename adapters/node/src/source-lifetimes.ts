@@ -4,9 +4,11 @@ import type { SourceMetrics } from './source-metrics.ts';
 import { epochNs, monotonicNs, sdkTime } from './source-clock.ts';
 import type { ISourcePlan } from './source-plan.ts';
 
-interface IConstructor { name: string; resource: boolean }
+interface IReleaseKey { key: PropertyKey; site: number; supported: boolean; field: boolean }
+interface IConstructor { name: string; resource: boolean; keys: readonly IReleaseKey[]; sites: ReadonlySet<number> }
 interface ITracked {
   id: number;
+  type: IConstructor;
   name: string; resource: boolean; released: boolean; metrics: boolean;
   started: bigint; epoch: bigint; parent?: SpanContext;
 }
@@ -60,12 +62,22 @@ export class SourceLifetimes {
   }
 
   /** Register the actual class without retaining it or adding instance/prototype fields. */
-  type(constructor: object, name: string, resource = false): void {
+  type(constructor: object, name: string, keys: readonly IReleaseKey[]): void {
     if (this.#closed || this.#constructors.has(constructor)) return;
     if (this.#constructorEntries.size >= this.#plan.runtime.max_functions || Buffer.byteLength(name) > 1024) {
       this.lose('constructor_capacity'); return;
     }
-    const entry = { name, resource };
+    const methods = new Map<PropertyKey, IReleaseKey>();
+    for (const key of keys) if (!key.field) methods.set(key.key, key);
+    // Instance fields shadow prototype methods, regardless of declaration order.
+    for (const key of keys) if (key.field) methods.set(key.key, key);
+    const sites = new Set<number>();
+    for (const release of this.#plan.lifetimes.release_methods) {
+      const method = methods.get(release);
+      if (method?.supported) sites.add(method.site);
+      else if (method) this.lose('unsupported_release');
+    }
+    const entry: IConstructor = { name, resource: sites.size > 0, keys, sites };
     this.#constructors.set(constructor, entry); this.#constructorEntries.add(entry);
     this.#classes.register(constructor, entry, entry);
   }
@@ -84,7 +96,7 @@ export class SourceLifetimes {
     }
     const token = this.#next++;
     const started = monotonicNs();
-    const item: ITracked = { id: token, name, resource: type.resource, released: false, metrics: this.#collecting(),
+    const item: ITracked = { id: token, type, name, resource: type.resource, released: false, metrics: this.#collecting(),
       started, epoch: epochNs(started), parent };
     this.#registry.register(value, token, item);
     this.#instances.set(token, item); this.#identities.set(value, token); this.#admissions++;
@@ -96,19 +108,21 @@ export class SourceLifetimes {
     this.gauges();
   }
 
-  released(value: object, name: string): void {
+  released(value: object, name: string, site: number, owner: object): void {
     if (this.#closed) return;
     const token = this.#identities.get(value);
     const item = token === undefined ? undefined : this.#instances.get(token);
-    if (!item || item.name !== name || !item.resource || item.released) return;
+    if (!item || item.name !== name || !item.resource || item.released
+        || (item.type !== this.#constructors.get(owner) && item.type.keys !== owner) || !item.type.sites.has(site)) return;
     item.released = true; this.#resourceCompleted++; this.#openResources--;
     this.#complete(item, 'resource');
     this.gauges();
   }
 
-  failedRelease(value: object, name: string): void {
+  failedRelease(value: object, name: string, site: number, owner: object): void {
     const token = this.#identities.get(value);
-    if (!this.#closed && token !== undefined && this.#instances.get(token)?.name === name) this.#failedReleases++;
+    const item = token === undefined ? undefined : this.#instances.get(token);
+    if (!this.#closed && item?.name === name && (item.type === this.#constructors.get(owner) || item.type.keys === owner) && item.type.sites.has(site)) this.#failedReleases++;
   }
 
   lose(reason: string): void {

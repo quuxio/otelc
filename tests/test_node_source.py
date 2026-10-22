@@ -72,6 +72,155 @@ input.on('line', async line => {
             self.assertEqual(report['span_accounting']['received'], 0)
             self.assertEqual(capture.traces, [])
 
+    def exercise_release_keys(self, language: str, backend: str) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        data = copy.deepcopy(policy_for(capture).data)
+        data['sources'] = {'include': ['**'], 'exclude': []}
+        data['functions'] = {'include': [], 'exclude': []}
+        data['lifetimes']['include'] = ['*']
+        data['metrics'].update(collection=True, emission=True)
+        data['traces']['sample_ratio'] = 1.0
+        source = """let conversions = 0;
+const close = 'other';
+const key = { [Symbol.toPrimitive](hint) { conversions++; return 'close'; } };
+class WorkItemAlias { [close]() {} }
+class WorkItemComputed { [key]() { var WorkItemComputed = 7; globalThis.business = WorkItemComputed; } }
+class WorkItemSymbol { [Symbol('close')]() {} }
+class WorkItemOverridden { close() {} [close]() {} }
+let failing = false;
+const marker = new Error('original');
+async function factory(name) {
+  return class WorkItemFactory { [await Promise.resolve(name)]() { if (failing) throw marker; } };
+}
+const [Release, Other] = await Promise.all([factory('close'), factory('other')]);
+const alias = new WorkItemAlias(); alias.other();
+const computed = new WorkItemComputed(); computed.close(); computed.close();
+const symbol = new WorkItemSymbol(); symbol[Reflect.ownKeys(WorkItemSymbol.prototype)[1]]();
+const overridden = new WorkItemOverridden(); overridden.other();
+const released = new Release();
+failing = true;
+try { Other.prototype.other.call(released); } catch (error) { if (error !== marker) throw error; }
+failing = false;
+released.close();
+const other = new Other(); other.other();
+const loops = [];
+let iteration = 0;
+while (loops.push(class WorkItemLoop { [iteration++ ? 'other' : 'close']() {} }) < 2) {}
+const loopRelease = new loops[0](); loopRelease.close();
+const loopOther = new loops[1](); loopOther.other();
+const anonymous = [];
+for (const key of ['close', 'other']) anonymous.push(class { [key]() {} });
+const anonymousRelease = new anonymous[0](); anonymousRelease.close();
+const anonymousOther = new anonymous[1](); anonymousOther.other();
+globalThis.keep = [alias, computed, symbol, overridden, released, other, loopRelease, loopOther, anonymousRelease, anonymousOther];
+console.log(JSON.stringify({conversions, business: globalThis.business}));
+"""
+        with tempfile.TemporaryDirectory(prefix='otelc-release-keys-', dir='/tmp') as temporary:
+            root = Path(temporary).resolve()
+            entry = root / ('app.mts' if language == 'typescript' else 'app.mjs')
+            entry.write_text(source)
+            plain = subprocess.run(node.command(Policy.parse(data), root / 'plain', language,
+                plain=True, root=root, entry=entry, backend=backend), capture_output=True, text=True, timeout=15, check=True)
+            self.assertEqual((plain.stdout, plain.stderr), ('{"conversions":1,"business":7}\n', ''))
+            runtime = root / 'instrumented'
+            instrumented = subprocess.run(node.command(Policy.parse(data), runtime, language,
+                root=root, entry=entry, backend=backend), capture_output=True, text=True, timeout=15)
+            self.assertEqual(instrumented.returncode, 0, instrumented.stderr)
+            self.assertEqual((instrumented.stdout, instrumented.stderr), (plain.stdout, plain.stderr))
+            report = node.wait_report(runtime)
+            self.assertEqual(report['phase'], 'closed')
+            self.assertEqual(report['lifetimes']['resource_completed'], 4)
+            self.assertEqual(report['lifetimes']['open_resources'], 1)
+            self.assertEqual(report['lifetimes']['admitted'], 10)
+            self.assertEqual(report['lifetime_lost'], 0)
+            self.assertEqual(report['lifetimes']['failed_releases'], 0)
+            spans = [span for message in capture.traces for resource in message.resource_spans
+                     for scope in resource.scope_spans for span in scope.spans]
+            self.assertEqual(len(spans), 4)
+            self.assertTrue({'app.WorkItemComputed lifetime', 'app.WorkItemLoop lifetime',
+                'app.factory.WorkItemFactory lifetime'}.issubset({span.name for span in spans}))
+            self.assertTrue(all(dict((a.key, a.value.string_value) for a in span.attributes)['boundary']
+                == 'resource' for span in spans))
+            self.assertEqual(entry.read_text(), source)
+
+    def test_javascript_computed_release_keys_and_class_identity(self) -> None:
+        self.exercise_release_keys('javascript', 'native')
+
+    def test_microsoft_native_computed_release_keys_and_class_identity(self) -> None:
+        self.exercise_release_keys('typescript', 'native')
+
+    def test_microsoft_api_computed_release_keys_and_class_identity(self) -> None:
+        self.exercise_release_keys('typescript', 'api')
+
+    def test_dynamic_unsupported_releases_report_loss_without_running_getters(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        data = copy.deepcopy(policy_for(capture).data)
+        data['sources'] = {'include': ['**'], 'exclude': []}
+        data['functions'] = {'include': [], 'exclude': []}
+        data['lifetimes']['include'] = ['*']
+        data['metrics'].update(collection=True, emission=True)
+        source = """const key = 'close';
+const other = 'other';
+let getters = 0;
+let statics = 0;
+class AsyncOther { async [other]() {} }
+class AsyncRelease { async [key]() {} }
+class FieldRelease { [key] = () => {}; }
+class AccessorRelease { get [key]() { getters++; return () => {}; } }
+class DuplicateRelease { ['close'](value) { throw new Error('overwritten'); } close() {} static { statics++; } }
+class ShadowedRelease { close() { var ShadowedRelease = 7; const value = () => eval('ShadowedRelease'); if (value() !== 7) throw new Error('changed binding'); } }
+const instances = [new AsyncOther(), new AsyncRelease(), new FieldRelease(), new AccessorRelease(), new DuplicateRelease(), new ShadowedRelease()];
+await instances[0].other(); await instances[1].close(); instances[2].close(); instances[3].close(); instances[4].close(); instances[5].close();
+globalThis.keep = instances;
+console.log(JSON.stringify({getters, statics}));
+"""
+        with tempfile.TemporaryDirectory(prefix='otelc-release-shapes-', dir='/tmp') as temporary:
+            root = Path(temporary).resolve()
+            entry = root / 'app.mjs'
+            entry.write_text(source)
+            policy = Policy.parse(data)
+            plain = subprocess.run(node.command(policy, root / 'plain', 'javascript',
+                plain=True, root=root, entry=entry), capture_output=True, text=True, timeout=15, check=True)
+            runtime = root / 'instrumented'
+            instrumented = subprocess.run(node.command(policy, runtime, 'javascript', root=root, entry=entry),
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(instrumented.returncode, 0, instrumented.stderr)
+            self.assertEqual((instrumented.stdout, instrumented.stderr), (plain.stdout, plain.stderr))
+            self.assertEqual(plain.stdout, '{"getters":1,"statics":1}\n')
+            report = node.wait_report(runtime)
+            self.assertEqual(report['lifetimes']['admitted'], 6)
+            self.assertEqual(report['lifetimes']['resource_completed'], 1)
+            self.assertEqual(report['lifetimes']['losses'], {'unsupported_release': 4})
+            self.assertEqual(report['lifetime_lost'], 4)
+            self.assertEqual(entry.read_text(), source)
+
+    def test_unsafe_release_key_binding_scopes_are_refused_explicitly(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        data = copy.deepcopy(policy_for(capture).data)
+        data['sources'] = {'include': ['**'], 'exclude': []}
+        data['functions'] = {'include': [], 'exclude': []}
+        data['lifetimes']['include'] = ['*']
+        cases = [
+            ("function make(value = class WorkItem { close() {} }) { return value; } make();", 'parameter initialisers'),
+            ("let count = 0; while (new (class { close() {} })() && count++ < 1) {}", 'loop heads'),
+        ]
+        with tempfile.TemporaryDirectory(prefix='otelc-release-scope-', dir='/tmp') as temporary:
+            root = Path(temporary).resolve()
+            for index, (source, diagnostic) in enumerate(cases):
+                with self.subTest(diagnostic=diagnostic):
+                    entry = root / f'app{index}.mjs'
+                    entry.write_text(source)
+                    runtime = root / f'runtime{index}'
+                    result = subprocess.run(node.command(Policy.parse(data), runtime, 'javascript', root=root, entry=entry),
+                        capture_output=True, text=True, timeout=15)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertEqual(entry.read_text(), source)
+                    node.wait_report(runtime)
+
     def exercise(self, language: str, backend: str) -> None:
         capture = Capture()
         self.addCleanup(capture.close)
