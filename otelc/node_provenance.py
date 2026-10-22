@@ -18,6 +18,7 @@ from otelc.node_context import package_context
 from otelc import node_preloads
 
 TOOLS_DIRECTORY = Path('build/tools')
+SOURCE_EVIDENCE_SCHEMA = 5
 
 
 def inventory(directory: Path, *, suffix: str | None = None) -> list[dict[str, Any]]:
@@ -62,7 +63,7 @@ def capture(producer: Path, application: Path, selected: str, plan: dict[str, An
             manifest = producer / TOOLS_DIRECTORY / 'otelc-http.json'
             product = json.loads(manifest.read_text())
             tooling['http'] = [identity(manifest), *inventory(producer / TOOLS_DIRECTORY / product['directory'])]
-    return {'schema_version': 4, 'request': original, 'preloads': node_preloads.capture(original, environment),
+    return {'schema_version': SOURCE_EVIDENCE_SCHEMA, 'request': original, 'preloads': node_preloads.capture(original, environment),
         'launch_id': plan['launch_id'], 'language': plan['language'],
         'backend': plan['backend'], 'plain': plan['plain'], 'root': plan['runtime']['root'],
         'argv': argv, 'cwd': str(Path.cwd().resolve()), 'launcher_pid': os.getpid(),
@@ -257,6 +258,10 @@ def record_module_phase(item: dict[str, Any], attempts: dict[int, dict[str, Any]
         raise ValueError('module phase changed its source origin')
     if item['kind'] != 'compilation' and any(item[key] != attempts[load_id][key] for key in ('url', 'logical_source')):
         raise ValueError('module phase changed its requested URL/name')
+    if item['kind'] == 'execution_started' and not {'loaded', 'instrumented'} & phases[load_id].keys():
+        raise ValueError('module body entered before a returned emission')
+    if item['kind'] == 'module_reentered':
+        verify_reentry(item, attempts, phases)
     phases[load_id][item['kind']] = item
 
 
@@ -265,7 +270,8 @@ def module_phases(records: list[dict[str, Any]]) -> tuple[dict[int, dict[str, An
     attempts: dict[int, dict[str, Any]] = {}
     phases: dict[int, dict[str, dict[str, Any]]] = {}
     for item in records:
-        if item['kind'] not in ('module_requested', 'compilation', 'compiled', 'instrumented', 'loaded'):
+        if item['kind'] not in ('module_requested', 'compilation', 'compiled', 'instrumented', 'loaded',
+                                'module_reentered', 'execution_started'):
             continue
         load_id = item['load_id']
         if type(load_id) is not int or load_id <= 0:
@@ -274,7 +280,102 @@ def module_phases(records: list[dict[str, Any]]) -> tuple[dict[int, dict[str, An
     return attempts, phases
 
 
-def verify_module_records(runtime: Path, prefix: str, records: list[dict[str, Any]], expected: dict[str, Any]) -> None:
+def verify_reentry(item: dict[str, Any], attempts: dict[int, dict[str, Any]],
+                   phases: dict[int, dict[str, Any]]) -> None:
+    """A reentry is an observed order, not a claim about Node's reason for it."""
+    if set(item) != {'kind', 'path', 'load_id', 'previous_load_id', 'logical_source', 'url'}:
+        raise ValueError('invalid module reentry fields')
+    previous = item['previous_load_id']
+    if type(previous) is not int or previous not in attempts or previous >= item['load_id']:
+        raise ValueError('invalid preceding module load')
+    if any(item[key] != attempts[previous][key] for key in ('path', 'url', 'logical_source')):
+        raise ValueError('module reentry changed its original URL/source')
+    if (not {'loaded', 'instrumented'} & phases[previous].keys()
+            or 'execution_started' in phases[previous]):
+        raise ValueError('module reentry has no preceding unentered emission')
+
+
+def verify_body_observer(emission: dict[str, Any]) -> str:
+    """Validate the observation delta even when this returned attempt never enters."""
+    helper = emission.get('body_entry')
+    expected_helper = str(Path(__file__).resolve().parent.parent / 'adapters/node/src/source-inputs.ts')
+    if (type(helper) is not dict or set(helper) != {'schema_version', 'goal', 'helper'}
+            or type(helper['schema_version']) is not int or helper['schema_version'] != 1
+            or helper['goal'] not in ('module', 'commonjs') or helper['helper'] != expected_helper):
+        raise ValueError('invalid module body observation helper')
+    if emission['format'] not in ('node-detected', helper['goal']):
+        raise ValueError('returned module format differs from its generated goal')
+    return helper['goal']
+
+
+def verify_body_entry(entry: dict[str, Any], emission: dict[str, Any],
+                      pid: int) -> None:
+    """Bind one prolog witness to the actual app and already returned bytes."""
+    fields = {'kind', 'path', 'load_id', 'pid', 'url', 'logical_source',
+              'source_sha256', 'emission_kind', 'emission_sha256', 'format', 'execution_protocol'}
+    if set(entry) != fields or type(entry['execution_protocol']) is not int or entry['execution_protocol'] != 1:
+        raise ValueError('invalid module execution protocol')
+    goal = verify_body_observer(emission)
+    if (type(entry['pid']) is not int or entry['pid'] != pid
+            or entry['emission_kind'] != emission['kind']
+            or entry['emission_sha256'] != emission['sha256']
+            or entry['source_sha256'] != emission['source_sha256']
+            or entry['format'] != goal
+            or emission['format'] not in ('node-detected', entry['format'])):
+        raise ValueError('module body entry differs from its app/emission/goal')
+
+
+def reentry_links(phases: dict[int, dict[str, Any]]) -> dict[int, int]:
+    """One raw same-URL reentry can follow each unentered returned attempt."""
+    reentered = {}
+    for load_id, items in phases.items():
+        if reentry := items.get('module_reentered'):
+            previous = reentry['previous_load_id']
+            if previous in reentered:
+                raise ValueError('preceding module load has multiple reentries')
+            reentered[previous] = load_id
+    return reentered
+
+
+def later_body_entry(load_id: int, reentered: dict[int, int],
+                     phases: dict[int, dict[str, Any]]) -> int:
+    successor = load_id
+    while successor in reentered and 'execution_started' not in phases[successor]:
+        successor = reentered[successor]
+    if successor == load_id or 'execution_started' not in phases[successor]:
+        raise ValueError('selected module body entry is unverified')
+    return successor
+
+
+def module_outcomes(attempts: dict[int, dict[str, Any]], phases: dict[int, dict[str, Any]],
+                    expected: dict[str, Any], pid: int) -> list[dict[str, Any]]:
+    """Keep unentered returned attempts separate from later witnessed bodies."""
+    reentered = reentry_links(phases)
+    result = []
+    for load_id, request in attempts.items():
+        items = phases[load_id]
+        kind = 'loaded' if expected['plain'] or not selected_source(expected, request['logical_source']) else 'instrumented'
+        emission = items[kind]
+        if 'body_entry' in emission:
+            verify_body_observer(emission)
+        entry = items.get('execution_started')
+        outcome = {'load_id': load_id, 'path': request['path'], 'url': request['url'],
+                   'logical_source': request['logical_source'], 'returned_format': emission['format'],
+                   'resolved_format': None, 'outcome': 'not_observed'}
+        if entry is not None:
+            verify_body_entry(entry, emission, pid)
+            outcome.update(outcome='body_entered', resolved_format=entry['format'])
+        elif expected['plain'] or request['module_type'] == 'typescript' or selected_source(expected, request['logical_source']):
+            if 'body_entry' not in emission:
+                raise ValueError('module lacks its body observation helper')
+            successor = later_body_entry(load_id, reentered, phases)
+            outcome.update(outcome='unentered_before_same_url_entry', reentered_by=reentered[load_id],
+                           later_entry_load_id=successor)
+        result.append(outcome)
+    return result
+
+
+def verify_module_records(runtime: Path, prefix: str, records: list[dict[str, Any]], expected: dict[str, Any]) -> list[dict[str, Any]]:
     """Every attempted in-scope load needs its own complete output, even if errors are caught."""
     attempts, phases = module_phases(records)
     sources = {item['path']: item for item in records if item['kind'] == 'source'}
@@ -289,6 +390,7 @@ def verify_module_records(runtime: Path, prefix: str, records: list[dict[str, An
                 raise ValueError('TypeScript compiler evidence is missing')
             verify_compilation(runtime, prefix, phases[load_id]['compilation'], phases[load_id]['compiled'],
                                request, sources[request['path']], expected)
+    return module_outcomes(attempts, phases, expected, records[0]['startup']['pid'])
 
 
 def loaded_inputs(runtime: Path, prefix: str, expected: dict[str, Any]) -> list[dict[str, Any]]:
@@ -299,17 +401,18 @@ def loaded_inputs(runtime: Path, prefix: str, expected: dict[str, Any]) -> list[
         record = json.loads(line)
         if not isinstance(record, dict) or record.get('kind') not in (
                 'source', 'compiler_config', 'absent_config', 'package_context', 'absent_package', 'startup',
-                'module_requested', 'compilation', 'compiled', 'instrumented', 'loaded'):
+                'module_requested', 'compilation', 'compiled', 'instrumented', 'loaded',
+                'module_reentered', 'execution_started'):
             raise ValueError('invalid loaded input record')
         if record['kind'] in ('compiled', 'instrumented', 'loaded'):
             verify_emission(runtime, prefix, record, sources)
-        elif record['kind'] not in ('module_requested', 'compilation', 'startup'):
+        elif record['kind'] not in ('module_requested', 'compilation', 'startup', 'module_reentered', 'execution_started'):
             verify_read_input(record)
         if record['kind'] == 'source':
             sources.add((record['path'], record['sha256']))
         records.append(record)
-    verify_module_records(runtime, prefix, records, expected)
     node_recipe.verify_startup(records, expected)
+    verify_module_records(runtime, prefix, records, expected)
     return records
 
 
@@ -329,7 +432,7 @@ def verify_read_input(record: dict[str, Any]) -> None:
 def verify(runtime: Path, expected: dict[str, Any]) -> dict[str, Any]:
     """Check retained launch/source evidence after application and SDK shutdown."""
     runtime = runtime.resolve(strict=True)
-    if expected['schema_version'] != 4:
+    if expected['schema_version'] != SOURCE_EVIDENCE_SCHEMA:
         raise ValueError('unsupported Node source evidence schema')
     node_recipe.verify(runtime, expected['request'], expected, producer=Path(__file__).resolve().parent.parent)
     prefix = 'node-plain' if expected['plain'] else 'node'
@@ -347,7 +450,11 @@ def verify(runtime: Path, expected: dict[str, Any]) -> dict[str, Any]:
         records = loaded_inputs(runtime, prefix, expected)
         if not any(item['kind'] == 'source' and item['path'] == expected['entry']['path'] for item in records):
             raise ValueError('launch entry is missing from loaded source evidence')
-    result = {'schema_version': 4, 'launch_id': expected['launch_id'], 'phase': 'verified',
+    attempts, phases = module_phases(records)
+    outcomes = module_outcomes(attempts, phases, expected, records[0]['startup']['pid']) if records else []
+    result = {'schema_version': SOURCE_EVIDENCE_SCHEMA, 'launch_id': expected['launch_id'], 'phase': 'verified',
+        'module_execution_protocol': 1, 'module_outcomes': outcomes,
+        'module_execution_observation': 'injected_body_entry' if records else 'native_plain_unavailable',
         'action_delivery_verified': False, 'loaded_inputs': records, 'launch_manifest': identity(filename)}
     if not expected['plain']:
         result.update(verify_sdk_identity(runtime, expected['launch_id'], records[0]['startup']))
@@ -370,7 +477,7 @@ def finish(runtime: Path, expected: dict[str, Any]) -> bool:
     try:
         report = verify(runtime, expected)
     except (ValueError, OSError, KeyError) as error:
-        report = {'schema_version': 4, 'launch_id': expected['launch_id'], 'phase': 'failed',
+        report = {'schema_version': SOURCE_EVIDENCE_SCHEMA, 'launch_id': expected['launch_id'], 'phase': 'failed',
             'action_delivery_verified': False, 'error': str(error)}
     prefix = 'node-plain' if expected['plain'] else 'node'
     descriptor = os.open(runtime / (prefix + '-inputs.json'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
