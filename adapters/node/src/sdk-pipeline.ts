@@ -102,14 +102,17 @@ export class OwnedSdkPipeline {
     const before = this.status();
     await requireSuccess([this.#metrics.forceFlush({ timeoutMillis: this.#readerTimeoutMs }),
       this.tracerProvider.forceFlush({ timeoutMillis: this.#readerTimeoutMs })]);
-    this.#verifyExports(before);
+    this.#verifyExports(before, false);
   }
 
-  #verifyExports(before: ISdkStatus): void {
+  #verifyExports(before: ISdkStatus, requireIdle: boolean): void {
     const after = this.status();
+    // Each signal's forceFlush has its own SDK barrier. A periodic export can
+    // start after one barrier while the other signal is still flushing. Only
+    // shutdown stops the producers and can require global idle afterwards.
     if (after.export_failed !== before.export_failed || after.traces.failed !== before.traces.failed
         || after.metric_collection.failed !== before.metric_collection.failed
-        || after.in_flight_exports || after.traces.pending || after.metric_collection.pending) {
+        || requireIdle && (after.in_flight_exports || after.traces.pending || after.metric_collection.pending)) {
       throw new Error('owned OpenTelemetry SDK collection/export failed or remains pending');
     }
   }
@@ -126,7 +129,7 @@ export class OwnedSdkPipeline {
     try {
       await deadline(requireSuccess([this.#metrics.shutdown({ timeoutMillis: this.#shutdownTimeoutMs }),
         this.tracerProvider.shutdown()]), this.#shutdownTimeoutMs);
-      this.#verifyExports(before);
+      this.#verifyExports(before, true);
       this.#phase = 'closed';
     } catch (error) { this.#phase = 'failed'; throw error; }
   }
