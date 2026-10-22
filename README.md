@@ -58,6 +58,8 @@ Open the [task and service trace dashboard](http://localhost:3001/d/otelc-traces
 
 Use the [prepared Java launcher](docs/prepared-java.md) for an existing compiled application or generated test main. An explicit classpath/main/source-binding manifest drives the same policy without compiling or editing application inputs. Plain and instrumented commands retain launch identities, separate JVM class-origin evidence and the same live controls.
 
+Prepared JAR launches resolve ordinary and multi-release archives through the selected JDK. Launch schema 2 records the actual member names and bytes used for metadata/helper inspection; directory-only launches retain schema 1. Original application archives, resources and runtime classpaths stay unchanged. Consumers must explicitly support the new schema.
+
 Application-owned helper names are preserved. When names conflict, the launcher generates a private extension with renamed helpers and records its identity; developers do not rename application classes.
 
 Prepared launches keep agent diagnostics in `agent.log`. For exact application stderr comparisons, select `--diagnostic-profile` in both lanes; it disables JVM CDS consistently and retains all application output without filtering. Use the default profile for ordinary JVM/CDS performance measurements and keep the profile label with results.

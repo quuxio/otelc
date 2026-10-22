@@ -45,4 +45,6 @@ Java's [runtime health boundary](runtime-health.md) records raw exporter API act
 
 [Java context propagation](java-context.md) qualifies ordinary platform-worker tasks and synchronous JDK HTTP/1.1 with the official agent, common task/HTTP switches and a small request-header preservation guard. Broader executor, async HTTP, custom-request and JDK shapes remain work; this does not complete the cross-language propagation criterion.
 
+The [prepared Java launcher](prepared-java.md) resolves ordinary and multi-release JARs through the selected JDK's actual runtime member view, with exact-byte metadata inspection and schema-2 launch evidence. Compiler reads remain separate. This system-classpath profile does not imply arbitrary build-system, module-path or custom-classloader support.
+
 The [Java action-witness checklist](action-witness.md) tracks exact compiled method bindings, live-context attribution and per-action completion. Its offline binding compiler is implemented; the runtime protocol and decoded scoped evidence remain outstanding.
