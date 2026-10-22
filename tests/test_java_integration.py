@@ -44,8 +44,26 @@ class Capture:
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
+            def request_payload(self) -> bytes:
+                """Accept the actual Java fixed-length and Node chunked SDK transports."""
+                if self.headers.get("Transfer-Encoding") != "chunked":
+                    return self.rfile.read(int(self.headers["Content-Length"]))
+                payload = bytearray()
+                while True:
+                    size = int(self.rfile.readline(128).split(b";", 1)[0], 16)
+                    if size == 0:
+                        if self.rfile.readline(128) != b"\r\n":
+                            raise ValueError("unexpected OTLP chunk trailers")
+                        return bytes(payload)
+                    if size < 0 or len(payload) + size > 16 * 1024 * 1024:
+                        raise ValueError("oversized OTLP test payload")
+                    chunk = self.rfile.read(size)
+                    if len(chunk) != size or self.rfile.read(2) != b"\r\n":
+                        raise ValueError("incomplete OTLP chunk")
+                    payload.extend(chunk)
+
             def do_POST(self) -> None:
-                payload = self.rfile.read(int(self.headers["Content-Length"]))
+                payload = self.request_payload()
                 if self.headers.get("Content-Encoding") == "gzip":
                     payload = gzip.decompress(payload)
                 if self.path.endswith("/metrics"):
