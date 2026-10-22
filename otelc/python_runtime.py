@@ -7,6 +7,7 @@ import threading
 import time
 from contextvars import Token
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from opentelemetry import context, trace
@@ -15,6 +16,7 @@ from opentelemetry.context import Context
 from otelc.config import Policy
 from otelc.python_sdk_process import SdkChannel
 from otelc import python_tracing
+from otelc.python_lifetimes import Lifetimes
 
 MAX_ACTIVE = 65536
 
@@ -37,7 +39,7 @@ def exception_type(error: BaseException) -> str:
 class PythonRuntime:
     """Order metric switches with observations while keeping tracing independent."""
 
-    def __init__(self, policy: Policy, channel: SdkChannel) -> None:
+    def __init__(self, policy: Policy, channel: SdkChannel, *, root: Path | None = None) -> None:
         self.channel = channel
         self._lock = threading.RLock()
         self._control_lock = threading.Lock()
@@ -52,6 +54,11 @@ class PythonRuntime:
             self._provider, self._processor = python_tracing.provider(
                 channel.writer, policy.data['traces']['sample_ratio'])
             self._tracer = self._provider.get_tracer('io.quux.otelc.functions')
+        self.lifetimes = None
+        if policy.data['lifetimes']['enabled']:
+            if root is None:
+                raise ValueError('Python lifetime observations require an application root')
+            self.lifetimes = Lifetimes(policy, root, self)
 
     def reject(self, reason: str) -> None:
         with self._lock:
@@ -99,8 +106,9 @@ class PythonRuntime:
 
     def _metric(self, instrument: str, name: str, value: int | float,
                 attributes: dict[str, Any], unit: str = '',
-                span_context: dict[str, Any] | None = None) -> None:
-        self.channel.writer.send({'kind': 'metric', 'scope': 'io.quux.otelc.functions',
+                span_context: dict[str, Any] | None = None, *,
+                scope: str = 'io.quux.otelc.functions') -> None:
+        self.channel.writer.send({'kind': 'metric', 'scope': scope,
             'instrument': instrument, 'name': name, 'value': value, 'unit': unit,
             'attributes': attributes, 'context': span_context})
 
@@ -131,10 +139,13 @@ class PythonRuntime:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            return {'schema_version': 1, 'pid': os.getpid(),
+            state = {'schema_version': 1, 'pid': os.getpid(), 'sdk_pid': self.channel.sdk_pid,
                     'collection': self.collection, 'emission': self.emission,
                     'function_completions': self.completed, 'active_functions': len(self.pending),
                     'runtime_losses': dict(self.losses)}
+            if self.lifetimes is not None:
+                state['lifetimes'] = self.lifetimes.status()
+            return state
 
     def controls(self, collection: bool, emission: bool) -> dict[str, Any]:
         """Only the control caller waits for the SDK acknowledgement, not probes."""
@@ -149,6 +160,8 @@ class PythonRuntime:
                     self.reject('control_handoff')
                     raise RuntimeError('Python control handoff failed')
                 self.collection, self.emission = collection, emission
+                if self.lifetimes is not None:
+                    self.lifetimes.gauges()
             state = self.channel.request('status', timeout=2.5)
             if (state['collection'], state['emission']) != (collection, emission):
                 self.reject('control_acknowledgement')
@@ -163,13 +176,18 @@ class PythonRuntime:
             if self.closed:
                 return
             self.closed = True
+            if self.lifetimes is not None:
+                self.lifetimes.close()
             spans, errors = self._processor.snapshot() if self._processor else (
                 {'sampled_started': 0, 'sampled_ended': 0, 'handed_off': 0}, 0)
             losses = {**self.losses}
             if errors:
                 losses['span_processing'] = errors
-            self.channel.seal({'function_completions': self.completed,
+            checkpoint = {'function_completions': self.completed,
                 'active_functions': len(self.pending), 'runtime_losses': losses,
-                'span_observation': spans})
+                'span_observation': spans}
+            if self.lifetimes is not None:
+                checkpoint['lifetimes'] = self.lifetimes.status()
+            self.channel.seal(checkpoint)
             if self._provider:
                 self._provider.shutdown()

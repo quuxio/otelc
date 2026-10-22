@@ -283,7 +283,7 @@ class PythonFrontendComponentTests(unittest.TestCase):
         with contextlib.redirect_stderr(diagnostic):
             self.assertEqual(adapter.run(self.policy, self.root / 'abrupt', root=self.root, entry=entry), 9)
         self.assertIn('unverified', diagnostic.getvalue())
-        for changes in ({'languages': ['java']}, {'lifetimes': {'enabled': True}},
+        for changes in ({'languages': ['java']},
                         {'context': {'http': True}}):
             with self.assertRaises(ValueError):
                 adapter.run(Policy.parse(self.policy.data | changes), self.root / 'refused',

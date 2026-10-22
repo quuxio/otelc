@@ -63,8 +63,8 @@ def initialise(plan_fd: int) -> PythonApplication:
     runtime = monitor = None
     try:
         channel.bind(os.getpid())
-        runtime = PythonRuntime(policy, channel)
-        monitor = PythonMonitor(policy, Path(plan['root']), runtime)
+        runtime = PythonRuntime(policy, channel, root=Path(plan['root']))
+        monitor = PythonMonitor(policy, Path(plan['root']), runtime, lifetimes=runtime.lifetimes)
         if bootstrap := sys.modules.get('sitecustomize'):
             monitor.retire_startup_module(bootstrap)
         monitor.install()

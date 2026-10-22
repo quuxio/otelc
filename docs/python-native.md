@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This candidate adds selected function metrics/spans and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling and metric/OTLP pipeline. The public `plan` still reports Python as remaining: lifetime observation, official library instrumentors, complete source evidence, benchmarks, independent review and oteleq qualification are delivery work.
+This candidate adds selected function metrics/spans, weak object/resource lifetime observations and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling and metric/OTLP pipeline. The public `plan` still reports Python as remaining: official library instrumentors, complete source evidence, benchmarks, independent review and oteleq qualification are delivery work.
 
 ## An unchanged application
 
@@ -24,7 +24,7 @@ def workload(seed):
         item.close()
 ```
 
-Use this function-only common policy for the current candidate. It contains no Python-specific settings and can drive the other language versions too. The full example policy requests lifetimes, which this candidate currently refuses explicitly.
+Use this function-only common policy to start with function telemetry. It contains no Python-specific settings and can drive the other language versions too. The full [example policy](../examples/otelc.toml) also selects `WorkItem` object/resource lifetimes.
 
 ```toml
 schema_version = 3
@@ -92,17 +92,50 @@ Exception probes read only the raw exception type name; they do not invoke appli
 
 The generated startup hook restores original import paths/PYTHONPATH, chains the original `sitecustomize` through CPython, and removes only its temporary module when no original exists. Startup failure exits before application code rather than allowing CPython to swallow a failed instrumentation hook. An incomplete control client has a total read deadline and cannot hold up app shutdown.
 
+## Object and resource lifetimes
+
+Enable `[lifetimes]` and select dotted class names, using the same source selectors and policy fields as the other adapters:
+
+```toml
+[lifetimes]
+enabled = true
+include = ["*WorkItem"]
+release_methods = ["close"]
+max_live = 4096
+```
+
+The original `WorkItem` needs no telemetry code. Construction is admitted after its ordinary class call and Python initializer succeed. A failed initializer or `__new__` never becomes a completed lifetime. Inherited, wrapped and dataclass-generated Python initializers are observed without replacing the class or its methods. Explicit calls to `__init__` are not new construction.
+
+An object has separate `observed_gc` and `resource` boundaries. Successful return from a configured Python release method completes its resource boundary once. Exceptions and async cancellation leave it open for a later retry. Async methods complete at their final return, not at their first suspension. A synchronous release that returns a coroutine, generator or awaitable is unsupported and records loss; returning deferred work does not prove release.
+
+Weak references observe GC without retaining the object, its frames or its class. The observer never forces application collection. GC before release records an incomplete resource. Objects still alive at shutdown are censored, with no fabricated GC or release span. Lifetime spans have their own trace roots and link to the creating context when it exists. Their duration starts after successful construction and ends at the observed boundary; it is not allocation-to-free time.
+
+Metrics use `otelc.lifetime.admitted`, `completed`, `incomplete`, `lost`, `duration` and `live`, under the `io.quux.otelc.lifetimes` scope. Type and boundary labels distinguish observations. Live gauges use `type=all` and resynchronise when collection is enabled. Completion metrics require admission and completion with collection enabled; tracing stays independent. Status and the final SDK checkpoint include admissions, failures, live/censored objects and explicit loss reasons.
+
+This profile requires a Python initializer and weak-reference support. Default/C-only initializers, instances without weak references, custom metaclass `__call__`, non-Python release descriptors and capacity exhaustion record explicit losses and prevent a clean final report. This does not cover every allocation, implicit builtin resources, finaliser resurrection, forks or arbitrary metaclass construction. It does not claim exact destruction time.
+
+To run the unchanged example with the full shared policy:
+
+```sh
+runtime="$(mktemp -d /tmp/otelc-python-lifetimes.XXXXXX)/runtime"
+.venv/bin/python -m otelc --config examples/otelc.toml python \
+  --root "$PWD" --entry examples/python/BenchmarkApp.py --runtime "$runtime"
+```
+
+Enter `10` for ordinary work, `lifecycle` for constructor failure/release retry, and `quit` to drain the SDK. `gc` asks the example itself to collect for demonstration; it is not a production observer action.
+
 ## Evidence and current limits
 
 Local integration tests use CPython 3.12 and the locked SDK. They compare original script/module metadata, arguments, source hashes, seeded random values, signatures, output, tracebacks and exit codes against native baselines. Real receivers decode the four-state example's metric counts and spans, bound to the actual application PID rather than the CLI/SDK PID. Separate tests cover recursion/context boundaries, async suspension/cancellation, occupied monitoring IDs, controlled startup/probe failures, queue/transport evidence and open control connections. These are tested profiles, not a claim about arbitrary applications.
 
-The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. Enabled lifetime or library-context policy currently causes a pre-launch refusal. Benchmark/Grafana comparisons for Python remain outstanding; function telemetry can already reach the configured Collector, but no Python performance result is claimed by these tests.
+The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. Enabled library-context policy currently causes a pre-launch refusal. Benchmark/Grafana comparisons for Python remain outstanding; function/lifetime telemetry uses the configured Collector endpoint, but no Python performance result is claimed by these tests.
 
 Run the focused tests from a prepared checkout:
 
 ```sh
 PYTHONPATH=tests .venv/bin/python -m unittest \
-  test_python_monitor test_python_native test_python_frontend_components -v
+  test_python_monitor test_python_native test_python_frontend_components \
+  test_python_lifetimes test_python_lifetime_components -v
 make check
 ```
 

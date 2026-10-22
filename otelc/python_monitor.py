@@ -10,6 +10,7 @@ from types import CodeType, FrameType, ModuleType
 from typing import Protocol
 
 from otelc.config import Policy
+from otelc.python_lifetimes import Lifetimes
 
 MAX_FUNCTIONS = 4096
 
@@ -28,11 +29,13 @@ class ObservationRuntime(Protocol):
 class PythonMonitor:
     """Keep original function/frame/exception identity, including async suspension."""
 
-    def __init__(self, policy: Policy, root: Path, runtime: ObservationRuntime) -> None:
+    def __init__(self, policy: Policy, root: Path, runtime: ObservationRuntime, *,
+                 lifetimes: Lifetimes | None = None) -> None:
         if not hasattr(sys, 'monitoring'):
             raise ValueError('Python function monitoring requires CPython 3.12+')
         self.root = root.resolve(strict=True)
         self.runtime = runtime
+        self.lifetimes = lifetimes
         self.sources = policy.selection('sources')
         self.functions = policy.selection('functions')
         self._producer = Path(__file__).resolve().parent
@@ -78,6 +81,11 @@ class PythonMonitor:
         except Exception:
             self.runtime.abandon(id(sys._getframe(1)))
             self.runtime.reject('monitor_start')
+        if self.lifetimes is not None:
+            try:
+                self.lifetimes.start(sys._getframe(1))
+            except Exception:
+                self.lifetimes.reject('monitor_start')
 
     def _return(self, code: CodeType, offset: int, value: object) -> None:
         frame = sys._getframe(1)
@@ -86,12 +94,18 @@ class PythonMonitor:
             if sys.modules.get('sitecustomize') is self._startup_module:
                 del sys.modules['sitecustomize']
             self._startup_module = None
-        self._complete(frame, None)
+        self._complete(frame, None, value)
 
     def _unwind(self, code: CodeType, offset: int, error: BaseException) -> None:
         self._complete(sys._getframe(1), error)
 
-    def _complete(self, frame: FrameType, error: BaseException | None) -> None:
+    def _complete(self, frame: FrameType, error: BaseException | None,
+                  value: object = None) -> None:
+        if self.lifetimes is not None:
+            try:
+                self.lifetimes.finish(frame, value, error)
+            except Exception:
+                self.lifetimes.reject('monitor_completion')
         try:
             if id(frame.f_code) in self._names:
                 self.runtime.leave(id(frame), error)
@@ -114,6 +128,24 @@ class PythonMonitor:
             self.runtime.abandon(id(frame))
             self.runtime.reject('monitor_context')
 
+    def _call(self, code: CodeType, offset: int, callable: object, argument: object) -> None:
+        try:
+            self.lifetimes.class_call(sys._getframe(1), offset, callable)
+        except Exception:
+            self.lifetimes.reject('monitor_call')
+
+    def _c_return(self, code: CodeType, offset: int, callable: object, argument: object) -> None:
+        self._class_finished(sys._getframe(1), offset, failed=False)
+
+    def _c_raise(self, code: CodeType, offset: int, callable: object, argument: object) -> None:
+        self._class_finished(sys._getframe(1), offset, failed=True)
+
+    def _class_finished(self, frame: FrameType, offset: int, *, failed: bool) -> None:
+        try:
+            self.lifetimes.class_finished(frame, offset, failed=failed)
+        except Exception:
+            self.lifetimes.reject('monitor_call_completion')
+
     def install(self) -> None:
         """Use an unoccupied ID, and roll back a partial callback installation."""
         if self.tool is not None:
@@ -131,6 +163,9 @@ class PythonMonitor:
             callbacks = ((events.PY_START, self._start), (events.PY_RETURN, self._return),
                 (events.PY_UNWIND, self._unwind), (events.PY_YIELD, self._yield),
                 (events.PY_RESUME, self._resume), (events.PY_THROW, self._resume))
+            if self.lifetimes is not None:
+                callbacks += ((events.CALL, self._call), (events.C_RETURN, self._c_return),
+                              (events.C_RAISE, self._c_raise))
             mask = 0
             for event, callback in callbacks:
                 monitoring.register_callback(self.tool, event, callback)

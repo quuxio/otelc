@@ -24,7 +24,7 @@ max_live = 1000000
 | Destruction | Complete object construction to destruction, including exception unwinding | Planned C++/LLVM adapter |
 | Drop | Completed construction to ownership-driven drop | Planned Rust adapter |
 | Allocation/free | Selected allocation to matching free or resource release | Planned C/LLVM adapter |
-| Other managed runtimes | Observed GC where the runtime permits it, plus explicit resource release | Planned TypeScript/JavaScript, Python and Go adapters |
+| Other managed runtimes | Observed GC where the runtime permits it, plus explicit resource release | [Node](node-source.md) and [Python](python-native.md) candidates with declared source/runtime limits; Go planned |
 
 GC notification has no exact destruction-time guarantee. A long observed interval can include time waiting for the collector and observer. It must not be compared as an equivalent of C++ destruction or Rust drop. See the [JDK reference queue contract](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/ref/ReferenceQueue.html).
 
