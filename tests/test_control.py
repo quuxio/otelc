@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from otelc import control
 
@@ -135,3 +136,46 @@ class ControlTests(unittest.TestCase):
             path.chmod(0o644)
             with self.assertRaisesRegex(ValueError, "private control"):
                 control.request(path, "status")
+
+    def test_endpoint_anchors_its_basename_and_requires_a_private_real_directory(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+            directory = Path(temporary) / "runtime"
+            directory.mkdir(mode=0o700)
+            path = directory / "control.json"
+            path.write_text("{}")
+            path.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "generated control.json"):
+                control.endpoint_descriptor(directory / "other.json", path.stat())
+            directory.chmod(0o755)
+            try:
+                with self.assertRaisesRegex(ValueError, "directory.*private"):
+                    control.endpoint_descriptor(path, path.stat())
+            finally:
+                directory.chmod(0o700)
+            alias = Path(temporary) / "alias"
+            alias.symlink_to(directory, target_is_directory=True)
+            with self.assertRaises(OSError):
+                control.endpoint_descriptor(alias / "control.json", path.stat())
+
+    def test_endpoint_stream_failure_closes_the_file_and_replacement_fifo_cannot_block(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+            path = Path(temporary) / "control.json"
+            path.write_text("{}")
+            path.chmod(0o600)
+            opened = []
+
+            def fail_stream(descriptor: int, *_args, **_kwargs) -> None:
+                opened.append(descriptor)
+                raise OSError("controlled stream construction failure")
+
+            with mock.patch("otelc.control.os.fdopen", side_effect=fail_stream):
+                with self.assertRaisesRegex(OSError, "controlled stream"):
+                    control.endpoint_descriptor(path, path.stat())
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened[0])
+            original = path.stat()
+            path.unlink()
+            os.mkfifo(path, mode=0o600)
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                control.endpoint_descriptor(path, original)

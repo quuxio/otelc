@@ -24,15 +24,16 @@ def unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def endpoint_descriptor(path: Path, expected: os.stat_result) -> dict[str, Any]:
     """Read a complete private loopback descriptor through a stable regular-file handle."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(descriptor, "rb") as source:
-        actual = os.fstat(source.fileno())
-        if ((actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
-                or not stat.S_ISREG(actual.st_mode) or actual.st_mode & 0o077 or actual.st_uid != os.getuid()):
-            raise ValueError("control endpoint identity changed")
-        raw = source.read(4097)
-    if len(raw) > 4096:
-        raise ValueError("oversized control endpoint")
+    if path.name != "control.json":
+        raise ValueError("expected the generated control.json endpoint")
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parent = os.fstat(directory)
+        if parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700:
+            raise ValueError("control endpoint directory must be owned and private (0700)")
+        raw = _read_endpoint(directory, expected)
+    finally:
+        os.close(directory)
     value = json.loads(raw, object_pairs_hook=unique_fields)
     fields = {"schema_version", "kind", "host", "port", "pid", "token"}
     if (not isinstance(value, dict) or set(value) != fields
@@ -45,23 +46,38 @@ def endpoint_descriptor(path: Path, expected: os.stat_result) -> dict[str, Any]:
     return value
 
 
-def exchange(family: socket.AddressFamily, address: str | tuple[str, int], payload: str) -> Any:
+def _read_endpoint(directory: int, expected: os.stat_result) -> bytes:
+    """Anchor a fixed basename; a replacement FIFO must not block before fstat."""
+    descriptor = os.open("control.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    try:
+        actual = os.fstat(descriptor)
+        if ((actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino)
+                or not stat.S_ISREG(actual.st_mode) or actual.st_mode & 0o077 or actual.st_uid != os.getuid()):
+            raise ValueError("control endpoint identity changed")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            raw = source.read(4097)
+        if len(raw) > 4096:
+            raise ValueError("oversized control endpoint")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def exchange(client: socket.socket, payload: str) -> Any:
     """Keep both transports on the same bounded framing and response deadline."""
-    with socket.socket(family) as client:
-        client.settimeout(3)
-        client.connect(address)
-        client.sendall(payload.encode("ascii") + b"\n")
-        data = bytearray()
-        deadline = time.monotonic() + 3
-        while not data.endswith(b"\n"):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("control response deadline exceeded")
-            client.settimeout(remaining)
-            piece = client.recv(1024)
-            if not piece or len(data) + len(piece) > 4096:
-                raise ValueError("incomplete or oversized control response")
-            data.extend(piece)
+    client.settimeout(3)
+    client.sendall(payload.encode("ascii") + b"\n")
+    data = bytearray()
+    deadline = time.monotonic() + 3
+    while not data.endswith(b"\n"):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("control response deadline exceeded")
+        client.settimeout(remaining)
+        piece = client.recv(1024)
+        if not piece or len(data) + len(piece) > 4096:
+            raise ValueError("incomplete or oversized control response")
+        data.extend(piece)
     return json.loads(data)
 
 
@@ -89,10 +105,16 @@ def request(path: Path, command: str) -> dict[str, Any]:
     if command not in ("status", "on", "off", "collection on", "collection off", "emission on", "emission off", "flush", "health"):
         raise ValueError("unsupported control command")
     endpoint = endpoint_descriptor(path, metadata) if stat.S_ISREG(metadata.st_mode) else None
-    family = socket.AF_INET if endpoint else socket.AF_UNIX
-    address = (endpoint["host"], endpoint["port"]) if endpoint else str(path)
-    payload = json.dumps({"token": endpoint["token"], "command": command}) if endpoint else command
-    return validate_response(exchange(family, address, payload), command, endpoint["pid"] if endpoint else None)
+    if endpoint:
+        # Never use a user-derived hostname, including after descriptor validation.
+        with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=3) as client:
+            value = exchange(client, json.dumps({"token": endpoint["token"], "command": command}))
+    else:
+        with socket.socket(socket.AF_UNIX) as client:
+            client.settimeout(3)
+            client.connect(str(path))
+            value = exchange(client, command)
+    return validate_response(value, command, endpoint["pid"] if endpoint else None)
 
 
 def wait_ready(path: Path, pid: int, *, timeout: float = 20.) -> dict[str, Any]:

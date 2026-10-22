@@ -74,7 +74,7 @@ export class LocalMetricControl {
   /** Publish only after listening; the endpoint file never contains partial JSON. */
   static async listen(directory: string, pipeline: OwnedSdkPipeline): Promise<LocalMetricControl> {
     const metadata = lstatSync(directory);
-    if (!metadata.isDirectory() || !process.getuid || metadata.uid !== process.getuid()
+    if (!metadata.isDirectory() || metadata.uid !== process.getuid?.()
         || (metadata.mode & 0o7777) !== 0o700) throw new Error('control directory must be owned and mode 0700');
     const control = new LocalMetricControl(directory, pipeline);
     try {
@@ -144,7 +144,7 @@ export class LocalMetricControl {
           if (this.#identity) removeOwnedFile(this.filename, this.#identity);
           if (error) reject(error);
           else resolve();
-        } catch (failure) { reject(failure); }
+        } catch (error_) { reject(error_); }
       };
       if (this.#server.listening) this.#server.close(finish);
       else finish();
