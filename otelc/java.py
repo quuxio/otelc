@@ -184,6 +184,13 @@ def command(policy: Policy, runtime: Path, *, plain: bool = False) -> list[str]:
     return launch_command(policy, runtime, [classes], "examples.BenchmarkApp", bindings, plain=plain)
 
 
+def context_configuration(policy: Policy) -> dict[str, str]:
+    """Translate common task intent into the pinned official executor instrumentation."""
+    if policy.data["context"]["http"]:
+        raise ValueError("Java HTTP propagation is not implemented in the rebuild yet")
+    return {"otel.instrumentation.executors.enabled": str(policy.data["context"]["tasks"]).lower()}
+
+
 def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_class: str,
                    bindings: dict[str, str], *, plain: bool = False,
                    arguments: tuple[str, ...] = ()) -> list[str]:
@@ -225,6 +232,7 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
         "otel.instrumentation.opentelemetry-api.enabled": "true",
         "otel.instrumentation.methods.include": ";".join(f"{name}[{','.join(methods)}]" for name, methods in sorted(selected.items())),
     }
+    values.update(context_configuration(policy))
     configuration = runtime / "agent.properties"
     configuration.write_text(properties(values))
     plan = runtime / "plan.properties"

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from otelc.config import LANGUAGES, Policy, Selection, expression
-from otelc.java import properties
+from otelc.java import context_configuration, properties
 
 
 class PolicyTests(unittest.TestCase):
@@ -23,6 +23,7 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(policy.data["metrics"]["collection"])
         self.assertTrue(policy.data["metrics"]["emission"])
         self.assertFalse(policy.selection("functions").accepts("anything"))
+        self.assertEqual(policy.data["context"], {"tasks": False, "http": False})
         select = Selection(("a.*",), ("a.secret",))
         self.assertTrue(select.accepts("a.work"))
         self.assertFalse(select.accepts("a.secret"))
@@ -53,6 +54,8 @@ class PolicyTests(unittest.TestCase):
             {"export": {"endpoint": "file:///tmp/metrics"}},
             {"export": {"endpoint": "https://token@host/"}},
             {"traces": {"sample_ratio": float("nan")}},
+            {"context": {"tasks": 1}}, {"context": {"http": "true"}},
+            {"context": {"unknown": True}},
             {"metrics": {"histogram_boundaries_seconds": []}},
             {"metrics": {"histogram_boundaries_seconds": [.1, .01]}},
             {"metrics": {"histogram_boundaries_seconds": [float("inf")]}},
@@ -66,6 +69,20 @@ class PolicyTests(unittest.TestCase):
                     data[key] = value
             with self.subTest(case=case), self.assertRaises(ValueError):
                 Policy.parse(data)
+
+    def test_common_task_flag_drives_only_the_official_executor_module(self) -> None:
+        for tasks in (False, True):
+            policy = Policy.parse({"schema_version": 3, "traces": {"enabled": True},
+                                   "context": {"tasks": tasks}})
+            self.assertEqual(context_configuration(policy),
+                             {"otel.instrumentation.executors.enabled": str(tasks).lower()})
+        policy = Policy.parse({"schema_version": 3, "traces": {"enabled": True},
+                               "context": {"http": True}})
+        with self.assertRaisesRegex(ValueError, "HTTP propagation is not implemented"):
+            context_configuration(policy)
+        for context in ({"tasks": True}, {"http": True}):
+            with self.subTest(context=context), self.assertRaisesRegex(ValueError, "traces.enabled"):
+                Policy.parse({"schema_version": 3, "context": context})
 
     def test_properties_escape_delimiters_newlines_and_unicode(self) -> None:
         self.assertEqual(properties({"b": "x=y", "a": "\n"}), "a=\\n\nb=x\\=y\n")
