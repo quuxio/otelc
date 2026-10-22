@@ -6,48 +6,19 @@ import hashlib
 import json
 import os
 import re
-import stat
 import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from otelc.config import Selection
+from otelc.file_inputs import checked_file, identity
+from otelc import node_recipe
 
 TOOLS_DIRECTORY = Path('build/tools')
 
 
-def checked_file(filename: Path, *, include_content: bool = False,
-                 nofollow: bool = False) -> tuple[dict[str, Any], bytes]:
-    """Bind one regular-file read; optionally retain content without reopening the path."""
-    filename = filename.absolute()
-    descriptor = os.open(filename, os.O_RDONLY | os.O_NONBLOCK | (os.O_NOFOLLOW if nofollow else 0))
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError(f'launch input is not a regular file: {filename}')
-        with os.fdopen(descriptor, 'rb', closefd=False) as source:
-            content = source.read() if include_content else b''
-            digest = hashlib.sha256(content).hexdigest() if include_content else hashlib.file_digest(source, 'sha256').hexdigest()
-        after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    stable = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-    if stable(before) != stable(after) or stable(after) != stable(filename.stat()):
-        raise ValueError(f'launch input changed while reading: {filename}')
-    result = {'path': str(filename), 'resolved_path': str(filename.resolve(strict=True)),
-              'sha256': digest, 'size': after.st_size}
-    if filename.is_symlink():
-        result['symlink'] = os.readlink(filename)
-    return result, content
-
-
-def identity(filename: Path) -> dict[str, Any]:
-    """Record stable input identity without retaining large runtime/tooling contents."""
-    return checked_file(filename)[0]
-
-
-def inventory(directory: Path) -> list[dict[str, Any]]:
+def inventory(directory: Path, *, suffix: str | None = None) -> list[dict[str, Any]]:
     """Inventory complete producer directories without silently skipping errors."""
     if not directory.is_dir():
         raise ValueError(f'launch tooling directory is missing: {directory}')
@@ -56,7 +27,8 @@ def inventory(directory: Path) -> list[dict[str, Any]]:
         for name in directories:
             if (Path(current) / name).is_symlink():
                 raise ValueError('symlinked producer directories are unsupported')
-        records.extend(identity(Path(current) / name) for name in sorted(files))
+        records.extend(identity(Path(current) / name) for name in sorted(files)
+                       if suffix is None or name.endswith(suffix))
     return sorted(records, key=lambda item: item['path'])
 
 
@@ -80,14 +52,19 @@ def package_context(application: Path) -> list[dict[str, Any]]:
         directory = directory.parent
 
 
+def launcher_inputs(producer: Path) -> list[dict[str, Any]]:
+    """Bind producer Python source without unstable bytecode caches."""
+    return inventory(producer / 'otelc', suffix='.py')
+
+
 def capture(producer: Path, application: Path, selected: str, plan: dict[str, Any],
-            generated: list[Path], argv: list[str]) -> dict[str, Any]:
+            generated: list[Path], argv: list[str], original: dict[str, Any]) -> dict[str, Any]:
     """Capture the actual installed closure, including optional platform packages."""
-    environment = {key: value for key, value in os.environ.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
+    environment = node_recipe.tooling_environment()
     runtime = json.loads(subprocess.check_output([selected, '-p',
         'JSON.stringify({version:process.versions.node,abi:process.versions.modules,executable:process.execPath,architecture:process.arch,platform:process.platform})'],
         text=True, env=environment))
-    tooling = {}
+    tooling = {'launcher': launcher_inputs(producer)}
     if not (plan['plain'] and plan['language'] == 'javascript'):
         tooling['adapter'] = inventory(producer / 'adapters/node/src')
         tooling['packages'] = inventory(producer / 'node_modules')
@@ -98,13 +75,14 @@ def capture(producer: Path, application: Path, selected: str, plan: dict[str, An
             manifest = producer / TOOLS_DIRECTORY / 'otelc-http.json'
             product = json.loads(manifest.read_text())
             tooling['http'] = [identity(manifest), *inventory(producer / TOOLS_DIRECTORY / product['directory'])]
-    return {'schema_version': 2, 'launch_id': plan['launch_id'], 'language': plan['language'],
+    return {'schema_version': 3, 'request': original, 'launch_id': plan['launch_id'], 'language': plan['language'],
         'backend': plan['backend'], 'plain': plan['plain'], 'root': plan['runtime']['root'],
         'argv': argv, 'cwd': str(Path.cwd().resolve()), 'launcher_pid': os.getpid(),
         'node': identity(Path(runtime.pop('executable')).resolve(strict=True)), 'runtime': runtime,
         'entry': identity(application), 'plan_sha256': hashlib.sha256(
             json.dumps(plan, sort_keys=True).encode()).hexdigest(),
         'resolved_plan': plan,
+        'tooling_environment': node_recipe.environment_snapshot(environment),
         'ambient_sha256': {key: hashlib.sha256(os.environ[key].encode()).hexdigest()
             for key in ('NODE_OPTIONS', 'NODE_PATH') if key in os.environ},
         'tooling': tooling, 'generated': [identity(filename) for filename in generated],
@@ -115,7 +93,9 @@ def verify_tooling(expected: dict[str, Any]) -> None:
     """Recheck file sets as well as bytes, including dependency additions/removals."""
     producer = Path(__file__).resolve().parent.parent
     for group, items in expected['tooling'].items():
-        if group in ('adapter', 'packages'):
+        if group == 'launcher':
+            actual = launcher_inputs(producer)
+        elif group in ('adapter', 'packages'):
             directory = producer / ('adapters/node/src' if group == 'adapter' else 'node_modules')
             actual = inventory(directory)
         elif group == 'http':
@@ -330,17 +310,18 @@ def loaded_inputs(runtime: Path, prefix: str, expected: dict[str, Any]) -> list[
     for line in (runtime / (prefix + '-sources.jsonl')).read_text().splitlines():
         record = json.loads(line)
         if not isinstance(record, dict) or record.get('kind') not in (
-                'source', 'compiler_config', 'absent_config', 'package_context', 'absent_package',
+                'source', 'compiler_config', 'absent_config', 'package_context', 'absent_package', 'startup',
                 'module_requested', 'compilation', 'compiled', 'instrumented', 'loaded'):
             raise ValueError('invalid loaded input record')
         if record['kind'] in ('compiled', 'instrumented', 'loaded'):
             verify_emission(runtime, prefix, record, sources)
-        elif record['kind'] not in ('module_requested', 'compilation'):
+        elif record['kind'] not in ('module_requested', 'compilation', 'startup'):
             verify_read_input(record)
         if record['kind'] == 'source':
             sources.add((record['path'], record['sha256']))
         records.append(record)
     verify_module_records(runtime, prefix, records, expected)
+    node_recipe.verify_startup(records, expected)
     return records
 
 
@@ -360,8 +341,9 @@ def verify_read_input(record: dict[str, Any]) -> None:
 def verify(runtime: Path, expected: dict[str, Any]) -> dict[str, Any]:
     """Check retained launch/source evidence after application and SDK shutdown."""
     runtime = runtime.resolve(strict=True)
-    if expected['schema_version'] != 2:
+    if expected['schema_version'] != 3:
         raise ValueError('unsupported Node source evidence schema')
+    node_recipe.verify(runtime, expected['request'], expected, producer=Path(__file__).resolve().parent.parent)
     prefix = 'node-plain' if expected['plain'] else 'node'
     filename = runtime / (prefix + '-launch.json')
     if json.loads(filename.read_text()) != expected:
@@ -377,13 +359,16 @@ def verify(runtime: Path, expected: dict[str, Any]) -> dict[str, Any]:
         records = loaded_inputs(runtime, prefix, expected)
         if not any(item['kind'] == 'source' and item['path'] == expected['entry']['path'] for item in records):
             raise ValueError('launch entry is missing from loaded source evidence')
-    result = {'schema_version': 2, 'launch_id': expected['launch_id'], 'phase': 'verified',
+    result = {'schema_version': 3, 'launch_id': expected['launch_id'], 'phase': 'verified',
         'action_delivery_verified': False, 'loaded_inputs': records, 'launch_manifest': identity(filename)}
     if not expected['plain']:
         sdk_report = runtime / 'node-status.json'
         sdk = json.loads(sdk_report.read_text())
         if sdk['launch_id'] != expected['launch_id']:
             raise ValueError('SDK report belongs to another launch')
+        startup = records[0]['startup']
+        if startup['pid'] != sdk['pid']:
+            raise ValueError('Node startup and SDK report identify different applications')
         result.update(application_pid=sdk['pid'], sdk_pid=sdk['sdk_pid'], sdk_report=identity(sdk_report))
     return result
 
@@ -393,7 +378,7 @@ def finish(runtime: Path, expected: dict[str, Any]) -> bool:
     try:
         report = verify(runtime, expected)
     except (ValueError, OSError, KeyError) as error:
-        report = {'schema_version': 2, 'launch_id': expected['launch_id'], 'phase': 'failed',
+        report = {'schema_version': 3, 'launch_id': expected['launch_id'], 'phase': 'failed',
             'action_delivery_verified': False, 'error': str(error)}
     prefix = 'node-plain' if expected['plain'] else 'node'
     descriptor = os.open(runtime / (prefix + '-inputs.json'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

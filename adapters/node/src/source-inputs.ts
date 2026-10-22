@@ -14,7 +14,7 @@ interface IRetainedCompiler extends Omit<ICompilerEvidence, 'files'> {
 
 interface IInput {
   path: string; kind: 'source' | 'compiler_config' | 'absent_config' | 'package_context' | 'absent_package'
-    | 'module_requested' | 'compilation' | 'compiled' | 'instrumented' | 'loaded';
+    | 'startup' | 'module_requested' | 'compilation' | 'compiled' | 'instrumented' | 'loaded';
   sha256?: string; size?: number;
   format?: string; logical_source?: string; source_sha256?: string; map_sha256?: string; map_size?: number;
   url?: string;
@@ -24,9 +24,14 @@ interface IInput {
   load_id?: number;
   module_type?: 'typescript' | 'javascript';
   compiler?: IRetainedCompiler;
+  startup?: { pid: number; node: string; cwd: string; argv: string[]; exec_argv: string[];
+    environment: Record<string, { state: 'absent' } | { state: 'present'; value: string; sha256: string }> };
 }
 
 const digest = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex');
+const ENVIRONMENT_KEYS = ['NODE_OPTIONS', 'NODE_PATH', 'NODE_PRESERVE_SYMLINKS', 'NODE_EXTRA_CA_CERTS',
+  'NODE_ICU_DATA', 'NODE_COMPILE_CACHE', 'NODE_DISABLE_COMPILE_CACHE', 'NODE_COMPILE_CACHE_READONLY',
+  'UV_THREADPOOL_SIZE', 'TZ', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR', 'TEMP', 'TMP'] as const;
 
 /** Journal the exact original bytes read by our loader/compiler, before transformation. */
 export class SourceInputs {
@@ -44,12 +49,20 @@ export class SourceInputs {
     this.directory = plan.runtime.directory;
     const manifest = JSON.parse(readFileSync(path.join(plan.runtime.directory, prefix + '-launch.json'), 'utf8')) as
       { schema_version: number; launch_id: string; entry: { path: string; sha256: string };
+        resolved_plan: ISourcePlan;
         entry_context: { path: string; sha256?: string; resolved_path?: string }[] };
-    if (manifest.schema_version !== 2 || manifest.launch_id !== plan.launch_id) throw new Error('source input manifest has an unsupported schema or belongs to another launch');
+    if (manifest.schema_version !== 3 || manifest.launch_id !== plan.launch_id) throw new Error('source input manifest has an unsupported schema or belongs to another launch');
+    if (JSON.stringify(manifest.resolved_plan) !== JSON.stringify(plan)) throw new Error('source plan differs from the retained launch manifest');
     this.entry = manifest.entry;
     this.knownContext = new Map(manifest.entry_context.map(item => [item.path, item]));
     this.descriptor = openSync(path.join(plan.runtime.directory, prefix + '-sources.jsonl'),
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    this.record({ path: this.entry.path, kind: 'startup', startup: { pid: process.pid, node: process.execPath,
+      cwd: realpathSync(process.cwd()), argv: [...process.argv], exec_argv: [...process.execArgv],
+      environment: Object.fromEntries(ENVIRONMENT_KEYS.map(key => {
+        const value = process.env[key];
+        return [key, value === undefined ? { state: 'absent' } : { state: 'present', value, sha256: digest(value) }];
+      })) } });
     this.packageContext(this.entry.path);
   }
 

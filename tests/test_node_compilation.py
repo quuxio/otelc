@@ -44,7 +44,7 @@ class NodeCompilationTests(unittest.TestCase):
                         prefix = 'node-plain' if plain else 'node'
                         report = json.loads((runtime / (prefix + '-inputs.json')).read_text())
                         self.assertEqual(report['phase'], 'verified')
-                        self.assertEqual(report['schema_version'], 2)
+                        self.assertEqual(report['schema_version'], 3)
                         records = report['loaded_inputs']
                         attempts = [item for item in records if item['kind'] == 'module_requested']
                         self.assertEqual(len(attempts), 1)

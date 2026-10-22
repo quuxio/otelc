@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from otelc.config import Policy
-from otelc import node_provenance
+from otelc import node_provenance, node_recipe
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -26,7 +26,7 @@ def executable() -> str:
     if not selected:
         raise ValueError('Node 24.11+ is required')
     # Introspection is producer work; application preloads belong to the real launch only.
-    environment = {key: value for key, value in os.environ.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
+    environment = node_recipe.tooling_environment()
     version = subprocess.check_output([selected, '-p', 'process.versions.node'], text=True, env=environment).strip()
     if tuple(map(int, version.split('.'))) < (24, 11, 0):
         raise ValueError('Node 24.11+ is required')
@@ -69,26 +69,31 @@ def command(policy: Policy, runtime: Path, language: str, *, plain: bool = False
             gc_fixture: bool = False, arguments: tuple[str, ...] = ()) -> list[str]:
     """Launch ordinary original URLs; compiler outputs and bootstrap are producer-owned."""
     selected = executable()
-    application = (entry or ROOT / 'examples' / language / ('BenchmarkApp.ts' if language == 'typescript' else 'BenchmarkApp.js')).resolve(strict=True)
+    requested_entry = entry or ROOT / 'examples' / language / ('BenchmarkApp.ts' if language == 'typescript' else 'BenchmarkApp.js')
+    application = requested_entry.resolve(strict=True)
     plan = prepare(policy, runtime, language, root=root, backend=backend, plain=plain)
-    flags = ['--enable-source-maps', *(['--expose-gc'] if gc_fixture else [])]
+    original = node_recipe.request(policy, runtime, language, root=root, entry=requested_entry,
+        selected=selected, backend=backend, plain=plain, gc_fixture=gc_fixture, arguments=arguments)
+    runtime = Path(plan['runtime']['directory'])
+    if node_recipe.resolve_plan(original, plan['launch_id']) != plan:
+        raise ValueError('Node requested policy does not resolve to its prepared plan')
+    prefix = 'node-plain' if plain else 'node'
+    request_file = runtime / (prefix + '-request.json')
+    write_generated(runtime, request_file.name, node_recipe.encoded(original))
+    invocation = node_recipe.invocation(original)
     if plain and language == 'javascript':
-        invocation = [selected, *flags, str(application), *arguments]
-        manifest = node_provenance.capture(ROOT, application, selected, plan, [], invocation)
+        manifest = node_provenance.capture(ROOT, application, selected, plan, [request_file], invocation, original)
+        node_recipe.verify(runtime, original, manifest, producer=ROOT)
         write_generated(runtime, 'node-plain-launch.json', json.dumps(manifest, sort_keys=True) + '\n')
         return invocation
     if not plain:
         os.mkfifo(runtime / 'node-events.fifo', 0o600)
-    prefix = 'node-plain' if plain else 'node'
     plan_file = runtime / (prefix + '-plan.json')
     bootstrap = runtime / (prefix + '-bootstrap.cjs')
-    target = ROOT / 'adapters/node/src' / ('plain-source-loader.ts' if plain else 'source-bootstrap.ts')
-    write_generated(runtime, plan_file.name, json.dumps(plan, sort_keys=True) + '\n')
-    write_generated(runtime, bootstrap.name,
-        'process.env.OTELC_NODE_PLAN = ' + json.dumps(str(plan_file.resolve())) + ';\n'
-        'require(' + json.dumps(str(target)) + ');\n')
-    invocation = [selected, *flags, '--require', str(bootstrap.resolve(strict=True)), str(application), *arguments]
-    manifest = node_provenance.capture(ROOT, application, selected, plan, [plan_file, bootstrap], invocation)
+    write_generated(runtime, plan_file.name, node_recipe.encoded(plan))
+    write_generated(runtime, bootstrap.name, node_recipe.bootstrap_text(ROOT, runtime.resolve(), plain=plain))
+    manifest = node_provenance.capture(ROOT, application, selected, plan, [request_file, plan_file, bootstrap], invocation, original)
+    node_recipe.verify(runtime, original, manifest, producer=ROOT)
     write_generated(runtime, prefix + '-launch.json', json.dumps(manifest, sort_keys=True) + '\n')
     return invocation
 

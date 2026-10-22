@@ -129,6 +129,17 @@ class NodeProvenanceTests(unittest.TestCase):
                  (runtime / 'node-sources.jsonl', b'{"kind":"unknown"}\n'),
                  (runtime / 'node-sources.jsonl', b''),
                  (runtime / 'node-launch.json', b'{}')]
+        journal = runtime / 'node-sources.jsonl'
+        original_records = [json.loads(line) for line in journal.read_text().splitlines()]
+        startup = original_records[0]
+        self.assertEqual(startup['kind'], 'startup')
+        for key, replacement in (('pid', startup['startup']['pid'] + 1), ('cwd', '/different/cwd'),
+                                 ('argv', ['different']), ('exec_argv', ['--unexpected']), ('environment', {})):
+            records = json.loads(json.dumps(original_records))
+            records[0]['startup'][key] = replacement
+            cases.append((journal, ''.join(json.dumps(item) + '\n' for item in records).encode()))
+        for records in (original_records[1:], [startup, *original_records]):
+            cases.append((journal, ''.join(json.dumps(item) + '\n' for item in records).encode()))
         for filename, replacement in cases:
             original = filename.read_bytes()
             try:
