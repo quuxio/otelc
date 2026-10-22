@@ -6,6 +6,8 @@ One configuration for source-free instrumentation across languages, using offici
 
 This rebuild starts with **Java**. TypeScript/JavaScript, Python, Go, the LLVM backend, C, C++ and Rust follow in that order. The shared policy lists all targets; that does not mean each adapter is implemented. The [previous implementation](https://github.com/quuxio/otelc/tree/archive/pre-rebuild-2026-10-21) is retained for reuse and comparison. See the [rebuild plan and acceptance criteria](docs/rebuild-plan.md).
 
+The [JavaScript/Microsoft TypeScript development notes](docs/node-development.md) describe the current local adapter, compiler/runtime checks, independent SDK drain and remaining delivery gaps. This work does not yet enable another delivered language in the public CLI.
+
 The [Node SDK/control building block](docs/node-sdk-controls.md) is under construction for TypeScript/JavaScript: official SDK/exporters, independent live metric gates and the shared control client. It does not yet enable source-free JS/TS application launching, lifetimes or benchmarks.
 
 ## Java example and Grafana

@@ -1,5 +1,4 @@
-import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-proto';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
+import { randomBytes } from 'node:crypto';
 import { defaultResource, resourceFromAttributes } from '@opentelemetry/resources';
 import { AggregationType, MeterProvider } from '@opentelemetry/sdk-metrics';
 import {
@@ -13,6 +12,13 @@ import { ObservedSpanExporter } from './observed-span-exporter.ts';
 import type { IExportCounts } from './export-accounting.ts';
 import { ObservedMetricReader } from './observed-metric-reader.ts';
 import type { ICollectionCounts } from './observed-metric-reader.ts';
+import { createWorkerExporters } from './worker-exporters.ts';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace';
+
+function randomId(bytes: number): string {
+  const value = randomBytes(bytes).toString('hex');
+  return /^0+$/.test(value) ? '0'.repeat(bytes * 2 - 1) + '1' : value;
+}
 
 /** Subset consumed from the single, already validated schema-3 common policy. */
 export interface ISdkPolicy {
@@ -28,6 +34,9 @@ export interface ISdkStatus extends IMetricStatus {
   traces: IExportCounts;
   metric_collection: ICollectionCounts;
 }
+
+/** Producer launch identity is generated metadata, not an extra user policy. */
+export interface ISdkIdentity { language: 'javascript' | 'typescript'; instanceId: string }
 
 async function requireSuccess(operations: Promise<unknown>[]): Promise<void> {
   const results = await Promise.allSettled(operations);
@@ -57,16 +66,19 @@ export class OwnedSdkPipeline {
   readonly #reader: ObservedMetricReader;
   readonly #readerTimeoutMs: number;
   readonly #shutdownTimeoutMs: number;
+  readonly #spanProcessor: BatchSpanProcessor;
   #phase: ISdkStatus['phase'] = 'running';
   #shutdown: Promise<void> | undefined;
 
-  constructor(policy: ISdkPolicy) {
+  constructor(policy: ISdkPolicy, identity?: ISdkIdentity) {
     this.controls = new MetricControls(policy.metrics.collection, policy.metrics.emission);
     const resource = defaultResource().merge(resourceFromAttributes({ 'service.name': policy.resource.service_name,
-      'service.instance.id': String(process.pid) }));
+      'service.instance.id': identity?.instanceId ?? String(process.pid),
+      ...(identity ? { 'otelc.language': identity.language } : {}) }));
     const endpoint = policy.export.endpoint.replace(/\/$/, '');
-    this.#exporter = new GatedMetricExporter(new OTLPMetricExporter({ url: endpoint + '/v1/metrics',
-      timeoutMillis: policy.export.timeout_ms }), this.controls);
+    const exporters = createWorkerExporters({ endpoint, timeoutMs: policy.export.timeout_ms },
+      () => { this.#phase = 'failed'; });
+    this.#exporter = new GatedMetricExporter(exporters.metric, this.controls);
     // The pinned periodic reader requires collection timeout <= interval. The HTTP
     // transport retains the configured timeout; report the reader's shorter budget.
     this.#readerTimeoutMs = Math.min(policy.export.interval_ms, policy.export.timeout_ms);
@@ -82,13 +94,17 @@ export class OwnedSdkPipeline {
     const sampler = policy.traces.enabled
       ? new ParentBasedSampler({ root: new TraceIdRatioBasedSampler(policy.traces.sample_ratio) })
       : new AlwaysOffSampler();
-    this.#traceExporter = new ObservedSpanExporter(new OTLPTraceExporter({ url: endpoint + '/v1/traces',
-      timeoutMillis: policy.export.timeout_ms }));
+    this.#traceExporter = new ObservedSpanExporter(exporters.trace);
+    this.#spanProcessor = new BatchSpanProcessor({ exporter: this.#traceExporter, scheduledDelayMillis: policy.export.interval_ms,
+      exportTimeoutMillis: policy.export.timeout_ms, maxQueueSize: 2048, maxExportBatchSize: 512,
+      selfObsMeterProvider: this.meterProvider });
     this.tracerProvider = new TracerProvider({ resource, sampler, meterProvider: this.meterProvider,
-      spanProcessors: [new BatchSpanProcessor({ exporter: this.#traceExporter, scheduledDelayMillis: policy.export.interval_ms,
-        exportTimeoutMillis: policy.export.timeout_ms, maxQueueSize: 2048, maxExportBatchSize: 512,
-        selfObsMeterProvider: this.meterProvider })] });
+      idGenerator: { generateTraceId: () => randomId(16), generateSpanId: () => randomId(8) },
+      spanProcessors: [this.#spanProcessor] });
   }
+
+  /** Admit an ended SDK span handed off by the instrumented application's SDK. */
+  acceptSpan(span: ReadableSpan): void { this.#spanProcessor.onEnd(span); }
 
   /** Report acknowledgements and phase; neither establishes downstream receipt. */
   status(): ISdkStatus {

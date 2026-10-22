@@ -3,9 +3,15 @@ import { closeSync, fchmodSync, fstatSync, linkSync, lstatSync, openSync, readFi
 import { createServer } from 'node:net';
 import type { AddressInfo, Server, Socket } from 'node:net';
 import path from 'node:path';
-import type { OwnedSdkPipeline } from './sdk-pipeline.ts';
+import type { MetricControls } from './metric-controls.ts';
 
 interface IDescriptorIdentity { device: bigint; inode: bigint; sha256?: string }
+export interface IControlDescriptor { filename: string; device: string; inode: string; sha256: string }
+export interface IControlledPipeline {
+  readonly controls: MetricControls;
+  status(): object | Promise<object>;
+  flush(): Promise<void>;
+}
 
 function digest(data: Buffer | string): string { return createHash('sha256').update(data).digest('hex'); }
 
@@ -17,6 +23,12 @@ function removeOwnedFile(filename: string, identity: IDescriptorIdentity): void 
   } catch (error) {
     if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
   }
+}
+
+/** A surviving SDK owner removes only the unchanged descriptor published by its parent. */
+export function removeControlDescriptor(descriptor: IControlDescriptor): void {
+  removeOwnedFile(descriptor.filename, { device: BigInt(descriptor.device), inode: BigInt(descriptor.inode),
+    sha256: descriptor.sha256 });
 }
 
 function publishDescriptor(filename: string, contents: string): IDescriptorIdentity {
@@ -51,7 +63,7 @@ function commandFrom(data: Buffer, secret: Buffer): string | undefined {
 /** Private authenticated control transport shared by JS and TS owned pipelines. */
 export class LocalMetricControl {
   readonly filename: string;
-  readonly #pipeline: OwnedSdkPipeline;
+  readonly #pipeline: IControlledPipeline;
   readonly #server: Server;
   readonly #secret = randomBytes(32).toString('hex');
   readonly #connections = new Set<Socket>();
@@ -60,7 +72,7 @@ export class LocalMetricControl {
   #transportFailed = false;
   #closing: Promise<void> | undefined;
 
-  private constructor(directory: string, pipeline: OwnedSdkPipeline) {
+  private constructor(directory: string, pipeline: IControlledPipeline) {
     this.filename = path.join(directory, 'control.json');
     this.#pipeline = pipeline;
     this.#server = createServer(socket => this.#accept(socket));
@@ -72,7 +84,7 @@ export class LocalMetricControl {
   get transportFailed(): boolean { return this.#transportFailed; }
 
   /** Publish only after listening; the endpoint file never contains partial JSON. */
-  static async listen(directory: string, pipeline: OwnedSdkPipeline): Promise<LocalMetricControl> {
+  static async listen(directory: string, pipeline: IControlledPipeline): Promise<LocalMetricControl> {
     const metadata = lstatSync(directory);
     if (!metadata.isDirectory() || metadata.uid !== process.getuid?.()
         || (metadata.mode & 0o7777) !== 0o700) throw new Error('control directory must be owned and mode 0700');
@@ -95,6 +107,13 @@ export class LocalMetricControl {
     } catch (error) { await control.close(); throw error; }
   }
 
+  /** Share identity only, never the control authentication key, with the private SDK process. */
+  cleanupDescriptor(): IControlDescriptor {
+    if (!this.#identity?.sha256) throw new Error('control endpoint is not published');
+    return { filename: this.filename, device: String(this.#identity.device), inode: String(this.#identity.inode),
+      sha256: this.#identity.sha256 };
+  }
+
   #accept(socket: Socket): void {
     if (this.#closed) { socket.destroy(); return; }
     this.#connections.add(socket);
@@ -113,7 +132,8 @@ export class LocalMetricControl {
       completed = true;
       socket.setTimeout(0);
       const command = newline === data.length - 1 ? commandFrom(data.subarray(0, newline), Buffer.from(this.#secret, 'ascii')) : undefined;
-      void this.#execute(command).then(reply => socket.end(JSON.stringify(reply) + '\n'));
+      void this.#execute(command).catch(() => ({ error: 'owned SDK control failed' }))
+        .then(reply => socket.end(JSON.stringify(reply) + '\n'));
     });
   }
 
@@ -132,7 +152,8 @@ export class LocalMetricControl {
         break;
       default: return { error: 'invalid control request' };
     }
-    return this.#pipeline.status();
+    try { return await this.#pipeline.status(); }
+    catch { return { error: 'owned SDK status failed' }; }
   }
 
   /** Destroy idle peers before closing; preserve a replaced or edited descriptor. */
