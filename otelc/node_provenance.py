@@ -14,6 +14,8 @@ from urllib.parse import unquote, urlsplit
 from otelc.config import Selection
 from otelc.file_inputs import checked_file, identity
 from otelc import node_recipe
+from otelc.node_context import package_context
+from otelc import node_preloads
 
 TOOLS_DIRECTORY = Path('build/tools')
 
@@ -35,21 +37,6 @@ def inventory(directory: Path, *, suffix: str | None = None) -> list[dict[str, A
 def raise_walk_error(error: OSError) -> None:
     """An unreadable tooling subtree is an incomplete inventory, not an empty one."""
     raise error
-
-
-def package_context(application: Path) -> list[dict[str, Any]]:
-    """Bind the nearest package and all nearer absences that affect Node format."""
-    records = []
-    directory = application.parent
-    while True:
-        filename = directory / 'package.json'
-        if os.path.lexists(filename):
-            records.append(identity(filename))
-            return records
-        records.append({'path': str(filename), 'absent': True})
-        if directory.parent == directory:
-            return records
-        directory = directory.parent
 
 
 def launcher_inputs(producer: Path) -> list[dict[str, Any]]:
@@ -75,7 +62,8 @@ def capture(producer: Path, application: Path, selected: str, plan: dict[str, An
             manifest = producer / TOOLS_DIRECTORY / 'otelc-http.json'
             product = json.loads(manifest.read_text())
             tooling['http'] = [identity(manifest), *inventory(producer / TOOLS_DIRECTORY / product['directory'])]
-    return {'schema_version': 3, 'request': original, 'launch_id': plan['launch_id'], 'language': plan['language'],
+    return {'schema_version': 4, 'request': original, 'preloads': node_preloads.capture(original, environment),
+        'launch_id': plan['launch_id'], 'language': plan['language'],
         'backend': plan['backend'], 'plain': plan['plain'], 'root': plan['runtime']['root'],
         'argv': argv, 'cwd': str(Path.cwd().resolve()), 'launcher_pid': os.getpid(),
         'node': identity(Path(runtime.pop('executable')).resolve(strict=True)), 'runtime': runtime,
@@ -341,7 +329,7 @@ def verify_read_input(record: dict[str, Any]) -> None:
 def verify(runtime: Path, expected: dict[str, Any]) -> dict[str, Any]:
     """Check retained launch/source evidence after application and SDK shutdown."""
     runtime = runtime.resolve(strict=True)
-    if expected['schema_version'] != 3:
+    if expected['schema_version'] != 4:
         raise ValueError('unsupported Node source evidence schema')
     node_recipe.verify(runtime, expected['request'], expected, producer=Path(__file__).resolve().parent.parent)
     prefix = 'node-plain' if expected['plain'] else 'node'
@@ -359,7 +347,7 @@ def verify(runtime: Path, expected: dict[str, Any]) -> dict[str, Any]:
         records = loaded_inputs(runtime, prefix, expected)
         if not any(item['kind'] == 'source' and item['path'] == expected['entry']['path'] for item in records):
             raise ValueError('launch entry is missing from loaded source evidence')
-    result = {'schema_version': 3, 'launch_id': expected['launch_id'], 'phase': 'verified',
+    result = {'schema_version': 4, 'launch_id': expected['launch_id'], 'phase': 'verified',
         'action_delivery_verified': False, 'loaded_inputs': records, 'launch_manifest': identity(filename)}
     if not expected['plain']:
         sdk_report = runtime / 'node-status.json'
@@ -378,7 +366,7 @@ def finish(runtime: Path, expected: dict[str, Any]) -> bool:
     try:
         report = verify(runtime, expected)
     except (ValueError, OSError, KeyError) as error:
-        report = {'schema_version': 3, 'launch_id': expected['launch_id'], 'phase': 'failed',
+        report = {'schema_version': 4, 'launch_id': expected['launch_id'], 'phase': 'failed',
             'action_delivery_verified': False, 'error': str(error)}
     prefix = 'node-plain' if expected['plain'] else 'node'
     descriptor = os.open(runtime / (prefix + '-inputs.json'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

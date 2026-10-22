@@ -51,7 +51,7 @@ export class SourceInputs {
       { schema_version: number; launch_id: string; entry: { path: string; sha256: string };
         resolved_plan: ISourcePlan;
         entry_context: { path: string; sha256?: string; resolved_path?: string }[] };
-    if (manifest.schema_version !== 3 || manifest.launch_id !== plan.launch_id) throw new Error('source input manifest has an unsupported schema or belongs to another launch');
+    if (manifest.schema_version !== 4 || manifest.launch_id !== plan.launch_id) throw new Error('source input manifest has an unsupported schema or belongs to another launch');
     if (JSON.stringify(manifest.resolved_plan) !== JSON.stringify(plan)) throw new Error('source plan differs from the retained launch manifest');
     this.entry = manifest.entry;
     this.knownContext = new Map(manifest.entry_context.map(item => [item.path, item]));

@@ -12,6 +12,7 @@ from typing import Any
 
 from otelc.config import Policy
 from otelc.file_inputs import checked_file
+from otelc import node_preloads
 
 ENVIRONMENT_KEYS = ('NODE_OPTIONS', 'NODE_PATH', 'NODE_PRESERVE_SYMLINKS', 'NODE_EXTRA_CA_CERTS',
                     'NODE_ICU_DATA', 'NODE_COMPILE_CACHE', 'NODE_DISABLE_COMPILE_CACHE',
@@ -201,3 +202,4 @@ def verify(runtime: Path, original: dict[str, Any], manifest: dict[str, Any], *,
     if manifest['tooling_environment'] != inspection:
         raise ValueError('Node metadata environment differs from the isolated tooling recipe')
     verify_generated(runtime, original, manifest, plan, producer)
+    node_preloads.verify(original, manifest['preloads'])
