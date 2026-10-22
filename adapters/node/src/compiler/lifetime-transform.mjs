@@ -51,11 +51,29 @@ function releaseKeyBinding(classPath) {
   return keys;
 }
 
-function instrumentReleaseBody(method, helper, name, site, owner, ownerIsClass) {
-  const className = ownerIsClass ? owner.name : undefined;
-  if (className && method.scope.getOwnBinding(className)) {
-    method.scope.rename(className, method.scope.generateUidIdentifier(className).name);
-  }
+function privateReleaseOwner(classPath) {
+  // Include references to outer private names: introducing a matching name
+  // would shadow those references even without a declaration in this class.
+  const names = new Set();
+  classPath.traverse({ PrivateName(path) { names.add(path.node.id.name); } });
+  let identifier = classPath.scope.generateUidIdentifier('otelc_owner');
+  while (names.has(identifier.name)) identifier = classPath.scope.generateUidIdentifier('otelc_owner');
+  const key = t.privateName(identifier);
+  classPath.node.body.body.push(t.classPrivateMethod('method', t.cloneNode(key), [],
+    t.blockStatement([t.returnStatement(t.cloneNode(classPath.node.id))])));
+  return key;
+}
+
+function privateOwnerReference(key) {
+  const kind = value => t.binaryExpression('===', t.unaryExpression('typeof', t.thisExpression()), t.stringLiteral(value));
+  const objectLike = t.logicalExpression('||',
+    t.logicalExpression('&&', kind('object'), t.binaryExpression('!==', t.thisExpression(), t.nullLiteral())), kind('function'));
+  const branded = t.logicalExpression('&&', objectLike, t.binaryExpression('in', t.cloneNode(key), t.thisExpression()));
+  return t.conditionalExpression(branded, t.callExpression(t.memberExpression(t.thisExpression(), t.cloneNode(key)), []),
+    t.unaryExpression('void', t.numericLiteral(0)));
+}
+
+function instrumentReleaseBody(method, helper, name, site, owner) {
   const failed = method.scope.generateUidIdentifier('otelc_release_failed');
   const error = method.scope.generateUidIdentifier('otelc_release_error');
   const body = method.node.body;
@@ -88,6 +106,7 @@ function instrumentReleases(classPath, helper, name, plan) {
     && !t.isPrivateName(member.node.key) && member.node.kind !== 'constructor');
   if (!members.length || !plan.lifetimes.release_methods.length) return t.arrayExpression([]);
   const keys = releaseKeyBinding(classPath);
+  let privateOwner;
   for (const [index, method] of members.entries()) {
     const site = index + 1;
     const originalKey = method.node.key;
@@ -102,13 +121,18 @@ function instrumentReleases(classPath, helper, name, plan) {
         t.booleanLiteral(supported), t.booleanLiteral(!method.isClassMethod())]);
     method.node.computed = true;
     if (!supported || (knownName !== undefined && !plan.lifetimes.release_methods.includes(knownName))) continue;
-    instrumentReleaseBody(method, helper, name, site, classPath.node.id ?? keys, Boolean(classPath.node.id));
+    let owner = classPath.node.id ?? keys;
+    if (classPath.node.id && method.scope.getOwnBinding(classPath.node.id.name)) {
+      privateOwner ??= privateReleaseOwner(classPath);
+      owner = privateOwnerReference(privateOwner);
+    }
+    instrumentReleaseBody(method, helper, name, site, owner);
   }
   return keys;
 }
 
-// Register the actual constructor in a static block: no added instance fields,
-// prototype members, wrapper class or application-visible constructor alias.
+// Register the actual constructor without adding public instance fields,
+// prototype members, a wrapper class or an application-visible constructor alias.
 export function instrumentLifetime(path, helper, name, plan, tag) {
   if (!plan.lifetimes?.enabled) return false;
   const selected = tag !== 'otelc.exclude' && new Selection(plan.lifetime_matchers).accepts(name, tag === 'otelc.instrument');
