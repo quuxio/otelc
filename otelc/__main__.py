@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java
+from otelc import python as python_adapter
 from otelc.config import LANGUAGES, Policy
 
 
@@ -57,6 +58,14 @@ def main() -> int:
     original.add_argument("--backend", choices=("native", "api"), default="native")
     original.add_argument("--plain", action="store_true")
     original.add_argument("arguments", nargs=argparse.REMAINDER)
+    python = commands.add_parser("python", help="candidate: launch original CPython sources")
+    python.add_argument("--root", type=Path, default=Path.cwd())
+    python_entry = python.add_mutually_exclusive_group(required=True)
+    python_entry.add_argument("--entry", type=Path)
+    python_entry.add_argument("--module")
+    python.add_argument("--runtime", type=Path, required=True, help="new private directory retained for reports")
+    python.add_argument("--plain", action="store_true")
+    python.add_argument("arguments", nargs=argparse.REMAINDER)
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--socket", type=Path, required=True)
     metrics.add_argument("operation", nargs="+", choices=("on", "off", "collection", "emission", "status", "flush"))
@@ -74,6 +83,10 @@ def main() -> int:
             print(json.dumps(value, indent=2))
             return 0
         policy = Policy.load(args.config)
+        if args.command == "python":
+            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            return python_adapter.run(policy, args.runtime, root=args.root, entry=args.entry,
+                                      module=args.module, plain=args.plain, arguments=tuple(arguments))
         if args.command == "node":
             arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
             return node.run(policy, args.runtime, args.language, root=args.root, entry=args.entry,

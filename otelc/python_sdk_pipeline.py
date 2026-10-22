@@ -42,6 +42,30 @@ def span_context(value: dict[str, Any] | None) -> trace.SpanContext | None:
     )
 
 
+class WireEvent(Event):
+    """Keep event attribute drops distinct from span-level attribute drops."""
+
+    def __init__(self, value: dict[str, Any]) -> None:
+        super().__init__(value['name'], value.get('attributes', {}), value['timestamp'])
+        self._source_dropped = value.get('dropped_attributes', 0)
+
+    @property
+    def dropped_attributes(self) -> int:
+        return self._source_dropped
+
+
+class WireLink(trace.Link):
+    """Keep the source SDK's link attribute-drop count on protobuf export."""
+
+    def __init__(self, value: dict[str, Any]) -> None:
+        super().__init__(span_context(value['context']), value.get('attributes', {}))
+        self._source_dropped = value.get('dropped_attributes', 0)
+
+    @property
+    def dropped_attributes(self) -> int:
+        return self._source_dropped
+
+
 class WireSpan(ReadableSpan):
     """Preserve already-observed SDK drop metadata on a completed span."""
 
@@ -52,12 +76,8 @@ class WireSpan(ReadableSpan):
             name=value['name'], context=span_context(value['context']),
             parent=span_context(value.get('parent')), resource=resource,
             attributes=value.get('attributes', {}),
-            events=[Event(event['name'], event.get('attributes', {}),
-                          event['timestamp'])
-                    for event in value.get('events', [])],
-            links=[trace.Link(span_context(link['context']),
-                              link.get('attributes', {}))
-                   for link in value.get('links', [])],
+            events=[WireEvent(event) for event in value.get('events', [])],
+            links=[WireLink(link) for link in value.get('links', [])],
             kind=trace.SpanKind[value.get('span_kind', 'INTERNAL')],
             status=trace.Status(trace.StatusCode[value.get('status', 'UNSET')],
                                 value.get('description')),
