@@ -18,14 +18,15 @@ class JavaExampleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="otelc-examples-", dir="/tmp") as directory:
             root = Path(directory)
             manifests = java_examples.build(root / "build")
-            self.assertEqual(set(manifests), {"TaskApp"})
+            self.assertEqual(set(manifests), {"TaskApp", "HttpContextApp"})
             for name, manifest in manifests.items():
                 with self.subTest(name=name):
                     application = prepared_java.PreparedApplication.load(manifest)
                     runtime = root / name
                     runtime.mkdir(mode=0o700)
+                    arguments = ("client", "http://127.0.0.1/") if name == "HttpContextApp" else ()
                     launch = prepared_java.prepare(application, policy, runtime, plain=True,
-                                                   diagnostic_profile=True)
+                                                   arguments=arguments, diagnostic_profile=True)
                     output = subprocess.run(launch.argv, input="quit\n", capture_output=True,
                                             text=True, check=True, timeout=10)
                     self.assertEqual((output.stdout, output.stderr), ("ready\n", ""))

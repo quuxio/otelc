@@ -185,10 +185,37 @@ def command(policy: Policy, runtime: Path, *, plain: bool = False) -> list[str]:
 
 
 def context_configuration(policy: Policy) -> dict[str, str]:
-    """Translate common task intent into the pinned official executor instrumentation."""
-    if policy.data["context"]["http"]:
-        raise ValueError("Java HTTP propagation is not implemented in the rebuild yet")
-    return {"otel.instrumentation.executors.enabled": str(policy.data["context"]["tasks"]).lower()}
+    """Translate common propagation intent into the pinned official agent modules."""
+    settings = policy.data["context"]
+    values = {"otel.instrumentation.executors.enabled": str(settings["tasks"]).lower(),
+              "otel.instrumentation.java-http-client.enabled": str(settings["http"]).lower(),
+              "otel.instrumentation.java-http-server.enabled": str(settings["http"]).lower(),
+              "otel.instrumentation.otelc-http-headers.enabled": str(settings["http"]).lower()}
+    if settings["http"]:
+        values["otel.propagators"] = "tracecontext,baggage"
+    return values
+
+
+def validate_http_header_shape() -> None:
+    """Refuse an incompatible JDK before enabling the header-view preservation guard."""
+    declarations = {
+        "jdk.internal.net.http.ImmutableHttpRequest": ("private final java.net.http.HttpHeaders headers;",
+                                                      "public java.net.http.HttpHeaders headers();"),
+        "jdk.internal.net.http.HttpRequestImpl": ("private final java.net.http.HttpHeaders userHeaders;",
+                                                  "public java.net.http.HttpHeaders headers();",
+                                                  "java.net.http.HttpHeaders getUserHeaders();"),
+    }
+    for owner, expected in declarations.items():
+        validate_http_type(owner, expected)
+
+
+def validate_http_type(owner: str, expected: tuple[str, ...]) -> None:
+    """Inspect JDK declarations without executing application methods or loading their classes."""
+    checked = subprocess.run([executable("javap"), "-p", "--module", "java.net.http",
+                              owner],
+                             capture_output=True, text=True, timeout=30)
+    if checked.returncode or any(declaration not in checked.stdout for declaration in expected):
+        raise ValueError("HTTP propagation requires the qualified JDK immutable-request header layout")
 
 
 def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_class: str,
@@ -211,6 +238,8 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
     selection = json.dumps({"methods": selected, "types": types, "resources": resources}, sort_keys=True)
     (runtime / "selection.json").write_text(selection + "\n")
     data = policy.data
+    if data["context"]["http"]:
+        validate_http_header_shape()
     values = {
         "otel.javaagent.enabled": "true",
         "otel.sdk.disabled": "false",

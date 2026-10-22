@@ -52,7 +52,9 @@ Java observes selected final classes with one constructor. It measures successfu
 
 See [measuring object and resource lifetimes](docs/lifetimes.md) for configuration, metrics, spans, failure cases and the language delivery plan.
 
-[Java task propagation](docs/java-context.md) uses the common `[context].tasks` switch to drive the official executor instrumentation. An ordinary task example, source-free launch commands and tested parentage/cancellation/reuse boundaries are included. This switch is selected at launch; metric collection/emission still change live without affecting traces. HTTP propagation remains a separate implementation.
+[Java task and HTTP propagation](docs/java-context.md) uses common `[context]` switches to drive the official agent. Ordinary task/client/server examples, source-free launch commands and tested parentage/sampling/preservation boundaries are included. These switches are selected at launch; metric collection/emission still change live without affecting traces.
+
+Open the [task and service trace dashboard](http://localhost:3001/d/otelc-traces) to search by service and inspect a selected span tree. It works with the local anonymous Viewer account and does not require Grafana Explore. The dashboard reuses the archived trace view with the rebuild's Tempo datasource and example service.
 
 Use the [prepared Java launcher](docs/prepared-java.md) for an existing compiled application or generated test main. An explicit classpath/main/source-binding manifest drives the same policy without compiling or editing application inputs. Plain and instrumented commands retain launch identities, separate JVM class-origin evidence and the same live controls.
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import subprocess
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from otelc.config import LANGUAGES, Policy, Selection, expression
-from otelc.java import context_configuration, properties
+from otelc.java import context_configuration, properties, validate_http_header_shape
 
 
 class PolicyTests(unittest.TestCase):
@@ -70,19 +72,36 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(case=case), self.assertRaises(ValueError):
                 Policy.parse(data)
 
-    def test_common_task_flag_drives_only_the_official_executor_module(self) -> None:
+    def test_common_context_flags_drive_only_the_declared_official_agent_modules(self) -> None:
         for tasks in (False, True):
-            policy = Policy.parse({"schema_version": 3, "traces": {"enabled": True},
-                                   "context": {"tasks": tasks}})
-            self.assertEqual(context_configuration(policy),
-                             {"otel.instrumentation.executors.enabled": str(tasks).lower()})
-        policy = Policy.parse({"schema_version": 3, "traces": {"enabled": True},
-                               "context": {"http": True}})
-        with self.assertRaisesRegex(ValueError, "HTTP propagation is not implemented"):
-            context_configuration(policy)
+            for http in (False, True):
+                with self.subTest(tasks=tasks, http=http):
+                    policy = Policy.parse({"schema_version": 3, "traces": {"enabled": True},
+                                           "context": {"tasks": tasks, "http": http}})
+                    values = context_configuration(policy)
+                    self.assertEqual(values["otel.instrumentation.executors.enabled"], str(tasks).lower())
+                    self.assertEqual(values["otel.instrumentation.java-http-client.enabled"], str(http).lower())
+                    self.assertEqual(values["otel.instrumentation.java-http-server.enabled"], str(http).lower())
+                    self.assertEqual(values["otel.instrumentation.otelc-http-headers.enabled"], str(http).lower())
+                    self.assertEqual(values.get("otel.propagators"), "tracecontext,baggage" if http else None)
         for context in ({"tasks": True}, {"http": True}):
             with self.subTest(context=context), self.assertRaisesRegex(ValueError, "traces.enabled"):
                 Policy.parse({"schema_version": 3, "context": context})
+
+    def test_http_preflight_refuses_missing_or_incompatible_jdk_headers_before_launch(self) -> None:
+        declarations = ("private final java.net.http.HttpHeaders headers;\n"
+                        "public java.net.http.HttpHeaders headers();")
+        for result in (subprocess.CompletedProcess([], 0, "", ""),
+                       subprocess.CompletedProcess([], 1, declarations, "failure"),
+                       subprocess.CompletedProcess([], 0, declarations.replace("final ", ""), "")):
+            with self.subTest(result=result), patch("otelc.java.subprocess.run", return_value=result):
+                with self.assertRaisesRegex(ValueError, "header layout"):
+                    validate_http_header_shape()
+        with patch("otelc.java.subprocess.run", side_effect=[
+            subprocess.CompletedProcess([], 0, declarations, ""),
+            subprocess.CompletedProcess([], 0, "private final java.net.http.HttpHeaders userHeaders;\n"
+                "public java.net.http.HttpHeaders headers();\njava.net.http.HttpHeaders getUserHeaders();", "")]):
+            validate_http_header_shape()
 
     def test_properties_escape_delimiters_newlines_and_unicode(self) -> None:
         self.assertEqual(properties({"b": "x=y", "a": "\n"}), "a=\\n\nb=x\\=y\n")
