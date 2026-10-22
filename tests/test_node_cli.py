@@ -6,6 +6,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 import select
 import subprocess
 import sys
@@ -36,6 +37,48 @@ def calls_by_language(capture: Capture) -> dict[str, int]:
 
 
 class NodeCliTests(unittest.TestCase):
+    def test_version_probe_does_not_execute_app_preloads_or_remove_app_module_paths(self) -> None:
+        capture = Capture()
+        self.addCleanup(capture.close)
+        with tempfile.TemporaryDirectory(prefix='otelc-preload-', dir=ROOT / 'build') as temporary:
+            root = Path(temporary)
+            modules = root / 'module-path' / 'application-dependency'
+            modules.mkdir(parents=True)
+            (modules / 'package.json').write_text('{"type":"commonjs"}\n')
+            (modules / 'index.js').write_text('module.exports = 7;\n')
+            policy = root / 'otelc.toml'
+            policy.write_text('schema_version = 3\n[sources]\ninclude = ["**"]\n'
+                '[functions]\ninclude = ["*.workload"]\n[export]\n'
+                f'endpoint = "http://127.0.0.1:{capture.server.server_port}"\n')
+            for plain in (True, False):
+                with self.subTest(plain=plain):
+                    audit = root / ('plain-preloads.txt' if plain else 'instrumented-preloads.txt')
+                    preload = root / ('plain-preload.cjs' if plain else 'instrumented-preload.cjs')
+                    preload.write_text("require('node:fs').appendFileSync(" + json.dumps(str(audit))
+                        + ", String(process.pid) + '\\n');\n")
+                    entry = root / ('plain-app.cjs' if plain else 'instrumented-app.cjs')
+                    entry.write_text("const fs = require('node:fs');\n"
+                        'function workload(value) { return value + 1; }\n'
+                        "console.log(JSON.stringify({value:workload(require('application-dependency')),\n"
+                        'pid:process.pid,preloads:fs.readFileSync(' + json.dumps(str(audit))
+                        + ",'utf8').trim().split('\\n').length}));\n")
+                    options = '--require=' + str(preload)
+                    environment = {**os.environ, 'NODE_OPTIONS': options, 'NODE_PATH': str(modules.parent)}
+                    with patch.dict(os.environ, environment, clear=True):
+                        node.executable()
+                        self.assertFalse(audit.exists(), 'version probe executed the application preload')
+                        self.assertEqual(os.environ['NODE_OPTIONS'], options)
+                    runtime = root / ('plain' if plain else 'instrumented')
+                    invocation = [sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
+                        '--language', 'javascript', '--entry', str(entry), '--root', str(root),
+                        '--runtime', str(runtime), *(['--plain'] if plain else [])]
+                    result = subprocess.run(invocation, cwd=ROOT, env=environment,
+                        capture_output=True, text=True, timeout=20)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    response = json.loads(result.stdout)
+                    self.assertEqual((response['value'], response['preloads']), (8, 1))
+                    self.assertEqual(audit.read_text().splitlines(), [str(response['pid'])])
+
     def test_both_public_examples_share_the_existing_common_policy_and_checksum(self) -> None:
         capture = Capture()
         self.addCleanup(capture.close)

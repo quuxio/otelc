@@ -48,6 +48,8 @@ def check() -> dict[str, object]:
     """Use the lockfile's production closure, without writing application inputs."""
     selected = executable()
     environment = {**os.environ, 'PATH': str(Path(selected).parent) + os.pathsep + os.environ.get('PATH', '')}
+    environment.pop('NODE_OPTIONS', None)
+    environment.pop('NODE_PATH', None)
     # This is a packaging check, not a second copy of adapter source coverage.
     environment.pop('NODE_V8_COVERAGE', None)
     build = ROOT / 'build'

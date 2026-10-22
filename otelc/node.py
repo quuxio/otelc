@@ -24,7 +24,9 @@ def executable() -> str:
     selected = os.environ.get('OTELC_NODE') or (str(homebrew) if homebrew.is_file() else shutil.which('node'))
     if not selected:
         raise ValueError('Node 24.11+ is required')
-    version = subprocess.check_output([selected, '-p', 'process.versions.node'], text=True).strip()
+    # Introspection is producer work; application preloads belong to the real launch only.
+    environment = {key: value for key, value in os.environ.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
+    version = subprocess.check_output([selected, '-p', 'process.versions.node'], text=True, env=environment).strip()
     if tuple(map(int, version.split('.'))) < (24, 11, 0):
         raise ValueError('Node 24.11+ is required')
     return selected

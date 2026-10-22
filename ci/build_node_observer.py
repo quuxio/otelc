@@ -29,8 +29,10 @@ def build() -> Path:
     selected = os.environ.get('OTELC_NODE') or shutil.which('node')
     if not selected:
         raise ValueError('Node 24.11+ is required')
+    environment = {key: value for key, value in os.environ.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
     info = json.loads(subprocess.check_output([selected, '-p',
-        'JSON.stringify({version:process.versions.node,abi:process.versions.modules,executable:process.execPath})'], text=True))
+        'JSON.stringify({version:process.versions.node,abi:process.versions.modules,executable:process.execPath})'],
+        text=True, env=environment))
     if tuple(map(int, info['version'].split('.'))) < (24, 11, 0):
         raise ValueError('Node 24.11+ is required')
     include = Path(os.environ.get('OTELC_NODE_INCLUDE', str(Path(info['executable']).resolve().parent.parent / 'include/node')))

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ci.build_node_observer import build, matching_headers
+from otelc.node import executable
 
 
 def headers(directory: Path, version: str = '24.21.0', abi: str = '137') -> None:
@@ -22,6 +23,35 @@ def headers(directory: Path, version: str = '24.21.0', abi: str = '137') -> None
 
 
 class NodeObserverBuildTests(unittest.TestCase):
+    def test_build_version_probe_cannot_execute_application_preloads(self) -> None:
+        selected = executable()
+        with tempfile.TemporaryDirectory(prefix='otelc-build-preload-') as temporary:
+            directory = Path(temporary)
+            audit = directory / 'preload-pids.txt'
+            preload = directory / 'preload.cjs'
+            preload.write_text("require('node:fs').appendFileSync(" + json.dumps(str(audit))
+                               + ", String(process.pid) + '\\n');\n")
+
+            actual_run = subprocess.run
+
+            def compile_candidate(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if '-o' not in command:
+                    return actual_run(command, **kwargs)
+                Path(command[command.index('-o') + 1]).write_bytes(b'controlled compiler output')
+                return subprocess.CompletedProcess(command, 0)
+
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                with patch.dict(os.environ, {'OTELC_NODE': selected,
+                    'NODE_OPTIONS': '--require=' + str(preload)}), \
+                        patch('ci.build_node_observer.subprocess.run', side_effect=compile_candidate):
+                    output = build()
+                    self.assertEqual(output.read_bytes(), b'controlled compiler output')
+                self.assertFalse(audit.exists(), 'native build version probe executed application startup code')
+            finally:
+                os.chdir(previous)
+
     def test_failed_rebuild_preserves_the_previously_loadable_binary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

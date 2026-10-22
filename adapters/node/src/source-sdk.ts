@@ -132,7 +132,7 @@ export class SourceSdk {
       diagnostic = openSync(path.join(plan.runtime.directory, 'node-sdk.log'), 'wx', 0o600);
       writer = new SourceHandoffWriter(filename);
       const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-        key !== 'NODE_OPTIONS' && !key.startsWith('OTEL_') && !key.startsWith('OTELC_')));
+        key !== 'NODE_OPTIONS' && key !== 'NODE_PATH' && !key.startsWith('OTEL_') && !key.startsWith('OTELC_')));
       preparedPlan = openSync(path.join(plan.runtime.directory, 'node-plan.json'), constants.O_RDONLY | constants.O_NOFOLLOW);
       const metadata = fstatSync(preparedPlan);
       if (!metadata.isFile() || metadata.uid !== process.getuid?.() || (metadata.mode & 0o7777) !== 0o600) {

@@ -60,6 +60,8 @@ Save that policy as `otelc.toml`. From the otelc checkout, supply the original p
 
 Select `--language javascript` and a JavaScript entry for the equivalent JS application. `--backend api` selects the pinned Microsoft API compiler instead of the default native compiler. CJS/ESM and `.cts`/`.mts` files use their qualified execution formats. Arguments after `--` reach the application unchanged. The launcher inherits application stdin/stdout/stderr and adds a control-descriptor announcement to stderr.
 
+Runtime-version probes and producer build/packaging helpers omit `NODE_OPTIONS` and `NODE_PATH`. They must not execute an application's preloads or resolve producer dependencies through application module paths. The actual application retains both settings; its existing preloads run once at application startup. The independent SDK process also omits these application settings.
+
 Use another fresh directory and add `--plain` before `--` for a baseline. Plain JavaScript uses Node directly; plain TypeScript uses the real compiler without starting the SDK or installing probes. No forced GC is added by these public launch commands.
 
 ## Change metrics in a running process

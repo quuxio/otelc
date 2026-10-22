@@ -20,7 +20,8 @@ def check() -> None:
         raise ValueError('Node is required for native coverage')
     llvm = Path(os.environ.get('OTELC_LLVM_BIN', '/opt/homebrew/opt/llvm@22/bin' if sys.platform == 'darwin'
                                else str(Path(shutil.which('clang++') or '/usr/bin/clang++').parent)))
-    version = subprocess.check_output([node, '-p', 'process.versions.node'], text=True).strip()
+    probe_environment = {key: value for key, value in os.environ.items() if key not in ('NODE_OPTIONS', 'NODE_PATH')}
+    version = subprocess.check_output([node, '-p', 'process.versions.node'], text=True, env=probe_environment).strip()
     library = ROOT / 'build/tools' / f'otelc_node_observer-{version}.node'
     if not library.is_file():
         raise ValueError('build the ordinary Node observer before profiling it')
@@ -28,7 +29,7 @@ def check() -> None:
         directory = Path(temporary)
         backup = directory / 'ordinary.node'
         shutil.copy2(library, backup)
-        environment = {**os.environ, 'OTELC_NODE': node, 'OTELC_NATIVE_COVERAGE': '1',
+        environment = {**probe_environment, 'OTELC_NODE': node, 'OTELC_NATIVE_COVERAGE': '1',
                        'LLVM_PROFILE_FILE': str(directory / 'observer-%p-%m.profraw')}
         try:
             subprocess.run([sys.executable, 'ci/build_node_observer.py'], cwd=ROOT, env=environment, check=True)

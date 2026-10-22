@@ -22,6 +22,8 @@ class NodeNativeCoverageTests(unittest.TestCase):
 
             def run(command: list[str], **kwargs: object) -> None:
                 if command[1] == 'ci/build_node_observer.py':
+                    self.assertNotIn('NODE_OPTIONS', kwargs['env'])
+                    self.assertNotIn('NODE_PATH', kwargs['env'])
                     library.write_bytes(b'instrumented binary')
                 if command[1] == '--test' and profiles:
                     environment = kwargs['env']
@@ -34,7 +36,8 @@ class NodeNativeCoverageTests(unittest.TestCase):
                 'summary': {'lines': {'count': 100, 'covered': percentage, 'percent': percentage}}}]}]}
             try:
                 with patch('ci.check_node_native_coverage.ROOT', root), \
-                        patch.dict(os.environ, {'OTELC_NODE': '/node', 'OTELC_LLVM_BIN': '/llvm'}, clear=True), \
+                        patch.dict(os.environ, {'OTELC_NODE': '/node', 'OTELC_LLVM_BIN': '/llvm',
+                            'NODE_OPTIONS': '--require=application-preload.cjs', 'NODE_PATH': '/app/modules'}, clear=True), \
                         patch('ci.check_node_native_coverage.subprocess.run', side_effect=run), \
                         patch('ci.check_node_native_coverage.subprocess.check_output', side_effect=['24.21.0\n', json.dumps(exported)]):
                     check()
