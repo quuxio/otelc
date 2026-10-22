@@ -12,7 +12,7 @@ The [development notes](docs/node-development.md) describe compiler/runtime chec
 
 The merged [Node SDK/control foundation](docs/node-sdk-controls.md) supplies official SDK/exporters, independent live metric gates and the shared control client. Source probes and application launching belong to the separate Node candidate.
 
-The [Python frontend candidate](docs/python-native.md) launches original CPython sources with selected function metrics/spans, weak object/resource lifetime observations, official thread propagation and live controls. The [SDK metric gates](docs/python-sdk-controls.md) and [process bridge](docs/python-sdk-process.md) isolate aggregation/export and retain checked drain evidence. Broader lifetime shapes, HTTP/library integration, full source evidence, benchmarks and language qualification remain work. Python is still reported as remaining by `plan`.
+The [Python frontend candidate](docs/python-native.md) launches original CPython sources with selected function metrics/spans, weak object/resource lifetime observations, official thread propagation and live controls. The [SDK metric gates](docs/python-sdk-controls.md) and [process bridge](docs/python-sdk-process.md) isolate aggregation/export and retain checked drain evidence. Its [paired benchmarks](docs/benchmarks.md) retain application-body timings and separate application/SDK CPU and RSS windows. Broader lifetime shapes, HTTP/library integration, full source evidence and language qualification remain work. Python is still reported as remaining by `plan`.
 
 ## Java example and Grafana
 
@@ -33,7 +33,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript and Microsoft TypeScript runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 

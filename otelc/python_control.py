@@ -84,7 +84,8 @@ class ControlServer:
         collection, emission = state['collection'], state['emission']
         if command == 'status':
             sdk = self.runtime.channel.request('status', timeout=2.5)
-            return {**state, 'effective_emission_off': sdk['effective_emission_off']}
+            return {**state, 'effective_emission_off': sdk['effective_emission_off'],
+                    'in_flight_exports': sdk['in_flight_exports']}
         if command == 'flush':
             self.runtime.channel.request('flush', timeout=2.5)
             return self.runtime.status()

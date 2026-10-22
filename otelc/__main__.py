@@ -12,14 +12,21 @@ from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java
 from otelc import python as python_adapter
+from otelc import python_benchmark
 from otelc.config import LANGUAGES, Policy
 
 
 def run_example(policy: Policy, language: str, *, plain: bool) -> int:
     """Keep example runtime files through the selected adapter's complete shutdown."""
-    if language not in ("java", "javascript", "typescript"):
+    if language not in ("java", "javascript", "typescript", "python"):
         raise ValueError(f"{language} is not implemented in the rebuild yet")
     with tempfile.TemporaryDirectory(prefix="otelc-", dir="/tmp") as temporary:
+        if language == "python":
+            runtime = Path(temporary) / 'runtime'
+            if not plain:
+                print(f"Control descriptor: {runtime}/control.json", file=sys.stderr)
+            return python_adapter.run(policy, runtime, root=python_adapter.ROOT,
+                entry=python_adapter.ROOT / 'examples/python/BenchmarkApp.py', plain=plain)
         if language != "java":
             return node.run(policy, Path(temporary), language, plain=plain)
         command = java.command(policy, Path(temporary), plain=plain)
@@ -37,7 +44,7 @@ def main() -> int:
     compare = commands.add_parser("benchmark")
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument("--no-publish", action="store_true")
-    compare.add_argument("--language", choices=("java", "javascript", "typescript"), default="java")
+    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python"), default="java")
     compare.add_argument("--backend", choices=("native", "api"), default="native")
     compare.add_argument("--comparison-id", help="group equivalent language runs in Grafana")
     example = commands.add_parser("example")
@@ -115,6 +122,9 @@ def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
     if args.language == "java":
         return benchmark.run(policy, args.output, publish=not args.no_publish,
                              comparison_id=args.comparison_id)
+    if args.language == 'python':
+        return python_benchmark.run(policy, args.output, publish=not args.no_publish,
+                                    comparison_id=args.comparison_id)
     return node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
                               publish=not args.no_publish, comparison_id=args.comparison_id)
 

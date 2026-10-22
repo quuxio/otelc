@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This candidate adds selected function metrics/spans, weak object/resource lifetime observations, configured thread propagation and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling, threading instrumentor and metric/OTLP pipeline. The public `plan` still reports Python as remaining: HTTP/library integration, complete source evidence, benchmarks, independent review and oteleq qualification are delivery work.
+This candidate adds selected function metrics/spans, weak object/resource lifetime observations, configured thread propagation and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling, threading instrumentor and metric/OTLP pipeline. The public `plan` still reports Python as remaining: HTTP/library integration, complete source evidence, independent review and oteleq qualification are delivery work.
 
 ## An unchanged application
 
@@ -144,7 +144,7 @@ Enter `10` for ordinary work, `lifecycle` for constructor failure/release retry,
 
 Local integration tests use CPython 3.12 and the locked SDK. They compare original script/module metadata, arguments, source hashes, seeded random values, signatures, output, tracebacks and exit codes against native baselines. Real receivers decode the four-state example's metric counts and spans, bound to the actual application PID rather than the CLI/SDK PID. Separate tests cover recursion/context boundaries, async suspension/cancellation, occupied monitoring IDs, controlled startup/probe failures, queue/transport evidence and open control connections. These are tested profiles, not a claim about arbitrary applications.
 
-The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. Enabled HTTP-context policy currently causes a pre-launch refusal. Benchmark/Grafana comparisons for Python remain outstanding; function/lifetime telemetry uses the configured Collector endpoint, but no Python performance result is claimed by these tests.
+The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. Enabled HTTP-context policy currently causes a pre-launch refusal. The [paired benchmark workflow](benchmarks.md) runs the ordinary Python example in plain and four same-PID metric states and publishes driver measurements to the configured Collector. Raw samples and separate app/SDK CPU/RSS windows remain available locally. These functional checks do not establish stable performance estimates.
 
 Run the focused tests from a prepared checkout:
 

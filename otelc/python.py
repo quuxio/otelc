@@ -104,10 +104,7 @@ def run(policy: Policy, directory: Path, *, root: Path, entry: Path | None = Non
     command = invocation(root, entry=entry, module=module, arguments=arguments)
     if plain:
         return subprocess.call(command, cwd=root)
-    if 'python' not in policy.data['languages']:
-        raise ValueError('Python is disabled by policy')
-    if policy.data['context']['http']:
-        raise ValueError('Python candidate HTTP-context integration is not available yet')
+    validate_policy(policy)
     directory = directory.resolve()
     directory.mkdir(mode=0o700)
     sdk = SdkProcess.start(policy, directory / 'sdk', bind=False)
@@ -140,3 +137,11 @@ def run(policy: Policy, directory: Path, *, root: Path, entry: Path | None = Non
                 application.kill()
                 application.wait(timeout=2)
         sdk.abort()
+
+
+def validate_policy(policy: Policy) -> None:
+    """The CLI and benchmark must reject the same unimplemented profile."""
+    if 'python' not in policy.data['languages']:
+        raise ValueError('Python is disabled by policy')
+    if policy.data['context']['http']:
+        raise ValueError('Python candidate HTTP-context integration is not available yet')

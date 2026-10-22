@@ -166,7 +166,8 @@ class PythonRuntime:
             if (state['collection'], state['emission']) != (collection, emission):
                 self.reject('control_acknowledgement')
                 raise ValueError('Python control acknowledgement differs')
-            return {**self.status(), 'effective_emission_off': state['effective_emission_off']}
+            return {**self.status(), 'effective_emission_off': state['effective_emission_off'],
+                    'in_flight_exports': state['in_flight_exports']}
         finally:
             self._control_lock.release()
 

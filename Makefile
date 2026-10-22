@@ -4,6 +4,7 @@ MAVEN ?= mvn
 NODE ?= $(if $(CI),node,$(if $(wildcard /opt/homebrew/opt/node@24/bin/node),/opt/homebrew/opt/node@24/bin/node,node))
 NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
+BENCHMARK_LANGUAGE ?= java
 
 .PHONY: help setup check lint test node-check node-observer node-native-coverage node-http java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
@@ -70,8 +71,8 @@ stack-up: stack-check
 stack-down:
 	docker compose down
 
-benchmark: java-build
-	$(PYTHON) -m otelc benchmark --output build/benchmarks/run-$$(date +%Y%m%d-%H%M%S)
+benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http)
+	$(PYTHON) -m otelc benchmark --language $(BENCHMARK_LANGUAGE) --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
 
 sonar-policy:
 	$(PYTHON) ci/verify_sonar_policy.py

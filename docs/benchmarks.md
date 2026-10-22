@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Java and the JavaScript/Microsoft TypeScript candidate use the same `integer128-v1` workload and one common policy. Every accepted batch must match the independent checksum. Plain and instrumented application sources remain unchanged. Five measured modes are retained: `plain`, `both_off`, `collection_only`, `emission_only` and `both_on`. All four instrumented modes use the same application PID and build. Tracing and lifetime observation retain their configured settings while metrics change live.
+Java and the JavaScript/Microsoft TypeScript and Python candidates use the same `integer128-v1` workload and one common policy. Every accepted batch must match the independent checksum. Plain and instrumented application sources remain unchanged. Five measured modes are retained: `plain`, `both_off`, `collection_only`, `emission_only` and `both_on`. All four instrumented modes use the same application PID and build. Tracing and lifetime observation retain their configured settings while metrics change live.
 
 ## Run equivalent language comparisons
 
@@ -13,7 +13,7 @@ make setup java-build node-observer node-http
 make stack-up
 ```
 
-Use a fresh comparison ID to group the language reports in Grafana. Apply the same policy to each language. Java remains the default for `make benchmark` and the CLI.
+Use a fresh comparison ID to group the language reports in Grafana. Apply the same policy to each language. Java remains the default for `make benchmark` and the CLI. Use `make benchmark BENCHMARK_LANGUAGE=python` for a standalone Python run.
 
 ```sh
 comparison=$(date +%Y%m%d-%H%M%S)
@@ -26,24 +26,29 @@ comparison=$(date +%Y%m%d-%H%M%S)
 .venv/bin/python -m otelc --config examples/otelc.toml benchmark \
   --language typescript --backend native --comparison-id "$comparison" \
   --output "build/benchmarks/$comparison-typescript"
+.venv/bin/python -m otelc --config examples/otelc.toml benchmark \
+  --language python --comparison-id "$comparison" \
+  --output "build/benchmarks/$comparison-python"
 ```
 
-The default TypeScript backend is Microsoft's pinned native compiler. Use `--backend api` for the pinned Microsoft compiler API profile. Compare the two compiler profiles with separate comparison IDs, so the dashboard does not combine their TypeScript samples. Compilation/startup occurs before warmup and is excluded from operation latency. A TypeScript plain lane uses the selected real compiler without probes or an SDK process; JavaScript plain uses Node directly. No production GC request is added.
+The default TypeScript backend is Microsoft's pinned native compiler. Use `--backend api` for the pinned Microsoft compiler API profile. Compare the two compiler profiles with separate comparison IDs, so the dashboard does not combine their TypeScript samples. Compilation/startup occurs before warmup and is excluded from operation latency. A TypeScript plain lane uses the selected real compiler without probes or an SDK process; JavaScript plain uses Node directly. Python launches the original CPython script directly with the configured startup hook; its plain lane has no hook or SDK. No production GC request is added.
 
 Set `[benchmark]` `iterations`, `warmup` and `samples` in a copy of the common policy to change the measurement size. Use the same copy for all compared languages. Use `--no-publish` to retain local reports without sending driver measurements to the Collector. That flag does not change the application's export policy.
 
 ## Read the retained evidence
 
-`report.json` contains raw ns/operation arrays, medians, comparison/run identity, source and policy hashes, runtime/compiler/build identity, host information and state transitions. `raw.jsonl` retains each measured application response, including PID and checksum. Warmup and state/control/pipe time are excluded from the application's batch timer. Java shuffles instrumented states with a reproducible per-sample seed. Node rotates the four states so that each occupies every position over four samples, then reverses the next four-sample block; the report records this method. Neither schedule removes all host load or time-order bias. Use enough samples and inspect the raw sequence.
+`report.json` contains raw ns/operation arrays, medians, comparison/run identity, source and policy hashes, runtime/compiler/build identity, host information and state transitions. `responses.jsonl` retains each parsed Node/Python application response before SDK flush or resource sampling can fail. `raw.jsonl` retains complete samples, including the driver-observed PID, checksum and resource windows. A failed later observation never becomes a successful CPU sample. Warmup and state/control/pipe time are excluded from the application's batch timer. Java shuffles instrumented states with a reproducible per-sample seed. Node and Python rotate the four states so that each occupies every position over four samples, then reverses the next four-sample block; the report records this method. Neither schedule removes all host load or time-order bias. Use enough samples and inspect the raw sequence.
 
 Node reports also retain `plain/` and `instrumented/` launch/compiler/input evidence, independent SDK drain reports and stderr. The driver refuses publication on input mutation, incomplete final accounting, handoff/observer/queue loss, failed exports or a failed application. Raw files remain available after failure. A clean SDK report establishes producer accounting; it does not prove downstream receipt or OTLP partial-rejection absence.
 
-Node `process_samples` retain separate application and SDK CPU/RSS observations made with the operating system's `ps` command. CPU deltas cover the batch and explicit SDK flush, including intervening process/control activity. They are not the application-body latency timer. RSS is the maximum of before/after snapshots, not peak allocation or total process peak. CPU precision is limited by the platform's `ps` display; a zero delta can mean below resolution. Small functional runs establish correctness, not reliable performance estimates. Sampling and flushing can also affect scheduling and later batches. Java does not yet provide these per-process resource windows.
+Python retains app/SDK identities and final exit records in `plain/` and `instrumented/`, plus the instrumented SDK drain report. It refuses a final report and driver publication when source identity changes, final accounting is unknown, a process fails, or losses/exports remain failed or pending. Its source evidence covers the internal example and startup files; it does not yet qualify the complete Python import/code provenance.
+
+Node and Python `process_samples` retain separate application and SDK CPU/RSS observations made with the operating system's `ps` command. CPU deltas cover the batch and explicit SDK flush, including intervening process/control activity. They are not the application-body latency timer. RSS is the maximum of before/after snapshots, not peak allocation or total process peak. CPU precision is limited by the platform's `ps` display; a zero delta can mean below resolution. Small functional runs establish correctness, not reliable performance estimates. Sampling and flushing can also affect scheduling and later batches. Java does not yet provide these per-process resource windows.
 
 Lifetime and trace configuration remain in every raw report. To measure lifecycle-observer cost, repeat the complete comparison under a separately labelled common policy with `[lifetimes] enabled = false`, keeping the remaining settings fixed. Do not interpret metric-off states as removing installed probes, trace work or lifecycle bookkeeping. Repeat runs on an otherwise idle host and inspect variation before drawing performance conclusions.
 
 ## View the comparison in Grafana
 
-Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate Node panels show CPU/operation and RSS by application/SDK role. The dashboard uses exported driver measurements rather than sampled function-duration histograms.
+Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate Node/Python panels show CPU/operation and RSS by application/SDK role. The dashboard uses exported driver measurements rather than sampled function-duration histograms.
 
 Use [function metrics and lifetimes](http://localhost:3001/d/otelc-lifetimes) for application telemetry and [task/service traces](http://localhost:3001/d/otelc-traces) for trace trees. The local stack uses OTLP/HTTP port 4320, Prometheus 9091, Tempo 3201 and Grafana 3001. Export success alone is insufficient: check the Collector, Prometheus samples and, when traces are enabled, decoded Tempo spans. Missing language series mean that no qualified results were published for that selection; they are never filled with synthetic values.
