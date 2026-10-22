@@ -115,7 +115,7 @@ class NodeRecipeTests(unittest.TestCase):
             original = json.loads((runtime / 'node-plain-request.json').read_text())
             self.assertEqual(original['policy_source']['text'], text)
             self.assertEqual(original['policy_source']['sha256'], hashlib.sha256(text.encode()).hexdigest())
-            self.assertEqual(original['policy']['metrics']['collection'], False)
+            self.assertFalse(original['policy']['metrics']['collection'])
             configuration.write_text(text + '# changed\n')
             with self.assertRaisesRegex(ValueError, 'policy source changed'):
                 node_recipe.verify(runtime, original, manifest, producer=ROOT)

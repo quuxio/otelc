@@ -7,7 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from otelc import benchmark, node_benchmark
 from otelc.config import Policy
@@ -15,6 +15,42 @@ from test_java_integration import Capture
 
 
 class NodeBenchmarkTests(unittest.TestCase):
+    def test_state_schedule_balances_positions_and_reverses_without_randomness(self) -> None:
+        data = copy.deepcopy(Policy.load(Path('examples/otelc.toml')).data)
+        data['benchmark'].update(iterations=1, samples=8, warmup=1)
+        policy = Policy.parse(data)
+        process = Mock(pid=123)
+        expected = benchmark.checksum(1)
+
+        def switched(_endpoint: Path, _application: object, mode: str) -> dict[str, int | bool]:
+            collection, emission = benchmark.STATES[mode]
+            return {'pid': process.pid, 'sdk_pid': 456, 'collection': collection, 'emission': emission}
+
+        with tempfile.TemporaryDirectory(dir='/tmp') as temporary:
+            output = Path(temporary)
+            schedules = []
+            for _ in range(2):
+                records = benchmark.Measurements()
+                with patch('otelc.node_benchmark.benchmark.switch_state', side_effect=switched), \
+                        patch('otelc.node_benchmark.measured_batch', return_value={'checksum': expected, 'elapsed_ns': 10}):
+                    node_benchmark.measure_batches(process, policy, output, output / 'control.json', 456, expected, records)
+                orders = [[item['mode'] for item in records.transitions if item['sample'] == sample] for sample in range(8)]
+                for sample in orders:
+                    self.assertEqual(set(sample), set(benchmark.STATES))
+                for position in range(4):
+                    self.assertEqual({sample[position] for sample in orders[:4]}, set(benchmark.STATES))
+                self.assertEqual(orders[4:], [list(reversed(sample)) for sample in orders[:4]])
+                self.assertTrue(all(len(records.samples[mode]) == 8 for mode in benchmark.STATES))
+                schedules.append(orders)
+            self.assertEqual(schedules[0], schedules[1])
+            plain = benchmark.Measurements()
+            with patch('otelc.node_benchmark.benchmark.switch_state') as switch, \
+                    patch('otelc.node_benchmark.measured_batch', return_value={'checksum': expected, 'elapsed_ns': 10}):
+                node_benchmark.measure_batches(process, policy, output, None, None, expected, plain)
+            switch.assert_not_called()
+            self.assertEqual(len(plain.samples['plain']), 8)
+            self.assertFalse(plain.transitions)
+
     def test_equivalent_languages_and_compilers_keep_one_live_instrumented_pid(self) -> None:
         capture = Capture()
         self.addCleanup(capture.close)
@@ -89,11 +125,12 @@ class NodeBenchmarkTests(unittest.TestCase):
         data = copy.deepcopy(Policy.load(Path('examples/otelc.toml')).data)
         data['benchmark'].update(iterations=10, samples=1, warmup=1)
         data['export']['endpoint'] = f'http://127.0.0.1:{capture.server.server_port}'
+        policy = Policy.parse(data)
         with tempfile.TemporaryDirectory(dir='/tmp') as temporary:
             output = Path(temporary) / 'comparison'
             with patch('otelc.node_benchmark.validate_drain', side_effect=ValueError('incomplete drain')):
                 with self.assertRaisesRegex(ValueError, 'incomplete drain'):
-                    node_benchmark.run(Policy.parse(data), output, language='javascript')
+                    node_benchmark.run(policy, output, language='javascript')
             self.assertEqual(len((output / 'raw.jsonl').read_text().splitlines()), 5)
             self.assertFalse((output / 'report.json').exists())
             self.assertEqual(json.loads((output / 'instrumented/node-status.json').read_text())['phase'], 'closed')

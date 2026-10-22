@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java
 from otelc.config import LANGUAGES, Policy
@@ -88,17 +89,21 @@ def main() -> int:
                               "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":
-            if args.language == "java":
-                report = benchmark.run(policy, args.output, publish=not args.no_publish,
-                                       comparison_id=args.comparison_id)
-            else:
-                report = node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
-                                            publish=not args.no_publish, comparison_id=args.comparison_id)
+            report = run_benchmark(policy, args)
             print(json.dumps({"report": str(args.output / "report.json"), "run_id": report["run_id"], "medians_ns": report["median_ns_per_operation"]}, indent=2))
             return 0
         return run_example(policy, args.language, plain=args.plain)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f"quux-otelc: {error}\n")
+
+
+def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
+    """Select the benchmark adapter while preserving the common comparison settings."""
+    if args.language == "java":
+        return benchmark.run(policy, args.output, publish=not args.no_publish,
+                             comparison_id=args.comparison_id)
+    return node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
+                              publish=not args.no_publish, comparison_id=args.comparison_id)
 
 
 if __name__ == "__main__":

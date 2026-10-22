@@ -44,15 +44,15 @@ export function installSource(plan: ISourcePlan): {
         function_matchers: { include: [], exclude: [] }, lifetimes: { ...plan.lifetimes, enabled: false } };
       const prepared = transpile(inputs.source(filename), filename, name, execution, root,
         context.format?.replace('-typescript', ''), inputs.config);
-      inputs.compilation(loadIdentity, filename, prepared.compilation);
-      inputs.emitted(loadIdentity, filename, name, url, prepared.code, prepared.format, 'compiled', prepared.map);
+      inputs.compilation(loadIdentity, prepared.compilation);
+      inputs.emitted(loadIdentity, prepared.code, prepared.format, 'compiled', prepared.map);
       if (!selected) {
         const source = prepared.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(prepared.map)).toString('base64');
-        inputs.emitted(loadIdentity, filename, name, url, source, prepared.format ?? 'module', 'loaded', prepared.map);
+        inputs.emitted(loadIdentity, source, prepared.format ?? 'module', 'loaded', prepared.map);
         return { format: prepared.format ?? 'module', shortCircuit: true, source };
       }
       const output = transform(prepared.code, filename, name, execution, runtime, prepared);
-      inputs.emitted(loadIdentity, filename, name, url, output.code, output.format, 'instrumented');
+      inputs.emitted(loadIdentity, output.code, output.format, 'instrumented');
       return { format: output.format, shortCircuit: true, source: output.code };
     }
     const loaded = nextLoad(url, context);
@@ -61,11 +61,11 @@ export function installSource(plan: ISourcePlan): {
     const source = inputs.source(filename, loaded.source === undefined || loaded.source === null
       ? undefined : sourceText(loaded.source));
     if (!selection.accepts(name)) {
-      inputs.emitted(loadIdentity, filename, name, url, source, loaded.format ?? undefined, 'loaded');
+      inputs.emitted(loadIdentity, source, loaded.format ?? undefined, 'loaded');
       return loaded;
     }
     const output = transform(source, filename, name, plan, runtime).code;
-    inputs.emitted(loadIdentity, filename, name, url, output, loaded.format ?? undefined, 'instrumented');
+    inputs.emitted(loadIdentity, output, loaded.format ?? undefined, 'instrumented');
     return { ...loaded, source: output };
   } });
   let closing: Promise<void> | undefined;

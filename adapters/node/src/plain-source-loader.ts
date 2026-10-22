@@ -21,10 +21,10 @@ registerHooks({ load(url, context, nextLoad) {
   if (!name || file.startsWith(producerRoot) || !/\.(?:ts|mts|cts)$/.test(file)) return nextLoad(url, context);
   const loadIdentity = inputs.beginModule(file, name, url, 'typescript');
   const output = transpile(inputs.source(file), file, name, plan, root, context.format?.replace('-typescript', ''), inputs.config);
-  inputs.compilation(loadIdentity, file, output.compilation);
-  inputs.emitted(loadIdentity, file, name, url, output.code, output.format, 'compiled', output.map);
+  inputs.compilation(loadIdentity, output.compilation);
+  inputs.emitted(loadIdentity, output.code, output.format, 'compiled', output.map);
   const source = output.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(output.map)).toString('base64');
-  inputs.emitted(loadIdentity, file, name, url, source, output.format ?? 'module', 'loaded', output.map);
+  inputs.emitted(loadIdentity, source, output.format ?? 'module', 'loaded', output.map);
   return { format: output.format ?? 'module', shortCircuit: true,
     source };
 } });

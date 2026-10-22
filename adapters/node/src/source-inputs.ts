@@ -12,6 +12,13 @@ interface IRetainedCompiler extends Omit<ICompilerEvidence, 'files'> {
   files: Record<'input' | 'options' | 'output' | 'map', IRetainedFile> & { preparation_map?: IRetainedFile };
 }
 
+interface IModuleLoad {
+  readonly id: number;
+  readonly path: string;
+  readonly logicalSource: string;
+  readonly url: string;
+}
+
 interface IInput {
   path: string; kind: 'source' | 'compiler_config' | 'absent_config' | 'package_context' | 'absent_package'
     | 'startup' | 'module_requested' | 'compilation' | 'compiled' | 'instrumented' | 'loaded';
@@ -112,9 +119,9 @@ export class SourceInputs {
   }
 
   /** A caught compiler/probe refusal still leaves an incomplete load in the evidence. */
-  beginModule(filename: string, logicalSource: string, url: string, moduleType: 'typescript' | 'javascript'): number {
-    const identity = ++this.nextLoad;
-    this.record({ path: realpathSync(filename), kind: 'module_requested', load_id: identity,
+  beginModule(filename: string, logicalSource: string, url: string, moduleType: 'typescript' | 'javascript'): IModuleLoad {
+    const identity = Object.freeze({ id: ++this.nextLoad, path: realpathSync(filename), logicalSource, url });
+    this.record({ path: identity.path, kind: 'module_requested', load_id: identity.id,
       logical_source: logicalSource, url, module_type: moduleType });
     return identity;
   }
@@ -125,9 +132,9 @@ export class SourceInputs {
   }
 
   /** Preserve actual compiler inputs/options/raw outputs before private workspaces disappear. */
-  compilation(loadIdentity: number, filename: string, evidence: ICompilerEvidence): void {
+  compilation(load: IModuleLoad, evidence: ICompilerEvidence): void {
     const { files, ...metadata } = evidence;
-    this.record({ path: realpathSync(filename), kind: 'compilation', load_id: loadIdentity,
+    this.record({ path: load.path, kind: 'compilation', load_id: load.id,
       compiler: { ...metadata, files: {
         input: this.compilerFile(files.input), options: this.compilerFile(files.options),
         output: this.compilerFile(files.output), map: this.compilerFile(files.map),
@@ -135,14 +142,14 @@ export class SourceInputs {
   }
 
   /** Retain the exact compiler/hook output separately from its original file bytes. */
-  emitted(loadIdentity: number, filename: string, logicalSource: string, url: string, code: string, format: string | undefined,
+  emitted(load: IModuleLoad, code: string, format: string | undefined,
     kind: 'compiled' | 'instrumented' | 'loaded', map?: object): void {
-    const source = this.inputs.get('source:' + realpathSync(filename));
+    const source = this.inputs.get('source:' + load.path);
     if (!source) throw new Error('emitted module has no source input');
     const outputFile = this.retain(code);
     const mapText = map ? JSON.stringify(map) : undefined;
-    this.record({ path: realpathSync(filename), kind, load_id: loadIdentity, sha256: digest(code), size: Buffer.byteLength(code),
-      source_sha256: source.sha256, logical_source: logicalSource, url, format: format ?? 'node-detected',
+    this.record({ path: load.path, kind, load_id: load.id, sha256: digest(code), size: Buffer.byteLength(code),
+      source_sha256: source.sha256, logical_source: load.logicalSource, url: load.url, format: format ?? 'node-detected',
       output_file: outputFile,
       ...(mapText ? { map_sha256: digest(mapText), map_size: Buffer.byteLength(mapText), map_file: this.retain(mapText) } : {}) });
   }

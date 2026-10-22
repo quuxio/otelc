@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import platform
-import random
 import re
 import statistics
 import subprocess
@@ -120,10 +119,8 @@ def measure_batches(process: subprocess.Popen[str], policy: Policy, output: Path
                     sdk_pid: int | None, expected: int, records: benchmark.Measurements) -> None:
     """Alternate live states, retaining each raw response before checksum acceptance."""
     configuration = policy.data['benchmark']
-    order = ['plain'] if endpoint is None else list(benchmark.STATES)
     for sample in range(configuration['samples']):
-        random.Random(sample).shuffle(order)
-        for mode in order:
+        for mode in state_order(sample, plain=endpoint is None):
             if endpoint is not None:
                 state = benchmark.switch_state(endpoint, process, mode)
                 if state['sdk_pid'] != sdk_pid or (state['collection'], state['emission']) != benchmark.STATES[mode]:
@@ -135,6 +132,16 @@ def measure_batches(process: subprocess.Popen[str], policy: Policy, output: Path
             if result['checksum'] != expected:
                 raise ValueError('plain/instrumented workload checksum differs')
             records.samples[mode].append(result['elapsed_ns'] / configuration['iterations'])
+
+
+def state_order(sample: int, *, plain: bool) -> list[str]:
+    """Balance state positions per block and reverse the following block."""
+    modes = ['plain'] if plain else list(benchmark.STATES)
+    offset = sample % len(modes)
+    order = modes[offset:] + modes[:offset]
+    if sample // len(modes) % 2:
+        order.reverse()
+    return order
 
 
 def run(policy: Policy, output: Path, *, language: str, backend: str = 'native',
@@ -160,7 +167,9 @@ def run(policy: Policy, output: Path, *, language: str, backend: str = 'native',
         raise ValueError('application source changed')
     manifest = json.loads((output / 'instrumented/node-launch.json').read_text())
     run_id = uuid.uuid4().hex
-    compiler = ('Microsoft native 7.0.2' if backend == 'native' else 'Microsoft API 6.0.3') if language == 'typescript' else 'none'
+    compiler = 'none'
+    if language == 'typescript':
+        compiler = 'Microsoft native 7.0.2' if backend == 'native' else 'Microsoft API 6.0.3'
     report = {'schema_version': 2, 'run_id': run_id, 'comparison_id': comparison_id or run_id,
               'language': language, 'runtime': 'Node ' + manifest['runtime']['version'], 'compiler': compiler,
               'build_flags': ['source launch', '--enable-source-maps', compiler],
@@ -169,6 +178,7 @@ def run(policy: Policy, output: Path, *, language: str, backend: str = 'native',
               'expected_checksum': expected, 'source_sha256': before['sha256'],
               'config_sha256': hashlib.sha256(json.dumps(policy.data, sort_keys=True).encode()).hexdigest(),
               'config': policy.data, 'pids': pids, 'sdk_pid': sdk_pid, 'transitions': records.transitions,
+              'state_order_method': 'cyclic positions; reverse alternate complete blocks',
               'launch_evidence': {lane: {name: node_provenance.identity(output / lane / (prefix + '-' + name + '.json'))
                   for name in ('launch', 'inputs')} for lane, prefix in (('plain', 'node-plain'), ('instrumented', 'node'))},
               'samples_ns_per_operation': records.samples,

@@ -350,15 +350,19 @@ def verify(runtime: Path, expected: dict[str, Any]) -> dict[str, Any]:
     result = {'schema_version': 4, 'launch_id': expected['launch_id'], 'phase': 'verified',
         'action_delivery_verified': False, 'loaded_inputs': records, 'launch_manifest': identity(filename)}
     if not expected['plain']:
-        sdk_report = runtime / 'node-status.json'
-        sdk = json.loads(sdk_report.read_text())
-        if sdk['launch_id'] != expected['launch_id']:
-            raise ValueError('SDK report belongs to another launch')
-        startup = records[0]['startup']
-        if startup['pid'] != sdk['pid']:
-            raise ValueError('Node startup and SDK report identify different applications')
-        result.update(application_pid=sdk['pid'], sdk_pid=sdk['sdk_pid'], sdk_report=identity(sdk_report))
+        result.update(verify_sdk_identity(runtime, expected['launch_id'], records[0]['startup']))
     return result
+
+
+def verify_sdk_identity(runtime: Path, launch_id: str, startup: dict[str, Any]) -> dict[str, Any]:
+    """Bind the SDK report to this launch and the observed application startup."""
+    sdk_report = runtime / 'node-status.json'
+    sdk = json.loads(sdk_report.read_text())
+    if sdk['launch_id'] != launch_id:
+        raise ValueError('SDK report belongs to another launch')
+    if startup['pid'] != sdk['pid']:
+        raise ValueError('Node startup and SDK report identify different applications')
+    return {'application_pid': sdk['pid'], 'sdk_pid': sdk['sdk_pid'], 'sdk_report': identity(sdk_report)}
 
 
 def finish(runtime: Path, expected: dict[str, Any]) -> bool:

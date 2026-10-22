@@ -34,7 +34,7 @@ Set `[benchmark]` `iterations`, `warmup` and `samples` in a copy of the common p
 
 ## Read the retained evidence
 
-`report.json` contains raw ns/operation arrays, medians, comparison/run identity, source and policy hashes, runtime/compiler/build identity, host information and state transitions. `raw.jsonl` retains each measured application response, including PID and checksum. Warmup and state/control/pipe time are excluded from the application's batch timer. Instrumented states are shuffled with a reproducible per-sample seed.
+`report.json` contains raw ns/operation arrays, medians, comparison/run identity, source and policy hashes, runtime/compiler/build identity, host information and state transitions. `raw.jsonl` retains each measured application response, including PID and checksum. Warmup and state/control/pipe time are excluded from the application's batch timer. Java shuffles instrumented states with a reproducible per-sample seed. Node rotates the four states so that each occupies every position over four samples, then reverses the next four-sample block; the report records this method. Neither schedule removes all host load or time-order bias. Use enough samples and inspect the raw sequence.
 
 Node reports also retain `plain/` and `instrumented/` launch/compiler/input evidence, independent SDK drain reports and stderr. The driver refuses publication on input mutation, incomplete final accounting, handoff/observer/queue loss, failed exports or a failed application. Raw files remain available after failure. A clean SDK report establishes producer accounting; it does not prove downstream receipt or OTLP partial-rejection absence.
 
