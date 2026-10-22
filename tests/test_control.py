@@ -144,24 +144,26 @@ class ControlTests(unittest.TestCase):
             path = directory / "control.json"
             path.write_text("{}")
             path.chmod(0o600)
+            original = path.stat()
             with self.assertRaisesRegex(ValueError, "generated control.json"):
-                control.endpoint_descriptor(directory / "other.json", path.stat())
+                control.endpoint_descriptor(directory / "other.json", original)
             directory.chmod(0o755)
             try:
                 with self.assertRaisesRegex(ValueError, "directory.*private"):
-                    control.endpoint_descriptor(path, path.stat())
+                    control.endpoint_descriptor(path, original)
             finally:
                 directory.chmod(0o700)
             alias = Path(temporary) / "alias"
             alias.symlink_to(directory, target_is_directory=True)
             with self.assertRaises(OSError):
-                control.endpoint_descriptor(alias / "control.json", path.stat())
+                control.endpoint_descriptor(alias / "control.json", original)
 
     def test_endpoint_stream_failure_closes_the_file_and_replacement_fifo_cannot_block(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
             path = Path(temporary) / "control.json"
             path.write_text("{}")
             path.chmod(0o600)
+            original = path.stat()
             opened = []
 
             def fail_stream(descriptor: int, *_args, **_kwargs) -> None:
@@ -170,11 +172,10 @@ class ControlTests(unittest.TestCase):
 
             with mock.patch("otelc.control.os.fdopen", side_effect=fail_stream):
                 with self.assertRaisesRegex(OSError, "controlled stream"):
-                    control.endpoint_descriptor(path, path.stat())
+                    control.endpoint_descriptor(path, original)
             self.assertEqual(len(opened), 1)
             with self.assertRaises(OSError):
                 os.fstat(opened[0])
-            original = path.stat()
             path.unlink()
             os.mkfifo(path, mode=0o600)
             with self.assertRaisesRegex(ValueError, "identity changed"):
