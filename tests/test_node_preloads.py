@@ -187,8 +187,9 @@ class NodePreloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT / 'build') as temporary:
             root = Path(temporary)
             audit = root / 'audit'
+            policy = Policy.parse({'schema_version': 3})
             (root / 'first.cjs').write_text("require('node:fs').writeFileSync(" + json.dumps(str(audit)) + ", 'ran');\n")
             with patch.dict(os.environ, {'NODE_OPTIONS': '--require=./first.cjs --require=./missing.cjs'}), contextlib.chdir(root):
                 with self.assertRaisesRegex(ValueError, '^Node preload resolution failed$'):
-                    node.command(Policy.parse({'schema_version': 3}), root / 'runtime', 'javascript', plain=True)
+                    node.command(policy, root / 'runtime', 'javascript', plain=True)
             self.assertFalse(audit.exists())

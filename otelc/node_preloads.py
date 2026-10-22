@@ -157,22 +157,27 @@ def verify_entry(request: dict[str, Any], entry: dict[str, Any], cwd: str) -> No
     if (any(entry[key] != request[key] for key in request) or entry['kind'] not in ('file', 'builtin', 'url')
             or entry['requested_origin'] != requested_origin(entry, cwd)):
         raise ValueError('Node preload origin or ordering changed')
-    target = urlsplit(entry['target'])
     if entry['kind'] == 'file':
-        if target.scheme != 'file' or target.netloc not in ('', 'localhost'):
-            raise ValueError('Node preload file has a different URL origin')
-        filename = Path(unquote(target.path))
-        if identity(filename) != entry['file'] or package_context(filename) != entry['package_context']:
-            raise ValueError('Node preload file or package context changed')
-        origin = entry['requested_origin']
-        if origin and 'sha256' in origin and origin['resolved_path'] != entry['file']['resolved_path']:
-            raise ValueError('Node preload target differs from its literal file origin')
+        verify_file_entry(entry)
     elif entry['kind'] == 'builtin':
         canonical = request['specifier'] if request['specifier'].startswith('node:') else 'node:' + request['specifier']
         if entry['target'] != canonical:
             raise ValueError('Node builtin preload changed')
-    elif target.scheme in ('file', 'node', ''):
+    elif urlsplit(entry['target']).scheme in ('file', 'node', ''):
         raise ValueError('Node preload URL kind changed')
+
+
+def verify_file_entry(entry: dict[str, Any]) -> None:
+    """Bind a local preload URL to its bytes, package context and literal origin."""
+    target = urlsplit(entry['target'])
+    if target.scheme != 'file' or target.netloc not in ('', 'localhost'):
+        raise ValueError('Node preload file has a different URL origin')
+    filename = Path(unquote(target.path))
+    if identity(filename) != entry['file'] or package_context(filename) != entry['package_context']:
+        raise ValueError('Node preload file or package context changed')
+    origin = entry['requested_origin']
+    if origin and 'sha256' in origin and origin['resolved_path'] != entry['file']['resolved_path']:
+        raise ValueError('Node preload target differs from its literal file origin')
 
 
 def verify(original: dict[str, Any], metadata: dict[str, Any]) -> None:
