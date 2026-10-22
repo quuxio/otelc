@@ -239,7 +239,7 @@ class SdkPipeline:
         wire.metric(value)
         registration = {key: value.get(key) for key in (
             'scope', 'version', 'schema_url', 'scope_attributes',
-            'instrument', 'name', 'unit', 'description',
+            'instrument', 'name', 'unit', 'description', 'boundaries',
         )}
         key = json.dumps(registration, sort_keys=True, separators=(',', ':'))
         instrument = self._instruments.get(key)
@@ -251,8 +251,9 @@ class SdkPipeline:
                 value.get('scope_attributes'),
             )
             create = getattr(meter, 'create_' + value['instrument'])
+            options = {'explicit_bucket_boundaries_advisory': value['boundaries']} if 'boundaries' in value else {}
             instrument = create(value['name'], value.get('unit', ''),
-                                value.get('description', ''))
+                                value.get('description', ''), **options)
             self._instruments[key] = instrument
         context = span_context(value.get('context'))
         active = trace.set_span_in_context(trace.NonRecordingSpan(context)) if context else None

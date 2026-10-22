@@ -283,11 +283,13 @@ class PythonFrontendComponentTests(unittest.TestCase):
         with contextlib.redirect_stderr(diagnostic):
             self.assertEqual(adapter.run(self.policy, self.root / 'abrupt', root=self.root, entry=entry), 9)
         self.assertIn('unverified', diagnostic.getvalue())
-        for changes in ({'languages': ['java']},
-                        {'context': {'http': True}}):
-            with self.assertRaises(ValueError):
-                adapter.run(Policy.parse(self.policy.data | changes), self.root / 'refused',
-                            root=self.root, entry=entry)
+        entry.write_text('raise SystemExit(7)\n')
+        self.assertEqual(adapter.run(Policy.parse(self.policy.data | {'context': {'http': True}}),
+            self.root / 'http', root=self.root, entry=entry), 7)
+        self.assertEqual(json.loads((self.root / 'http/sdk/python-sdk-status.json').read_text())['phase'], 'closed')
+        with self.assertRaises(ValueError):
+            adapter.run(Policy.parse(self.policy.data | {'languages': ['java']}), self.root / 'refused',
+                        root=self.root, entry=entry)
         self.assertFalse((self.root / 'refused').exists())
         self.assertEqual(self.finish()['phase'], 'closed')
 

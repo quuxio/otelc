@@ -143,5 +143,3 @@ def validate_policy(policy: Policy) -> None:
     """The CLI and benchmark must reject the same unimplemented profile."""
     if 'python' not in policy.data['languages']:
         raise ValueError('Python is disabled by policy')
-    if policy.data['context']['http']:
-        raise ValueError('Python candidate HTTP-context integration is not available yet')

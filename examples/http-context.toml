@@ -1,0 +1,31 @@
+# One policy for the ordinary Java, JavaScript, TypeScript and Python HTTP apps.
+schema_version = 3
+
+[resource]
+service_name = "otelc-http-examples"
+
+[export]
+endpoint = "http://127.0.0.1:4320"
+interval_ms = 1000
+
+[sources]
+include = ["examples/**"]
+exclude = []
+
+[functions]
+include = ["*.workloadRequest", "*.workloadHandle", "*.request", "*.handle"]
+
+[context]
+http = true
+tasks = false
+
+[metrics]
+collection = false
+emission = false
+
+[traces]
+enabled = true
+sample_ratio = 1.0
+
+[lifetimes]
+enabled = false

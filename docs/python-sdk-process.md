@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This is an internal SDK/adapter building block. The [native Python candidate](python-native.md) uses it for selected original function metrics/spans and live controls. Library-context integration, lifetime observers and complete language qualification remain pending. Python remains in the public plan's `remaining` list. Explicit bridge component fixtures are separate from the unedited developer example.
+This is an internal SDK/adapter building block. The [native Python candidate](python-native.md) uses it for selected original function metrics/spans and live controls. The candidate also has weak lifetime observation, official thread propagation and [urllib/WSGI context](python-http.md). Full source evidence and complete language qualification remain pending. Python remains in the public plan's `remaining` list. Explicit bridge component fixtures are separate from the unedited developer example.
 
 ## Process ownership
 

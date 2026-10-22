@@ -106,13 +106,12 @@ class PythonBenchmarkTests(unittest.TestCase):
         self.assertEqual(row['response'], response)
         self.assertFalse((self.root / 'raw.jsonl').exists())
 
-    def test_disabled_or_unsupported_policy_is_refused_before_any_process(self) -> None:
-        for replacement in ({'languages': ['java']}, {'context': {'http': True}}):
-            output = self.root / 'refused'
-            with mock.patch('otelc.python_benchmark.application') as launch, self.assertRaises(ValueError):
-                python_benchmark.run(Policy.parse(self.policy.data | replacement), output)
-            launch.assert_not_called()
-            self.assertFalse(output.exists())
+    def test_disabled_policy_is_refused_before_any_process(self) -> None:
+        output = self.root / 'refused'
+        with mock.patch('otelc.python_benchmark.application') as launch, self.assertRaises(ValueError):
+            python_benchmark.run(Policy.parse(self.policy.data | {'languages': ['java']}), output)
+        launch.assert_not_called()
+        self.assertFalse(output.exists())
 
     def test_failed_evidence_writes_cannot_leave_the_owned_sdk_running(self) -> None:
         started = []
