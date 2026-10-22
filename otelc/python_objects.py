@@ -59,7 +59,7 @@ def module_filename(name: object) -> str | None:
     """Iterate raw module keys, avoiding foreign keys or module __getattr__."""
     if type(name) is not str:
         return None
-    for key, module in dict.items(sys.modules):
+    for key, module in dict.items(dict.copy(sys.modules)):
         if type(key) is not str or key != name:
             continue
         if not any(base is ModuleType for base in hierarchy(type(module))):
