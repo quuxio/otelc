@@ -155,13 +155,17 @@ class PythonRuntime:
             with self._lock:
                 if self.closed:
                     raise RuntimeError('Python runtime is closed')
-                if self.lifetimes is not None:
-                    self.lifetimes.drain()
-                if not self.channel.writer.send({'kind': 'controls',
-                        'collection': collection, 'emission': emission}):
-                    self.reject('control_handoff')
-                    raise RuntimeError('Python control handoff failed')
-                self.collection, self.emission = collection, emission
+                try:
+                    if self.lifetimes is not None:
+                        self.lifetimes.before_controls(collection)
+                    if not self.channel.writer.send({'kind': 'controls',
+                            'collection': collection, 'emission': emission}):
+                        self.reject('control_handoff')
+                        raise RuntimeError('Python control handoff failed')
+                    self.collection, self.emission = collection, emission
+                finally:
+                    if self.lifetimes is not None:
+                        self.lifetimes.after_controls()
                 if self.lifetimes is not None:
                     self.lifetimes.gauges()
             state = self.channel.request('status', timeout=2.5)

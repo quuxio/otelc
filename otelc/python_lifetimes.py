@@ -6,6 +6,7 @@ import threading
 import time
 import weakref
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import CodeType, FrameType
@@ -104,6 +105,7 @@ class Lifetimes:
         self._pending_lock = threading.RLock()
         self._accepting = True
         self._draining = False
+        self._control_collection: bool | None = None
 
     def reject(self, reason: str) -> None:
         with self.runtime._lock:
@@ -132,16 +134,40 @@ class Lifetimes:
 
     def drain(self) -> None:
         """Publish queued GC observations at a runtime observation barrier."""
+        self._drain(self._pending_events())
+
+    def before_controls(self, collection: bool) -> None:
+        """Seal the old observation interval before publishing SDK controls."""
+        replacement: deque[Collected | RemovedType] = deque()
+        with self.runtime._lock:
+            with self._pending_lock:
+                previous = self._pending
+                self._pending = replacement
+                self._control_collection = collection
+            # Later GC belongs to the new interval. Publish only the sealed
+            # prefix here, while both runtime and SDK still use the old state.
+            self._drain(iter(previous))
+
+    def after_controls(self) -> None:
+        """Resume reading the committed runtime state after a control attempt."""
+        with self._pending_lock:
+            self._control_collection = None
+
+    def _pending_events(self) -> Iterator[Collected | RemovedType]:
+        while True:
+            with self._pending_lock:
+                if not self._pending:
+                    return
+                event = self._pending.popleft()
+            yield event
+
+    def _drain(self, events: Iterator[Collected | RemovedType]) -> None:
         with self.runtime._lock:
             if self._draining:
                 return
             self._draining = True
             try:
-                while True:
-                    with self._pending_lock:
-                        if not self._pending:
-                            break
-                        event = self._pending.popleft()
+                for event in events:
                     if type(event) is RemovedType:
                         self._forget_type(event.identity, event.reference)
                     else:
@@ -367,7 +393,11 @@ class Lifetimes:
             self.gauges()
 
     def _collected(self, token: int) -> None:
-        self._enqueue(Collected(token, time.perf_counter_ns(), self.runtime.collection))
+        with self._pending_lock:
+            if self._accepting:
+                collect = (self.runtime.collection if self._control_collection is None
+                           else self._control_collection)
+                self._pending.append(Collected(token, time.perf_counter_ns(), collect))
 
     def _record_collected(self, event: Collected) -> None:
         item = self.instances.pop(event.token, None)
