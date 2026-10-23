@@ -327,7 +327,7 @@ class PythonHttpComponentTests(unittest.TestCase):
         self.enterContext(mock.patch.object(HTTPConnection, 'request', new=observe))
         owner = PythonHttpContext(True, self.runtime, self.root)
         self.addCleanup(owner.close)
-        errors, parents = [], {}
+        errors, parents, responses = [], {}, {}
 
         def send(name, request):
             token = context.attach(baggage.set_baggage('request', name))
@@ -335,7 +335,7 @@ class PythonHttpComponentTests(unittest.TestCase):
                 with self.runtime._provider.get_tracer('fixture').start_as_current_span(name) as parent:
                     parents[name] = parent.get_span_context().trace_id
                     with urllib.request.urlopen(request, timeout=5) as response:
-                        self.assertEqual(response.read(), b'8')
+                        responses[name] = response.read()
             except BaseException as error:
                 errors.append(error)
             finally:
@@ -348,6 +348,7 @@ class PythonHttpComponentTests(unittest.TestCase):
             worker.join(timeout=8)
             self.assertFalse(worker.is_alive())
         self.assertEqual(errors, [])
+        self.assertEqual(responses, {name: b'8' for name, _ in requests})
         self.assertEqual(set(inspected), {'/first', '/second'})
         for row in received:
             name = row['path'].removeprefix('/')

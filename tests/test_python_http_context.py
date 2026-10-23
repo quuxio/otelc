@@ -110,9 +110,10 @@ http=true
                     return subprocess.run(command, cwd=cwd, env=environment,
                                           capture_output=True, timeout=timeout)
                 except subprocess.TimeoutExpired as error:
-                    self.fail(f'WSGI fixture timed out: {command!r}; '
-                              f'stdout={(error.stdout or b"")[-65536:]!r}; '
-                              f'stderr={(error.stderr or b"")[-65536:]!r}')
+                    error.add_note(f'WSGI fixture timed out: {command!r}; '
+                                   f'stdout={(error.stdout or b"")[-65536:]!r}; '
+                                   f'stderr={(error.stderr or b"")[-65536:]!r}')
+                    raise
 
             for mode in ('ordinary', 'changing'):
                 with self.subTest(mode=mode):
