@@ -19,6 +19,10 @@ class BoundedInputTests(unittest.TestCase):
             content = b'x' * 32
             path.write_bytes(content)
             expected = file_inputs.identity(path)
+            identified, _ = file_inputs.checked_file(path, include_stat=True, max_bytes=32)
+            info = path.stat()
+            self.assertEqual((identified['inode'], identified['device'], identified['mtime_ns']),
+                             (info.st_ino, info.st_dev, info.st_mtime_ns))
             for retain in (False, True):
                 actual, retained = file_inputs.checked_file(path, include_content=retain, max_bytes=32)
                 self.assertEqual(actual, expected)

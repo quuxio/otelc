@@ -10,7 +10,8 @@ from typing import Any
 
 
 def checked_file(filename: Path, *, include_content: bool = False,
-                 nofollow: bool = False, max_bytes: int | None = None
+                 nofollow: bool = False, max_bytes: int | None = None,
+                 include_stat: bool = False
                  ) -> tuple[dict[str, Any], bytes]:
     """Bind one regular-file read; optionally retain content without reopening the path."""
     if max_bytes is not None and (type(max_bytes) is not int or max_bytes <= 0):
@@ -42,6 +43,8 @@ def checked_file(filename: Path, *, include_content: bool = False,
         raise ValueError(f'launch input changed while reading: {filename}')
     result = {'path': str(filename), 'resolved_path': str(filename.resolve(strict=True)),
               'sha256': digest, 'size': after.st_size}
+    if include_stat:
+        result.update(inode=after.st_ino, device=after.st_dev, mtime_ns=after.st_mtime_ns)
     if filename.is_symlink():
         result['symlink'] = os.readlink(filename)
     return result, content
