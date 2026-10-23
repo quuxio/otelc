@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from _json import encode_basestring_ascii, make_encoder
 from struct import pack
+from sys import getfilesystemencoding, getfilesystemencodeerrors
 from types import CodeType
 
 
@@ -12,6 +13,7 @@ def encode(code: CodeType, *, _factory=make_encoder, _quote=encode_basestring_as
            _code_type=CodeType, _len=len, _bool=bool, _int=int, _float=float,
            _complex=complex, _str=str, _bytes=bytes, _tuple=tuple,
            _frozenset=frozenset, _slice=slice, _ellipsis=Ellipsis,
+           _fs_encoding=getfilesystemencoding, _fs_errors=getfilesystemencodeerrors,
            _value_error=ValueError, _type_error=TypeError) -> bytes:
     """Retain graph aliases with snapshot-local IDs, never application addresses.
 
@@ -79,7 +81,9 @@ def encode(code: CodeType, *, _factory=make_encoder, _quote=encode_basestring_as
     try:
         root = visit(code)
         encoder = _factory({}, no_default, _quote, None, ':', ',', True, False, False)
-        return ''.join(encoder({'schema_version': 1, 'root': root, 'nodes': nodes}, 0)).encode('ascii')
+        return ''.join(encoder({'schema_version': 2,
+            'filesystem': {'encoding': _fs_encoding(), 'errors': _fs_errors()},
+            'root': root, 'nodes': nodes}, 0)).encode('ascii')
     finally:
         # Recursive visit owns a closure cycle. Release application references
         # immediately on success and failure instead of waiting for cyclic GC.

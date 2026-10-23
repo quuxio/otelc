@@ -63,7 +63,7 @@ print(json.dumps(identities))
         saved = evidence.codes[0]
         self.assertEqual(saved.identity, 1)
         self.assertEqual(saved.python_version, sys.hexversion)
-        self.assertEqual(saved.descriptor_version, 1)
+        self.assertEqual(saved.descriptor_version, 2)
         root, nodes = self.descriptor(saved)
         self.assertEqual(nodes[root['fields']['co_name']]['value'], 'workload')
         value = self.constant(saved, -1)
@@ -316,3 +316,16 @@ print(json.dumps(identities))
         import os
         self.assertEqual(os.fsencode(nodes[root['fields']['co_filename']]['value']), saved.path)
         self.assertTrue(saved.path.endswith(b'\xff'))
+
+    def test_descriptor_records_the_actual_application_filesystem_codec(self) -> None:
+        rows, evidence = self.run_code('''
+import json
+def workload(): return 701
+assert workload() == 701
+print(json.dumps({'encoding': sys.getfilesystemencoding(), 'errors': sys.getfilesystemencodeerrors()}))
+''', ('workload',))
+        self.assertTrue(evidence.complete)
+        self.assertEqual(evidence.codes[0].descriptor_version, 2)
+        data = json.loads(evidence.codes[0].content)
+        self.assertEqual(data['schema_version'], 2)
+        self.assertEqual(data['filesystem'], rows[0])

@@ -239,7 +239,7 @@ static PyObject *observe(PyObject *module, PyObject *arguments) {
     }
     int result = otelc_py_journal_code(PyBytes_AS_STRING(path),
         (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload),
-        identity, (uint64_t)offset, PY_VERSION_HEX, 1);
+        identity, (uint64_t)offset, PY_VERSION_HEX, 2);
     Py_DECREF(path);
     Py_DECREF(payload);
     if (result) {

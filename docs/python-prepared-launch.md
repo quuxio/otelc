@@ -32,7 +32,7 @@ The private runtime retains:
 
 - `python-request.json`, `python-resolved-plan.json` and `python-prepared.json`: original common policy/TOML/caller inputs, separately derived settings, native driver/build identity, maintained producer files and the stable selected entry.
 - `python-supervisor-start.json` and `python-application-start.json`: actual parent/supervisor/application/SDK identities, process group and SDK readiness before app work.
-- `python-inputs.journal`: bounded bytes actually consumed for an ordinary script entry, with actual PID and opened-file metadata, plus separate whole ordinary-loader source/bytecode reads. Separate selected-code records bind genuine monitored starts and feed function span/metric code IDs; reads alone do not prove code execution.
+- `python-inputs.journal`: bounded bytes actually consumed for an ordinary script entry, with actual PID and opened-file metadata, plus separate whole ordinary-loader source/bytecode reads. Separate selected-code records bind genuine monitored starts and feed function span/metric code IDs; their bounded data format and recorded filename codec are checked after final drain; reads alone do not prove code execution.
 - `sdk/python-sdk-spawned.json`, readiness/final status, private SDK diagnostics and any startup-failure receipt: actual worker ownership and exit, including a failed start which never reaches app code.
 - `python-execution.json`: actual app/SDK exits, entry evidence, post-drain request/tool/input/bootstrap rechecks and explicit failures. `python-supervisor-error.json` contains owner diagnostics; these are not added to application stdout/stderr.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -204,6 +205,30 @@ assert workload() is payload
         self.assertEqual(receipt['entry_evidence']['phase'], 'failed')
         self.assertFalse(receipt['source_complete'])
         self.assertEqual(self.entry.read_bytes(), original)
+
+    def test_owner_refuses_malformed_code_payloads_or_mismatched_filename_bytes(self) -> None:
+        original_read = inputs.read
+        for fault in ('payload', 'path'):
+            with self.subTest(fault=fault):
+                directory, _ = self.prepare()
+                owner = Owner(directory)
+
+                def changed(path, *, expected_pid):
+                    value = original_read(path, expected_pid=expected_pid)
+                    self.assertTrue(value.codes)
+                    changes = {'content': b'{}'} if fault == 'payload' else {'path': b'wrong.py'}
+                    # Inject malformed post-read data at the owner boundary. This
+                    # is a component fault test, not proof of an app-side bypass.
+                    return dataclasses.replace(value, codes=tuple(
+                        dataclasses.replace(code, **changes) for code in value.codes))
+
+                with patch.object(inputs, 'read', side_effect=changed):
+                    self.assertEqual(owner.execute(), 1)
+                receipt, _ = files.read(directory / 'python-execution.json')
+                self.assertEqual(receipt['application']['returncode'], 0)
+                self.assertEqual(receipt['entry_evidence']['phase'], 'failed')
+                self.assertEqual(receipt['failures']['entry'], 'unverified')
+                self.assertFalse(receipt['source_complete'])
 
     def test_altered_prepared_request_plan_or_product_is_refused_before_app_start(self) -> None:
         marker = self.app / 'executed'
