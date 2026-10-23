@@ -70,3 +70,39 @@ class PythonOriginPinsTests(NativeInputCase):
         status, out, err, path, pid = self.launch(['-B', str(entry)], environment={**os.environ, 'PYTHONPATH': str(self.root)})
         self.assertEqual((status, out, err), (0, b'ordinary\n', b''))
         self.assertTrue(journal.read(path, expected_pid=pid).complete)
+
+    def test_hash_equal_custom_dictionary_keys_do_not_introduce_application_callbacks(self) -> None:
+        entry = self.root / 'original.py'
+        entry.write_text('import builtins\nprint("callbacks", builtins.origin_callback_count)\n')
+        cases = (('sys.modules', '_frozen_importlib_external'),
+                 ('sys.modules', '_frozen_importlib'), ('external.__dict__', 'SourceLoader'),
+                 ('internal.__dict__', '_call_with_frames_removed'),
+                 ('gc.get_referents(external.SourceLoader.__dict__)[0]', 'get_code'),
+                 ('gc.get_referents(external.SourceLoader.__dict__)[0]', 'source_to_code'),
+                 ('gc.get_referents(external.FileLoader.__dict__)[0]', 'get_data'),
+                 ('builtins.__dict__', 'compile'))
+        environment = {**os.environ, 'PYTHONPATH': str(self.root), 'PYTHONHASHSEED': '0'}
+        for dictionary, name in cases:
+            hook = '''import sys, builtins, gc
+import _frozen_importlib_external as external
+import _frozen_importlib as internal
+dictionary = DICTIONARY
+name = NAME
+original = dictionary.pop(name)
+class Key:
+    def __hash__(self): return hash(name)
+    def __eq__(self, other):
+        builtins.origin_callback_count += 1
+        return type(other) is str and other == name
+dictionary[Key()] = original
+builtins.origin_callback_count = 0
+'''.replace('DICTIONARY', dictionary).replace('NAME', repr(name))
+            (self.root / 'sitecustomize.py').write_text(hook)
+            with self.subTest(dictionary=dictionary, name=name):
+                plain = subprocess.run([sys.executable, '-B', str(entry)], env=environment, capture_output=True, timeout=15)
+                self.assertEqual((plain.returncode, plain.stdout, plain.stderr), (0, b'callbacks 0\n', b''))
+                status, out, err, path, pid = self.launch(['-B', str(entry)], origin_observer=True, environment=environment)
+                self.assertEqual((status, out, err), (plain.returncode, plain.stdout, plain.stderr))
+                value = journal.read(path, expected_pid=pid)
+                self.assertGreater(value.capture_failures, 0)
+                self.assertFalse(value.complete)
