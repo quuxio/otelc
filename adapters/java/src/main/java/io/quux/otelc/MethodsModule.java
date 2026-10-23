@@ -60,7 +60,7 @@ public final class MethodsModule extends InstrumentationModule {
       }
       if (!methods.isEmpty()) transformer.applyAdviceToMethod(namedOneOf(methods.toArray(String[]::new)).and(not(roleMethods)), MethodAdvice.class.getName());
       if (!bindings.isEmpty()) transformer.applyTransformer((builder, type, loader, module, domain) ->
-          builder.visit(new io.quux.otelc.witness.WitnessMethodGuard(bindings, witness::guarded)));
+          builder.visit(new io.quux.otelc.witness.WitnessMethodGuard(bindings, witness::guarded, witness.route())));
     }
   }
 
@@ -76,9 +76,10 @@ public final class MethodsModule extends InstrumentationModule {
     private RoleAdvice() {}
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static Object enter(@Advice.Origin Class<?> owner, @Advice.Origin("#m") String method,
+        @Advice.This(optional = true) Object receiver,
         @Probe String probe, @Measured boolean measured,
         @Advice.Local("otelcFunction") io.quux.otelc.methods.Observer.Call function) {
-      Object token = io.quux.otelc.witness.probe.Observer.enter(owner, probe);
+      Object token = io.quux.otelc.witness.probe.Observer.enter(owner, probe, receiver == null ? null : receiver.getClass());
       // ByteBuddy writes this parameter into the shared local read by exit advice.
       if (measured) function = io.quux.otelc.methods.Observer.enter(owner, method);
       return token;

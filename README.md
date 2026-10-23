@@ -86,7 +86,7 @@ Prepared launches keep agent diagnostics in `agent.log`. For exact application s
 
 [Invocation attribution](docs/action-witness.md) is an explicit diagnostic profile for synchronous Java actions on platform threads. Frozen original-method bindings, actual loaded origins and role probes tie an action to its root, target and observed child spans. A separate private protocol records readiness, arm/consume, exits and export outcomes; decoded downstream receipt is still required. Default launches and the existing metrics/health protocols are unchanged. This profile does not establish arbitrary concurrent, async or cross-service attribution.
 
-The separate [private-handle compiler component](docs/java-handle-witness.md) binds generated private-method caller shapes without loading application classes. Its runtime operand verification, launch integration and independent admission remain work; normal launches do not accept its bindings yet.
+The separate [private-handle compiler component](docs/java-handle-witness.md) binds generated private-method caller shapes without loading application classes. Its explicit runtime candidate adds actual operand/receiver checks and a separate optional diagnostic launch profile. Generated consumer integration and independent admission remain work; default launches continue to refuse its bindings.
 
 ## Validation and limits
 

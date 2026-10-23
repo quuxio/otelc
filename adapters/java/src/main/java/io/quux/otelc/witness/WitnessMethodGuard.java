@@ -23,9 +23,15 @@ public final class WitnessMethodGuard extends AsmVisitorWrapper.AbstractBase {
   private final String owner;
   private final Map<String, WitnessBindings.Binding> expected;
   private final Consumer<WitnessBindings.Binding> matched;
+  private final HandleBindings.Route route;
 
   public WitnessMethodGuard(List<WitnessBindings.Binding> bindings,
                             Consumer<WitnessBindings.Binding> matched) {
+    this(bindings, matched, null);
+  }
+
+  public WitnessMethodGuard(List<WitnessBindings.Binding> bindings,
+                            Consumer<WitnessBindings.Binding> matched, HandleBindings.Route route) {
     if (bindings.isEmpty()) throw new IllegalArgumentException("method guard requires bindings");
     owner = bindings.getFirst().declaration().owner();
     expected = new HashMap<>();
@@ -39,6 +45,7 @@ public final class WitnessMethodGuard extends AsmVisitorWrapper.AbstractBase {
       }
     }
     this.matched = java.util.Objects.requireNonNull(matched);
+    this.route = route;
   }
 
   @Override public ClassVisitor wrap(TypeDescription instrumentedType, ClassVisitor visitor,
@@ -70,7 +77,7 @@ public final class WitnessMethodGuard extends AsmVisitorWrapper.AbstractBase {
             if (!WitnessBindings.methodDigest(binding.declaration(), this).equals(binding.methodSha256())) {
               throw new IllegalStateException("incoming method differs from frozen witness binding: " + binding.role());
             }
-            accept(downstream);
+            accept(route != null && binding.role().equals("wrapper") ? operandProbe(downstream) : downstream);
           }
         };
       }
@@ -80,6 +87,30 @@ public final class WitnessMethodGuard extends AsmVisitorWrapper.AbstractBase {
         super.visitEnd();
         // Matching proves the input to this visitor, not JVM definition or probe execution.
         expected.values().forEach(matched);
+      }
+    };
+  }
+
+  private MethodVisitor operandProbe(MethodVisitor downstream) {
+    return new MethodVisitor(Opcodes.ASM9, downstream) {
+      private int observed;
+
+      @Override public void visitFieldInsn(int opcode, String owner, String name, String descriptor) {
+        super.visitFieldInsn(opcode, owner, name, descriptor);
+        if (opcode != Opcodes.GETSTATIC || !owner.equals(route.fieldOwner()) || !name.equals(route.fieldName())
+            || !descriptor.equals("Ljava/lang/invoke/MethodHandle;") || ++observed != 1) {
+          throw new IllegalStateException("handle operand site disagrees with frozen route");
+        }
+        super.visitInsn(Opcodes.DUP);
+        super.visitMethodInsn(Opcodes.INVOKESTATIC, "io/quux/otelc/witness/probe/Observer", "handle",
+            "(Ljava/lang/invoke/MethodHandle;)V", false);
+      }
+
+      @Override public void visitMaxs(int stack, int locals) { super.visitMaxs(stack + 1, locals); }
+
+      @Override public void visitEnd() {
+        if (observed != 1) throw new IllegalStateException("missing handle operand observation");
+        super.visitEnd();
       }
     };
   }

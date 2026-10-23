@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from otelc.prepared_java import PreparedApplication
 
 PROFILE = "java-sync-action-v2"
+HANDLE_PROFILE = "java-sync-private-handle-v1"
 ROLES = ("envelope", "rendezvous", "wrapper", "target")
 FIELDS = {"owner", "name", "descriptor", "class_sha256", "method_sha256", "probe_id"}
 REPLY_FIELDS = {"schema_version", "profile", "runtime_id", "pid", "request_id", "error", "build_sha256",
@@ -34,6 +35,17 @@ SCOPE_FIELDS = {"cookie", "sequence", "thread_id", "scope_id", "case_id", "attem
                 "target_exited", "target_entries", "export_failures", "flush_failures", "checkpoint",
                 "producer_complete", "receiver_confirmation_required", "started_ids", "ended_ids",
                 "exported_ids", "pending_exports", "queue_dropped"}
+ROUTE_FIELDS = {"kind", "field_owner", "field_name", "field_descriptor", "site_instruction", "invoke_owner",
+                "invoke_name", "invoke_descriptor", "reference_kind", "sha256"}
+
+
+def profile_version(profile: str) -> int:
+    """Require an explicit closed profile rather than infer it from input fields."""
+    if profile == PROFILE:
+        return 2
+    if profile == HANDLE_PROFILE:
+        return 3
+    raise ValueError("unsupported Java witness profile")
 
 
 def hexadecimal(value: object, size: int, *, nullable: bool = False) -> bool:
@@ -46,11 +58,13 @@ def decimal(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"0|[1-9]\d{0,18}", value, re.ASCII) is not None
 
 
-def validate_reply(result: object, request_id: str | None) -> dict[str, Any]:
+def validate_reply(result: object, request_id: str | None, *, profile: str = PROFILE) -> dict[str, Any]:
     """Refuse unknown wire shapes or a completion claim unsupported by its own evidence."""
-    if (not isinstance(result, dict) or set(result) != REPLY_FIELDS
-            or type(result["schema_version"]) is not int or result["schema_version"] != 2
-            or result["profile"] != PROFILE or result["request_id"] != request_id
+    version = profile_version(profile)
+    fields = REPLY_FIELDS | ({"route_binding_sha256"} if version == 3 else set())
+    if (not isinstance(result, dict) or set(result) != fields
+            or type(result["schema_version"]) is not int or result["schema_version"] != version
+            or result["profile"] != profile or result["request_id"] != request_id
             or not hexadecimal(result["runtime_id"], 32)
             or type(result["pid"]) is not int or result["pid"] <= 0
             or not decimal(result["rejected_probes"])
@@ -62,15 +76,20 @@ def validate_reply(result: object, request_id: str | None) -> dict[str, Any]:
             or result["error"] is not None and (not isinstance(result["error"], str)
                 or not re.fullmatch(r"[a-z][a-z_]{0,63}", result["error"]))):
         raise ValueError("invalid or uncorrelated witness response")
+    if version == 3 and not hexadecimal(result["route_binding_sha256"], 64):
+        raise ValueError("invalid witness route identity")
     scope = result["scope"]
     if scope is not None:
-        _validate_scope_identity(scope)
+        _validate_scope_identity(scope, handle=version == 3)
         _validate_completion(scope, _span_sets(scope))
+        if version == 3 and (type(scope["route_verified"]) is not bool
+                             or scope["producer_complete"] and not scope["route_verified"]):
+            raise ValueError("witness completion lacks verified handle route")
     return result
 
 
-def _validate_scope_identity(scope: object) -> None:
-    if (not isinstance(scope, dict) or set(scope) != SCOPE_FIELDS
+def _validate_scope_identity(scope: object, *, handle: bool = False) -> None:
+    if (not isinstance(scope, dict) or set(scope) != SCOPE_FIELDS | ({"route_verified"} if handle else set())
             or not hexadecimal(scope["cookie"], 32) or not decimal(scope["sequence"])
             or scope["sequence"] == "0"
             or not decimal(scope["thread_id"]) or not 0 < int(scope["thread_id"]) <= 2**63 - 1
@@ -147,35 +166,36 @@ def _read_private_report(path: Path) -> bytes:
     return data
 
 
-def read_final(path: Path) -> dict[str, Any]:
+def read_final(path: Path, *, profile: str = PROFILE) -> dict[str, Any]:
     """Read bounded private post-exit evidence, without inferring downstream delivery."""
     from otelc.prepared_java import unique_object
 
+    version = profile_version(profile)
     result = json.loads(_read_private_report(path), object_pairs_hook=unique_object)
     fields = {"schema_version", "kind", "phase", "pid", "producer", "queue_evidence", "scopes"}
     if (not isinstance(result, dict) or set(result) != fields or type(result["schema_version"]) is not int
-            or result["schema_version"] != 2 or result["kind"] != "otelc.java-witness-final"
+            or result["schema_version"] != version or result["kind"] != "otelc.java-witness-final"
             or result["phase"] != "final" or type(result["pid"]) is not int or result["pid"] <= 0
             or result["queue_evidence"] not in ("derived_after_shutdown", "unavailable")
             or not isinstance(result["scopes"], list) or len(result["scopes"]) > 64):
         raise ValueError("invalid witness final identity")
-    validate_reply(result["producer"], None)
+    validate_reply(result["producer"], None, profile=profile)
     if result["producer"]["pid"] != result["pid"]:
         raise ValueError("final witness producer PID differs from report PID")
     if result["producer"]["scope"] is not None:
         raise ValueError("final producer header cannot hide a scope")
-    _validate_final_contexts(result)
+    _validate_final_contexts(result, profile=profile)
     return result
 
 
-def _validate_final_contexts(result: dict[str, Any]) -> None:
+def _validate_final_contexts(result: dict[str, Any], *, profile: str = PROFILE) -> None:
     cookies = set()
     scope_ids = set()
     previous_sequence = 0
     for scope in result["scopes"]:
         if not isinstance(scope, dict):
             raise ValueError("invalid witness final scope")
-        validate_reply(result["producer"] | {"scope": scope}, None)
+        validate_reply(result["producer"] | {"scope": scope}, None, profile=profile)
         if scope["cookie"] in cookies or scope["scope_id"] is not None and scope["scope_id"] in scope_ids:
             raise ValueError("duplicate witness final context")
         cookies.add(scope["cookie"])
@@ -188,8 +208,9 @@ def _validate_final_contexts(result: dict[str, Any]) -> None:
 
 
 def compile_bindings(application: PreparedApplication,
-                     declarations: dict[str, dict[str, str]], output: Path) -> dict[str, Any]:
+                     declarations: dict[str, dict[str, str]], output: Path, *, profile: str = PROFILE) -> dict[str, Any]:
     """Compile frozen bindings offline; application classes are read, never executed."""
+    version = profile_version(profile)
     if not isinstance(declarations, dict) or set(declarations) != set(ROLES):
         raise ValueError("exactly four witness role declarations are required")
     extension = java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"
@@ -199,7 +220,7 @@ def compile_bindings(application: PreparedApplication,
     before = application.input_identity()
     with tempfile.TemporaryDirectory(prefix="otelc-witness-") as directory:
         command = [java.executable("java"), "-cp", os.pathsep.join(map(str, (extension, compiler))),
-                   "io.quux.otelc.witness.WitnessBindings"]
+                   "io.quux.otelc.witness." + ("HandleBindings" if version == 3 else "WitnessBindings")]
         for index, role in enumerate(ROLES):
             declaration = declarations[role]
             if (not isinstance(declaration, dict) or set(declaration) != {"owner", "name", "descriptor"}
@@ -216,7 +237,7 @@ def compile_bindings(application: PreparedApplication,
         raise ValueError("prepared inputs changed while compiling witness bindings")
     with output.open("x") as writer:
         writer.write(result.stdout)
-    return load_bindings(output, application)
+    return load_bindings(output, application, profile=profile)
 
 
 def _class_location(application: PreparedApplication, owner: str,
@@ -256,35 +277,38 @@ def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
-def load_bindings(path: Path, application: PreparedApplication) -> dict[str, Any]:
+def load_bindings(path: Path, application: PreparedApplication, *, profile: str = PROFILE) -> dict[str, Any]:
     """Read frozen offline bindings and match every role to original application inputs."""
-    return _binding_snapshot(path, application)[0]
+    return _binding_snapshot(path, application, profile=profile)[0]
 
 
-def _binding_snapshot(path: Path, application: PreparedApplication
+def _binding_snapshot(path: Path, application: PreparedApplication, *, profile: str = PROFILE
                       ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate bytes and retain their opened-file identity without reopening."""
     from otelc.prepared_java import unique_object
 
+    version = profile_version(profile)
     identity, content = file_inputs.checked_file(path, include_content=True, max_bytes=32768, include_stat=True)
     document = json.loads(content.decode('utf-8'), object_pairs_hook=unique_object)
     if (not isinstance(document, dict)
-            or set(document) != {"schema_version", "kind", "profile", "bindings"}
+            or set(document) != {"schema_version", "kind", "profile", "bindings"} | ({"route"} if version == 3 else set())
             or type(document["schema_version"]) is not int
-            or document["schema_version"] != 2
+            or document["schema_version"] != version
             or document["kind"] != "otelc.java-witness-bindings"
-            or document["profile"] != PROFILE
+            or document["profile"] != profile
             or not isinstance(document["bindings"], dict)
             or set(document["bindings"]) != set(ROLES)):
-        raise ValueError("expected complete Java witness bindings schema 2")
+        raise ValueError(f"expected complete Java witness bindings schema {version}")
     for role, binding in document["bindings"].items():
-        _validate_binding(role, binding, application)
+        _validate_binding(role, binding, application, profile=profile)
+    if version == 3:
+        _validate_route(document["route"], document["bindings"])
     binding_identity = {"path": str(path), **{name: identity[name] for name in
                         ("sha256", "size", "inode", "device", "mtime_ns")}}
     return document, binding_identity
 
 
-def _validate_binding(role: str, binding: object, application: PreparedApplication) -> None:
+def _validate_binding(role: str, binding: object, application: PreparedApplication, *, profile: str = PROFILE) -> None:
     if (not isinstance(binding, dict) or set(binding) != FIELDS
             or any(not isinstance(value, str) or not value or "\n" in value
                    for value in binding.values())):
@@ -297,10 +321,31 @@ def _validate_binding(role: str, binding: object, application: PreparedApplicati
     if any(not re.fullmatch(r"[0-9a-f]{64}", binding[key])
            for key in ("class_sha256", "method_sha256", "probe_id")):
         raise ValueError("invalid witness digest")
-    fields = [PROFILE, role, binding["owner"], binding["name"], binding["descriptor"],
+    fields = [profile, role, binding["owner"], binding["name"], binding["descriptor"],
               binding["class_sha256"], binding["method_sha256"]]
     if hashlib.sha256("\n".join(fields).encode()).hexdigest() != binding["probe_id"]:
         raise ValueError("witness probe ID disagrees with binding")
+
+
+def _validate_route(route: object, bindings: dict[str, dict[str, str]]) -> None:
+    if (not isinstance(route, dict) or set(route) != ROUTE_FIELDS
+            or route["kind"] != "direct_method_handle"
+            or route["field_owner"] != bindings["wrapper"]["owner"]
+            or not isinstance(route["field_name"], str) or not route["field_name"]
+            or any(ord(char) < 32 for char in route["field_name"])
+            or route["field_descriptor"] != "Ljava/lang/invoke/MethodHandle;"
+            or type(route["site_instruction"]) is not int or route["site_instruction"] != 0
+            or route["invoke_owner"] != "java/lang/invoke/MethodHandle"
+            or route["invoke_name"] != "invokeExact"
+            or route["invoke_descriptor"] != bindings["wrapper"]["descriptor"]
+            or type(route["reference_kind"]) is not int or route["reference_kind"] not in (5, 6)
+            or not hexadecimal(route["sha256"], 64)):
+        raise ValueError("invalid direct handle witness route")
+    values = [HANDLE_PROFILE, route["kind"], route["field_owner"], route["field_name"], route["field_descriptor"],
+              str(route["site_instruction"]), route["invoke_owner"], route["invoke_name"], route["invoke_descriptor"],
+              str(route["reference_kind"]), bindings["wrapper"]["probe_id"], bindings["target"]["probe_id"]]
+    if hashlib.sha256("\n".join(values).encode()).hexdigest() != route["sha256"]:
+        raise ValueError("witness route digest disagrees with binding")
 
 
 def origin(application: PreparedApplication, owner: str, *,
@@ -314,45 +359,51 @@ def origin(application: PreparedApplication, owner: str, *,
 
 def configure(application: PreparedApplication, policy: Policy, runtime: Path,
               bindings_file: Path, application_identity: dict[str, Any],
-              tooling: list[dict[str, Any]]) -> list[dict[str, Any]]:
+              tooling: list[dict[str, Any]], *, profile: str = PROFILE) -> list[dict[str, Any]]:
     """Generate a private producer plan without compiling or changing application files."""
     if not policy.data["traces"]["enabled"] or policy.data["traces"]["sample_ratio"] < 1.0:
         raise ValueError("the witness profile requires explicit tracing with sample_ratio=1")
-    document, binding_identity = _binding_snapshot(bindings_file, application)
+    version = profile_version(profile)
+    document, binding_identity = _binding_snapshot(bindings_file, application, profile=profile)
     selected = json.loads((runtime / "selection.json").read_text())
     target = document["bindings"]["target"]
     if target["name"] not in selected["methods"].get(target["owner"].replace("/", "."), []):
         raise ValueError("witness target is not selected by the common policy")
     from otelc.prepared_java import file_identity
 
-    values = {"schema_version": "2", "profile": PROFILE,
+    values = {"schema_version": str(version), "profile": profile,
               "socket": str(runtime / "witness.sock"), "build": digest(application_identity),
               "selection": hashlib.sha256((runtime / "selection.json").read_bytes().rstrip(b"\n")).hexdigest(),
               "policy": digest(policy.data), "tooling": digest([*tooling, binding_identity])}
     for role, binding in document["bindings"].items():
         values.update({f"{role}.{key}": value for key, value in binding.items()})
         values[f"{role}.origin"] = origin(application, binding["owner"], identity=application_identity)
+    if version == 3:
+        values.update({"route." + key: str(value) for key, value in document["route"].items()})
     plan = runtime / "witness.properties"
     plan.write_text(java.properties(values))
-    metadata = {"schema_version": 2, "kind": "otelc.java-witness-launch", "profile": PROFILE,
+    metadata = {"schema_version": version, "kind": "otelc.java-witness-launch", "profile": profile,
                 "socket": values["socket"], "final_report": str(runtime / "witness-health.json"), "build_sha256": values["build"],
                 "selection_sha256": values["selection"], "policy_sha256": values["policy"],
                 "tooling_sha256": values["tooling"], "bindings": document["bindings"],
                 "bindings_sha256": binding_identity["sha256"],
                 "runtime_confirmation_required": True, "receiver_confirmation_required": True}
+    if version == 3:
+        metadata["route"] = document["route"]
     descriptor = runtime / "witness.json"
     descriptor.write_text(json.dumps(metadata, indent=2) + "\n")
     return [binding_identity, file_identity(plan), file_identity(descriptor)]
 
 
-def request(path: Path, operation: str, *arguments: str) -> dict[str, Any]:
+def request(path: Path, operation: str, *arguments: str, profile: str = PROFILE) -> dict[str, Any]:
     """Exchange a bounded correlated request with an owned private producer socket."""
+    version = profile_version(profile)
     metadata = path.lstat()
     if (not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid()
             or stat.S_IMODE(metadata.st_mode) != 0o600):
         raise ValueError("witness endpoint must be an owned private socket")
     request_id = uuid.uuid4().hex
-    command = " ".join(("2", request_id, operation, *arguments)) + "\n"
+    command = " ".join((str(version), request_id, operation, *arguments)) + "\n"
     if len(command) > 2049 or not re.fullmatch(r"[a-z0-9 ]+\n", command):
         raise ValueError("invalid witness request")
     with socket.socket(socket.AF_UNIX) as channel:
@@ -370,4 +421,4 @@ def request(path: Path, operation: str, *arguments: str) -> dict[str, Any]:
     from otelc.prepared_java import unique_object
 
     result = json.loads(data, object_pairs_hook=unique_object)
-    return validate_reply(result, request_id)
+    return validate_reply(result, request_id, profile=profile)

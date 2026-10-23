@@ -14,6 +14,7 @@ public final class WitnessClassCapture implements ClassFileTransformer, AutoClos
   private final Instrumentation instrumentation;
   private final Map<String, List<WitnessBindings.Binding>> expected;
   private final Map<String, String> origins;
+  private final HandleBindings.Route route;
   private final Map<String, Input> captured = new HashMap<>();
   private final Map<String, byte[]> originals = new HashMap<>();
   private boolean compiled;
@@ -27,7 +28,7 @@ public final class WitnessClassCapture implements ClassFileTransformer, AutoClos
 
   private WitnessClassCapture(Instrumentation instrumentation,
                               Map<String, WitnessBindings.Binding> bindings,
-                              Map<String, String> origins) {
+                              Map<String, String> origins, HandleBindings.Route route) {
     if (!bindings.keySet().equals(ROLES)) throw new IllegalArgumentException("four witness roles are required");
     Map<String, List<WitnessBindings.Binding>> byOwner = new HashMap<>();
     for (var entry : bindings.entrySet()) {
@@ -41,13 +42,20 @@ public final class WitnessClassCapture implements ClassFileTransformer, AutoClos
     this.instrumentation = instrumentation;
     this.expected = Map.copyOf(byOwner);
     this.origins = Map.copyOf(origins);
+    this.route = route;
   }
 
   /** Install before the pinned agent's main transformer, without loading application owners. */
   public static WitnessClassCapture install(Instrumentation instrumentation,
                                              Map<String, WitnessBindings.Binding> bindings,
                                              Map<String, String> origins) {
-    WitnessClassCapture capture = new WitnessClassCapture(instrumentation, bindings, origins);
+    return install(instrumentation, bindings, origins, null);
+  }
+
+  public static WitnessClassCapture install(Instrumentation instrumentation,
+                                             Map<String, WitnessBindings.Binding> bindings,
+                                             Map<String, String> origins, HandleBindings.Route route) {
+    WitnessClassCapture capture = new WitnessClassCapture(instrumentation, bindings, origins, route);
     // Warm up hashing before using it under JVM loader locks.
     WitnessBindings.digest(new byte[0]);
     for (Class<?> type : instrumentation.getAllLoadedClasses()) {
@@ -132,7 +140,14 @@ public final class WitnessClassCapture implements ClassFileTransformer, AutoClos
         declarations.put(binding.role(), binding.declaration());
       }));
       try {
-        if (!WitnessBindings.compile(originals, declarations).equals(bindings)) {
+        Map<String, WitnessBindings.Binding> compiledBindings;
+        if (route == null) compiledBindings = WitnessBindings.compile(originals, declarations);
+        else {
+          var compiled = HandleBindings.compile(originals, declarations);
+          if (!route.equals(compiled.route())) throw new IllegalStateException("captured handle route changed");
+          compiledBindings = compiled.bindings();
+        }
+        if (!compiledBindings.equals(bindings)) {
           throw new IllegalStateException("compiled witness bindings disagree with captured code");
         }
         compiled = true;

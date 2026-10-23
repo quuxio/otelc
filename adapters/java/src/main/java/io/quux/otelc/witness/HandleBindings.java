@@ -88,11 +88,16 @@ public final class HandleBindings {
     }
     int referenceKind = isStatic ? java.lang.invoke.MethodHandleInfo.REF_invokeStatic
                                 : java.lang.invoke.MethodHandleInfo.REF_invokeVirtual;
-    String digest = WitnessBindings.digest(String.join("\n", PROFILE, "direct_method_handle",
-        field.owner, field.name, HANDLE_DESCRIPTOR, "0", HANDLE_OWNER, "invokeExact", descriptor,
+    String digest = routeDigest(field.owner, field.name, descriptor, referenceKind, bindings);
+    return new Route(field.owner, field.name, descriptor, referenceKind, digest);
+  }
+
+  static String routeDigest(String owner, String name, String descriptor, int referenceKind,
+                            Map<String, WitnessBindings.Binding> bindings) {
+    return WitnessBindings.digest(String.join("\n", PROFILE, "direct_method_handle",
+        owner, name, HANDLE_DESCRIPTOR, "0", HANDLE_OWNER, "invokeExact", descriptor,
         Integer.toString(referenceKind), bindings.get(WRAPPER).probeId(), bindings.get(TARGET).probeId())
         .getBytes(StandardCharsets.UTF_8));
-    return new Route(field.owner, field.name, descriptor, referenceKind, digest);
   }
 
   /** Separate closed offline format; ordinary v2 preparation deliberately refuses it. */
