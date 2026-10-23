@@ -44,7 +44,7 @@ static int record(unsigned char kind, const char *path, size_t path_size,
     unsigned char header[HEADER_SIZE] = {'O', 'T', 'L', 'C', 'P', 'Y', '1', 0};
     size_t total = HEADER_SIZE + path_size + METADATA_SIZE + size;
     /* Reserve space for final counters even when source admission is full. */
-    size_t reserve = kind == 1 ? HEADER_SIZE + METADATA_SIZE : 0;
+    size_t reserve = kind != 2 ? HEADER_SIZE + METADATA_SIZE : 0;
     struct stat current;
     if (journal_fd >= 0 && (fstat(journal_fd, &current) ||
             current.st_dev != journal_device || current.st_ino != journal_inode)) {
@@ -54,7 +54,7 @@ static int record(unsigned char kind, const char *path, size_t path_size,
         journal_fd = -1;
     }
     if (journal_fd < 0 || sequence >= RECORD_LIMIT ||
-            (kind == 1 && sequence + 1 >= RECORD_LIMIT) ||
+            (kind != 2 && sequence + 1 >= RECORD_LIMIT) ||
             total + reserve > OTELC_PY_JOURNAL_LIMIT - journal_bytes) return -1;
     header[8] = kind;
     integer(header + 12, sequence + 1);
@@ -95,8 +95,8 @@ int otelc_py_journal_open(int descriptor) {
     return 0;
 }
 
-int otelc_py_journal_source(const char *path, const unsigned char *bytes,
-                           size_t length, const struct stat *info) {
+static int file_input(unsigned char kind, const char *path, const unsigned char *bytes,
+                      size_t length, const struct stat *info) {
     size_t path_size = path ? strnlen(path, OTELC_PY_PATH_LIMIT + 1U) : 0;
     unsigned char metadata[METADATA_SIZE];
     if (!path_size || path_size > OTELC_PY_PATH_LIMIT || !info ||
@@ -120,7 +120,7 @@ int otelc_py_journal_source(const char *path, const unsigned char *bytes,
     integer(metadata + 48, (uint64_t)info->st_mode);
     /* No Python allocation, callback or SDK/runtime lock occurs while held. */
     pthread_mutex_lock(&journal_lock);
-    int result = record(1, path, path_size, metadata, bytes, length);
+    int result = record(kind, path, path_size, metadata, bytes, length);
     if (result) ++capture_failures;
     else {
         ++sources;
@@ -128,6 +128,16 @@ int otelc_py_journal_source(const char *path, const unsigned char *bytes,
     }
     pthread_mutex_unlock(&journal_lock);
     return result;
+}
+
+int otelc_py_journal_source(const char *path, const unsigned char *bytes,
+                           size_t length, const struct stat *info) {
+    return file_input(1, path, bytes, length, info);
+}
+
+int otelc_py_journal_import(const char *path, const unsigned char *bytes,
+                           size_t length, const struct stat *info) {
+    return file_input(3, path, bytes, length, info);
 }
 
 void otelc_py_journal_capture_failed(void) {

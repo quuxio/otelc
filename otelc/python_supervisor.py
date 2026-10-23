@@ -138,7 +138,10 @@ class Owner:
                 'journal': identity(path), 'sources': [
                     {'path_hex': source.path.hex(), 'sha256': source.sha256,
                      'device': source.device, 'inode': source.inode, 'mtime_ns': source.mtime_ns}
-                    for source in journal.sources]}
+                    for source in journal.sources], 'imports': [
+                    {'path_hex': source.path.hex(), 'sha256': source.sha256,
+                     'device': source.device, 'inode': source.inode, 'mtime_ns': source.mtime_ns}
+                    for source in journal.imports]}
             if self.original['module'] is None:
                 source = journal.sources[0] if len(journal.sources) == 1 else None
                 if (not journal.complete or source is None

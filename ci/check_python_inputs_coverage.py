@@ -12,7 +12,7 @@ from pathlib import Path
 from ci import build_python_inputs as tooling
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCES = ('EntryCapture.c', 'InputJournal.c', 'NativeMain.c')
+NATIVE_SOURCES = ('EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c')
 
 
 def summaries(data: dict) -> dict:
@@ -41,7 +41,8 @@ def check() -> dict:
         environment = {**os.environ, 'PYTHONPATH': str(ROOT / 'tests'),
                        'OTELC_NATIVE_COVERAGE': '1',
                        'LLVM_PROFILE_FILE': str(directory / 'inputs-%p-%m.profraw')}
-        subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs', '-v'],
+        subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
+                        'test_python_import_inputs', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:
@@ -50,9 +51,12 @@ def check() -> dict:
         subprocess.run([str(llvm / 'llvm-profdata'), 'merge', '-sparse', *map(str, profiles),
                         '-o', str(profile)], check=True)
         fixture = ROOT / 'build/native' / ('python-input-fixture-' + sys.implementation.cache_tag)
+        imports = ROOT / 'build/native' / ('python-import-fixture-' + sys.implementation.cache_tag)
         output = subprocess.check_output([str(llvm / 'llvm-cov'), 'export', str(binary),
             '-object', str(binary.parent / manifest['library']), '-object', str(fixture),
+            '-object', str(imports),
             '-instr-profile=' + str(profile)], text=True)
+        (ROOT / 'build/python-native-coverage.raw.json').write_text(output)
         result = {'interpreter': manifest['inputs']['interpreter'],
                   'version': sys.version, 'sources': summaries(json.loads(output))}
     (ROOT / 'build/python-native-coverage.json').write_text(json.dumps(result, indent=2) + '\n')

@@ -1,4 +1,4 @@
-"""Decode bounded native entry receipts; source hashes alone are not provenance."""
+"""Decode native entry and ordinary-loader reads; reads do not prove execution."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ MAX_PATH = 65535
 
 @dataclass(frozen=True)
 class SourceInput:
-    """Exact bytes handed to the native interpreter, with opened-file metadata."""
+    """Exact bytes supplied to an entry or loader, with opened-file metadata."""
 
     path: bytes
     content: bytes
@@ -45,6 +45,7 @@ class InputJournal:
     journal_failures: int
     python_finalized: bool
     entry_expected: bool
+    imports: tuple[SourceInput, ...] = ()
 
     @property
     def complete(self) -> bool:
@@ -60,12 +61,13 @@ def decode(data: bytes, *, expected_pid: int) -> InputJournal:
         raise ValueError('invalid native Python journal identity or size')
     offset = sequence = 0
     sources: list[SourceInput] = []
+    imports: list[SourceInput] = []
     while offset < len(data):
         if len(data) - offset < HEADER.size:
             raise ValueError('incomplete native Python journal header')
         magic, kind, flags, reserved, current, path_size, size = HEADER.unpack_from(data, offset)
         offset += HEADER.size
-        if (magic != MAGIC or kind not in (1, 2) or flags or reserved
+        if (magic != MAGIC or kind not in (1, 2, 3) or flags or reserved
                 or current != sequence + 1 or current > MAX_RECORDS
                 or path_size > MAX_PATH or size > MAX_SOURCE + SOURCE.size
                 or size < SOURCE.size or offset + path_size + size > len(data)):
@@ -76,27 +78,28 @@ def decode(data: bytes, *, expected_pid: int) -> InputJournal:
         payload = data[offset:offset + size]
         offset += size
         if kind == 2:
-            return _final(payload, path, offset == len(data), sources, expected_pid)
+            return _final(payload, path, offset == len(data), sources, imports, expected_pid)
         pid, device, inode, length, seconds, nanos, mode = SOURCE.unpack_from(payload)
         if (pid != expected_pid or not path or b'\0' in path or nanos >= 10 ** 9
                 or not stat.S_ISREG(mode) or length != len(payload) - SOURCE.size):
             raise ValueError('native Python source metadata or identity differs')
-        sources.append(SourceInput(path, payload[SOURCE.size:], device, inode,
-                                   seconds * 10 ** 9 + nanos, mode))
+        collection = sources if kind == 1 else imports
+        collection.append(SourceInput(path, payload[SOURCE.size:], device, inode,
+                                      seconds * 10 ** 9 + nanos, mode))
     raise ValueError('native Python journal lacks finalization evidence')
 
 
 def _final(payload: bytes, path: bytes, at_eof: bool, sources: list[SourceInput],
-           expected_pid: int) -> InputJournal:
+           imports: list[SourceInput], expected_pid: int) -> InputJournal:
     if path or len(payload) != FINAL.size or not at_eof:
         raise ValueError('invalid native Python journal final record')
     pid, count, size, capture_failures, journal_failures, finalized, expected = FINAL.unpack(payload)
-    if (pid != expected_pid or count != len(sources)
-            or size != sum(len(source.content) for source in sources)
+    if (pid != expected_pid or count != len(sources) + len(imports)
+            or size != sum(len(source.content) for source in (*sources, *imports))
             or finalized not in (0, 1) or expected not in (0, 1)):
         raise ValueError('native Python journal final counts or identity differ')
     return InputJournal(pid, tuple(sources), capture_failures, journal_failures,
-                        bool(finalized), bool(expected))
+                        bool(finalized), bool(expected), tuple(imports))
 
 
 def read(path: Path, *, expected_pid: int) -> InputJournal:

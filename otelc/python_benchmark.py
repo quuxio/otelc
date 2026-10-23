@@ -119,9 +119,9 @@ def run(policy: Policy, output: Path, *, comparison_id: str | None = None,
     if file_identity(source) != before:
         raise ValueError('application source changed')
     identity = benchmark_process.RunIdentity('python', platform.python_implementation() + ' ' + platform.python_version(),
-        'CPython bytecode', ('prepared native entry journal', 'no additional application interpreter flags'), before['sha256'])
+        'CPython bytecode', ('prepared native entry and import journals', 'no additional application interpreter flags'), before['sha256'])
     report = benchmark_process.summary(policy, output, records, identity, pids, sdk_pid, comparison_id)
-    report['launch_profile'] = 'prepared-native-v1'
+    report['launch_profile'] = 'prepared-native-imports-v2'
     report['supervisor_pids'] = supervisors
     report['launch_evidence'] = {lane: process.evidence for lane, process in processes.items()}
     report['config_sha256'] = policy_digest(policy)
@@ -130,7 +130,7 @@ def run(policy: Policy, output: Path, *, comparison_id: str | None = None,
         'sha256': hashlib.sha256(executable.read_bytes()).hexdigest(), 'version': sys.version,
         'environment': {key: os.environ.get(key) for key in ('PYTHONOPTIMIZE', 'PYTHONHASHSEED', 'PYTHONDONTWRITEBYTECODE')}}
     report['requirements_sha256'] = hashlib.sha256((adapter.ROOT / 'requirements.txt').read_bytes()).hexdigest()
-    report['source_evidence_scope'] = 'prepared public supervisor, consumed native entry, post-drain inputs and SDK ownership; full Python import/code provenance unqualified'
+    report['source_evidence_scope'] = 'prepared supervisor, native entry and ordinary-loader reads, post-drain inputs and SDK ownership; code/dependency provenance unqualified'
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     if publish:
         benchmark.export_result(report, policy.data['export']['endpoint'])

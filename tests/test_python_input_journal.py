@@ -30,6 +30,20 @@ def final(*, pid: int = 12, count: int = 1, size: int = 9, failures: int = 0,
 
 
 class PythonInputJournalTests(unittest.TestCase):
+    def test_import_records_are_separate_from_entry_and_final_counts_cover_both(self) -> None:
+        payload = journal.SOURCE.pack(12, 3, 4, 4, 0, 0, stat.S_IFREG | 0o644) + b'pyc!'
+        data = source() + record(3, 2, payload, b'module.pyc') + final(count=2, size=13, sequence=3)
+        value = journal.decode(data, expected_pid=12)
+        self.assertTrue(value.complete)
+        self.assertEqual(len(value.sources), 1)
+        self.assertEqual([(item.path, item.content) for item in value.imports], [(b'module.pyc', b'pyc!')])
+        for changed in (data[:-1], source() + record(3, 2, payload, b'module.pyc')
+                        + final(count=1, size=9, sequence=3)):
+            with self.assertRaises(ValueError):
+                journal.decode(changed, expected_pid=12)
+        imports_only = record(3, 1, payload, b'module.pyc') + final(size=4, expected=0)
+        self.assertFalse(journal.decode(imports_only, expected_pid=12).complete)
+
     def test_exact_source_identity_bytes_signed_timestamp_and_final_counters(self) -> None:
         value = journal.decode(source() + final(), expected_pid=12)
         self.assertTrue(value.complete)
