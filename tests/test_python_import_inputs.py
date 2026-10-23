@@ -25,6 +25,7 @@ class PythonImportInputTests(NativeInputCase):
         subprocess.run([tooling.compiler(), '-std=c11', '-Wall', '-Wextra', '-Werror',
             *coverage, '-I' + str(root / 'native/python'),
             str(root / 'native/python/InputJournal.c'),
+            str(root / 'native/python/FileIOCapture.c'),
             str(root / 'tests/fixtures/python_import_capture.c'), '-o', str(cls.faults), *flags], check=True)
 
     def observed(self, filename: Path, evidence: journal.InputJournal) -> list[bytes]:
@@ -164,7 +165,7 @@ print(importlib.machinery.SourceFileLoader('empty', '/dev/null').get_data('/dev/
         data = self.root / 'data.py'
         data.write_bytes(b'abc')
         path = self.root / 'faults.journal'
-        with subprocess.Popen([str(self.faults), str(data), str(path)],
+        with subprocess.Popen([str(self.faults), str(data), str(path), sys.executable],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
             out, err = child.communicate(timeout=15)
         self.assertEqual((child.returncode, out, err), (0, b'', b''))

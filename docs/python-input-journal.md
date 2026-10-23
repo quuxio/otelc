@@ -15,7 +15,8 @@ make python-inputs
 make python-inputs-check
 PYTHONPATH=tests .venv/bin/python -m unittest \
   test_python_input_journal test_python_input_build \
-  test_python_native_inputs test_python_import_inputs test_python_input_coverage -v
+  test_python_native_inputs test_python_import_inputs test_python_fileio_inputs \
+  test_python_input_coverage -v
 make check
 ```
 
@@ -36,6 +37,10 @@ Limits are 16 MiB per source, 64 MiB per journal, 4096 total records and 65535 b
 Raw C journal writes hold a private lock without calling Python, allocating Python objects, formatting application values or acquiring SDK/runtime locks. The stdio boundary checks the native main thread and the absence of an active Python frame before consuming its single capture arm. It does not treat an application-side open of the same path as the native entry read. Snapshot success is recorded only after the complete snapshot is ready.
 
 Ordinary imports use CPython's public [open-code hook](https://docs.python.org/3.12/c-api/file.html#c.PyFile_SetOpenCodeHook). The observer pins the original frozen `FileLoader.get_data` code object before application work and wraps only normal builtin `_io.open` files for that loader. The wrapper delegates the normal context manager and read, records the immutable bytes returned by that same read, then returns those bytes directly. No pre-read, byte-buffer copy or rewind is added. Explicit application `io.open_code` calls keep their normal real file type, name, descriptor, seek and read behaviour. Filename text cannot impersonate the pinned code object. An application override of `_io.open` passes through unchanged and records capture loss for loader reads; no extra file methods run on its wrapper.
+
+Older CPython loader branches, including sourceless imports on 3.12.10, use raw `_io.FileIO` instead of `open_code`. A matched native observer captures that original read without changing the loader's Python code or replacing its file objects. It binds an exact string/bytes constructor path to the actual opened descriptor and device/inode, then verifies the same file generation and metadata after reading. Reinitialisation, descriptor replacement, changing files, nonregular files and capture limits preserve the original read result or exception while marking capture loss. The read remains bound to the original file, with its original method type, name, signature and documentation for the tested profiling callbacks. Ordinary application file reads stay outside this loader capture.
+
+The raw observer holds weak file references in a bounded 4096-slot table, so it does not extend file lifetime. Nested loader calls and concurrent threads keep their own capture scopes; an `open_code` read is recorded once. Constructor paths requiring application `__fspath__` callbacks and custom file classes/factories remain outside this ordinary raw-file profile. Their callbacks and returned values are preserved, and no substitute path/content record is invented. These observations do not establish compile/load origin or complete import coverage. The native observer uses matched CPython type slots and method descriptors; incompatible method layouts are refused rather than assumed compatible.
 
 This component covers ordinary script entries and ordinary `SourceFileLoader`/`SourcelessFileLoader` file reads on shared-library/framework GIL CPython 3.12+ on macOS/Linux. Module entry can now retain loader reads, but still has no native script entry and does not claim complete provenance. Captures preserve full stale unchecked-hash bytecode and invalid-header/source-fallback reads. Builtin/frozen code, ZIP/custom loaders, compile/exec/AST inputs, whole-program executed-code coverage and dependency closure remain separate work. `source_complete=false` remains explicit in the public launcher.
 
