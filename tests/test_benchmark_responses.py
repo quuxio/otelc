@@ -25,8 +25,9 @@ class BenchmarkResponseTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'invalid application timing response'):
                         self.batch(valid | {name: replacement})
             with self.subTest(missing=name):
+                prepared_input = {key: value for key, value in valid.items() if key != name}
                 with self.assertRaisesRegex(ValueError, 'invalid application timing response'):
-                    self.batch({key: value for key, value in valid.items() if key != name})
+                    self.batch(prepared_input)
         for value in (None, [], 'result', 1, True):
             with self.subTest(nonobject=value):
                 with self.assertRaisesRegex(ValueError, 'invalid application timing response'):

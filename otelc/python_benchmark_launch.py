@@ -181,6 +181,33 @@ def recheck(application: Application) -> None:
             raise ValueError('prepared Python benchmark retained evidence changed')
 
 
+def _shutdown(owner: subprocess.Popen[str], process: Application | None,
+              failure: BaseException | None) -> bool:
+    """Reap the owned group and close pipes while retaining a body failure."""
+    clean = True
+    try:
+        try:
+            if process is not None:
+                benchmark.stop(process)
+        finally:
+            prepared.stop_group(owner)
+    except BaseException as error:
+        if failure is None:
+            raise
+        clean = False
+        failure.add_note('Prepared benchmark cleanup also failed: ' + type(error).__name__)
+    finally:
+        # Attempt both closes in the existing order, preserving the exception
+        # already in flight and any additional close failure in its chain.
+        try:
+            if owner.stdin is not None:
+                owner.stdin.close()
+        finally:
+            if owner.stdout is not None:
+                owner.stdout.close()
+    return clean
+
+
 @contextmanager
 def application(policy: Policy, runtime: Path, *, plain: bool) -> Iterator[Application]:
     """Own the same public supervisor/app/SDK recipe in both benchmark lanes."""
@@ -203,18 +230,13 @@ def application(policy: Policy, runtime: Path, *, plain: bool) -> Iterator[Appli
             failure = error
             raise
         finally:
+            clean = False
             try:
-                try:
-                    if process is not None:
-                        benchmark.stop(process)
-                finally:
-                    prepared.stop_group(owner)
-            except BaseException as error:
-                if failure is None:
-                    raise
-                failure.add_note('Prepared benchmark cleanup also failed: ' + type(error).__name__)
+                clean = _shutdown(owner, process, failure)
             finally:
-                for stream in (owner.stdin, owner.stdout):
-                    if stream is not None:
-                        stream.close()
-        completed(process, runtime, policy, plain=plain)
+                if process is not None:
+                    try:
+                        completed(process, runtime, policy, plain=plain)
+                    finally:
+                        if not clean:
+                            process.evidence.clear()

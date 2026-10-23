@@ -58,8 +58,9 @@ class PythonCodeDescriptorTests(unittest.TestCase):
         value = None
         for _ in range(150):
             value = (value,)
+        prepared_input = (lambda: None).__code__.replace(co_consts=(value,))
         with self.assertRaisesRegex(ValueError, 'depth limit'):
-            encode((lambda: None).__code__.replace(co_consts=(value,)))
+            encode(prepared_input)
 
     def test_default_json_handler_refuses_values_instead_of_formatting(self) -> None:
         # A controlled C encoder boundary exercises the otherwise unreachable
