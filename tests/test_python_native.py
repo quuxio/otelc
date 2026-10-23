@@ -53,7 +53,7 @@ timeout_ms = 1000
     def launch(self, runtime: Path, *, module: str | None = None,
                arguments: tuple[str, ...] = (), plain: bool = False,
                environment: dict[str, str] | None = None) -> subprocess.Popen[str]:
-        command = [sys.executable, '-m', 'otelc', '--config', str(self.config),
+        command = [sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(self.config),
             'python', '--root', str(self.application), '--runtime', str(runtime)]
         command += ['--module', module] if module else ['--entry', 'entry.py']
         if plain:

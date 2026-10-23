@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+
+if __name__ == "__main__":
+    # Normal module startup has already run site hooks. Refuse this CLI path
+    # before SDK imports instead of returning contaminated application/JSON data.
+    print("Use bin/quux-otelc for isolated CLI startup.", file=sys.stderr)
+    raise SystemExit(2)
+
 import argparse
 import json
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -129,7 +136,3 @@ def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
                                     comparison_id=args.comparison_id)
     return node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
                               publish=not args.no_publish, comparison_id=args.comparison_id)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

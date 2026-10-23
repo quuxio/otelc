@@ -9,7 +9,7 @@ The source adapter retains candidate input evidence alongside each explicit-runt
 Use the [public source launcher](node-source.md), selecting an original entry, project root, common policy and fresh private runtime directory. For example:
 
 ```sh
-.venv/bin/python -m otelc --config /path/to/otelc.toml node \
+bin/quux-otelc --config /path/to/otelc.toml node \
   --language typescript --backend native \
   --root /path/to/project --entry /path/to/project/app.cts \
   --runtime /tmp/otelc-input-run -- 7

@@ -78,7 +78,7 @@ stack-down:
 	docker compose down
 
 benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http)
-	$(PYTHON) -m otelc benchmark --language $(BENCHMARK_LANGUAGE) --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
+	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc benchmark --language $(BENCHMARK_LANGUAGE) --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
 
 sonar-policy:
 	$(PYTHON) ci/verify_sonar_policy.py

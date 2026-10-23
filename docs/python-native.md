@@ -60,7 +60,7 @@ Save it as `/tmp/otelc-functions.toml`. From a prepared checkout, start the [loc
 make stack-up
 runtime="$(mktemp -d /tmp/otelc-python.XXXXXX)/runtime"
 echo "$runtime"
-.venv/bin/python -m otelc --config /tmp/otelc-functions.toml python \
+bin/quux-otelc --config /tmp/otelc-functions.toml python \
   --root "$PWD" --entry examples/python/BenchmarkApp.py --runtime "$runtime"
 ```
 
@@ -69,14 +69,14 @@ Enter `10` for a batch of ten calls. Enter `throw` for a caught exception, or `q
 In another terminal, use the printed runtime path from the first terminal:
 
 ```sh
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json status
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json collection on
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json emission on
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json flush
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json off
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json status
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json collection on
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json emission on
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json flush
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json off
 ```
 
-Use `.venv/bin/python` if `python` is not available. The endpoint is private authenticated loopback; the shared client reads its token without printing it. Collection and emission switch in the existing app/SDK pair, including from initially off. Disabling metrics leaves traces enabled. An admitted export remains pending until its actual outcome; disabling emission does not cancel it. New controls do not hold the application's observation lock while waiting for an SDK acknowledgement.
+Use `bin/quux-otelc` after `make setup`; `OTELC_PYTHON` can select another SDK virtual environment. The endpoint is private authenticated loopback; the shared client reads its token without printing it. Collection and emission switch in the existing app/SDK pair, including from initially off. Disabling metrics leaves traces enabled. An admitted export remains pending until its actual outcome; disabling emission does not cancel it. New controls do not hold the application's observation lock while waiting for an SDK acknowledgement.
 
 Module entry is also native: replace `--entry ...` with `--module package.module`. Place app arguments after `--`. `--plain` starts the same native source without instrumentation or an SDK, retaining preparation, native entry journal and execution files. Add `--prepare-only` to print the fixed launch recipe without starting an app/SDK; see [prepared native launch](python-prepared-launch.md).
 
@@ -102,7 +102,7 @@ The ordinary [TaskApp.py](../examples/python/TaskApp.py) reuses one executor, st
 
 ```sh
 runtime="$(mktemp -d /tmp/otelc-python-tasks.XXXXXX)/runtime"
-.venv/bin/python -m otelc --config examples/tasks.toml python \
+bin/quux-otelc --config examples/tasks.toml python \
   --root "$PWD" --entry examples/python/TaskApp.py --runtime "$runtime"
 ```
 
@@ -138,7 +138,7 @@ To run the unchanged example with the full shared policy:
 
 ```sh
 runtime="$(mktemp -d /tmp/otelc-python-lifetimes.XXXXXX)/runtime"
-.venv/bin/python -m otelc --config examples/otelc.toml python \
+bin/quux-otelc --config examples/otelc.toml python \
   --root "$PWD" --entry examples/python/BenchmarkApp.py --runtime "$runtime"
 ```
 

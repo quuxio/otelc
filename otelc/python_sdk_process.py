@@ -249,7 +249,7 @@ class SdkProcess:
                            if not key.startswith(('PYTHON', 'OTEL_', 'OTELC_',
                                                   'GH_', 'GITHUB_', 'SONAR_'))}
             process = subprocess.Popen([
-                sys.executable, '-I', '-B', str(ROOT / 'otelc/python_sdk_child.py'),
+                sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/python_sdk_child.py'),
                 '--plan-fd', str(plan), '--events-fd', str(events),
                 '--replies-fd', str(output),
             ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

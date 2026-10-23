@@ -155,7 +155,7 @@ class PythonBenchmarkTests(unittest.TestCase):
         original = original.replace('warmup = 5', 'warmup = 1')
         policy.write_text(original)
         for plain in (True, False):
-            result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy),
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy),
                 'example', 'python', *(['--plain'] if plain else [])], cwd=ROOT,
                 input='10\nquit\n', capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -164,7 +164,7 @@ class PythonBenchmarkTests(unittest.TestCase):
             if not plain:
                 self.assertTrue(result.stderr.startswith('Control descriptor: '))
         output = self.root / 'cli'
-        result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy),
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy),
             'benchmark', '--language', 'python', '--output', str(output), '--no-publish',
             '--comparison-id', 'cli-shared'], cwd=ROOT, capture_output=True, text=True, timeout=40)
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -36,7 +36,7 @@ class NodeCompilationTests(unittest.TestCase):
                 for plain in (True, False):
                     with self.subTest(backend=backend, plain=plain):
                         runtime = root / (backend + ('-plain' if plain else '-instrumented'))
-                        result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
+                        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy), 'node',
                             '--language', 'typescript', '--root', str(root), '--entry', str(entry),
                             '--runtime', str(runtime), '--backend', backend, *(['--plain'] if plain else [])],
                             cwd=ROOT, capture_output=True, text=True, timeout=30)
@@ -190,7 +190,7 @@ assert.equal(result.compilation.files.input.path.endsWith('.cts'), true);
                 '[functions]\ninclude = ["*.workload"]\n[traces]\nenabled = true\n'
                 '[export]\n' + f'endpoint = "http://127.0.0.1:{capture.server.server_port}"\n')
             runtime = root / 'runtime'
-            result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy), 'node',
                 '--language', 'javascript', '--backend', 'api', '--root', str(root), '--entry', str(entry),
                 '--runtime', str(runtime)], cwd=ROOT, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.stdout, 'caught\n')

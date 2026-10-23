@@ -255,7 +255,7 @@ timeout_ms=1000
         marker = self.app / 'executed'
         self.entry.write_text('from pathlib import Path\nPath("executed").touch()\n')
         directory = self.root / 'cli-prepared'
-        result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(self.config),
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(Path(__file__).resolve().parents[1] / 'otelc/cli_bootstrap.py'), '--config', str(self.config),
             'python', '--root', str(self.app), '--entry', './entry.py',
             '--runtime', str(directory), '--prepare-only', '--', 'caf\u00e9'],
             capture_output=True, timeout=20)

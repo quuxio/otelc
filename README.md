@@ -21,9 +21,11 @@ Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and M
 ```sh
 make setup java-build
 make stack-up
-.venv/bin/python -m otelc plan
-.venv/bin/python -m otelc example java
+bin/quux-otelc plan
+bin/quux-otelc example java
 ```
+
+Use `bin/quux-otelc` from the checkout after `make setup`. It starts the tooling host in isolated/no-site mode before Python can run installed startup hooks. `OTELC_PYTHON=/path/to/sdk-venv/bin/python bin/quux-otelc ...` selects another SDK environment with the locked wheels installed. The old `python -m otelc` entry point is refused; application startup hooks still run normally in the application. See the [prepared Python launch guide](docs/python-prepared-launch.md).
 
 Enter `10` to run ten operations, `gc` to request collection from the test application, or `quit` to exit. The ten-operation checksum is `41284864`. The [ordinary application](examples/java/BenchmarkApp.java) has no telemetry dependency. otelc generates official-agent configuration and loads its own small extension; it does not modify application source or classes on disk.
 
@@ -48,10 +50,10 @@ emission = true
 The benchmark changes these states in one instrumented PID. For manual control, the generated private runtime directory contains `control.sock`:
 
 ```sh
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock status
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock off
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock collection on
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock emission on
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock status
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock off
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock collection on
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock emission on
 ```
 
 Off/on controls both together; the separate controls change only their named state. Emission-off starts no new exports. Status reports in-flight requests that must settle before a strict off barrier is effective. Collection-off suppresses cached SDK instruments, observable callbacks and collection from disabled meters; emission-on alone does not make those meters emit a stale snapshot. Cumulative values remain available after collection is re-enabled; emission-only suppression can include the silent interval in a later cumulative point. Installed hooks, enabled tracing and lifecycle bookkeeping can retain overhead while metrics are off.
@@ -72,7 +74,7 @@ Application-owned helper names are preserved. When names conflict, the launcher 
 
 Prepared launches keep agent diagnostics in `agent.log`. For exact application stderr comparisons, select `--diagnostic-profile` in both lanes; it disables JVM CDS consistently and retains all application output without filtering. Use the default profile for ordinary JVM/CDS performance measurements and keep the profile label with results.
 
-[Runtime health](docs/runtime-health.md) records PID/policy/selection identity, raw SDK exporter activity and bounded final flush/shutdown outcomes in `health.json`, including while metrics are off. Inspect it with `python -m otelc health --socket ...` or `--report ...`. Queue loss stays unavailable until a supported clean drain establishes it; exporter success still requires separate downstream receipt evidence.
+[Runtime health](docs/runtime-health.md) records PID/policy/selection identity, raw SDK exporter activity and bounded final flush/shutdown outcomes in `health.json`, including while metrics are off. Inspect it with `bin/quux-otelc health --socket ...` or `--report ...`. Queue loss stays unavailable until a supported clean drain establishes it; exporter success still requires separate downstream receipt evidence.
 
 [Invocation attribution](docs/action-witness.md) is being implemented separately. The offline Java binding compiler identifies exact compiled envelope/rendezvous/wrapper/target methods and refuses unsafe diagnostic harness shapes. Read-only class capture is tested against the real agent before SDK advice and against actual loaded identities/origins. Runtime scoping and per-action export evidence are still pending; these building blocks do not enable a witness capability.
 
