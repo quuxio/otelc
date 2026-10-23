@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import weakref
+from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import CodeType, FrameType
@@ -58,6 +61,19 @@ class Instance:
     released: bool = False
 
 
+@dataclass(frozen=True)
+class Collected:
+    token: int
+    finished: int
+    collect: bool
+
+
+@dataclass(frozen=True)
+class RemovedType:
+    identity: int
+    reference: weakref.ReferenceType[type]
+
+
 class Lifetimes:
     """Never hash/compare instances or retain their frames, classes or finalisers."""
 
@@ -82,6 +98,14 @@ class Lifetimes:
         self.failed_initialisations = self.failed_releases = self.open_resources = 0
         self.censored = self._next = 0
         self.closed = False
+        # GC may run while an SDK writer/RPC lock is held. Weak callbacks
+        # queue primitive observations only; never acquire the runtime lock.
+        # At most one event per bounded live instance/type can be pending.
+        self._pending: deque[Collected | RemovedType] = deque()
+        self._pending_lock = threading.RLock()
+        self._accepting = True
+        self._draining = False
+        self._control_collection: bool | None = None
 
     def reject(self, reason: str) -> None:
         with self.runtime._lock:
@@ -95,27 +119,95 @@ class Lifetimes:
                 {'type': kind, 'boundary': boundary}, unit, scope='io.quux.otelc.lifetimes')
 
     def gauges(self) -> None:
+        self.drain()
         self._metric('gauge', 'otelc.lifetime.live', self.censored if self.closed else len(self.instances),
                      'all', 'observed_gc')
         self._metric('gauge', 'otelc.lifetime.live', self.open_resources, 'all', 'resource')
 
-    def _remove_type(self, identity: int) -> None:
+    def _enqueue(self, event: Collected | RemovedType) -> None:
+        with self._pending_lock:
+            if self._accepting:
+                self._pending.append(event)
+
+    def _remove_type(self, identity: int, reference: weakref.ReferenceType[type]) -> None:
+        self._enqueue(RemovedType(identity, reference))
+
+    def drain(self) -> None:
+        """Publish queued GC observations at a runtime observation barrier."""
+        self._drain(self._pending_events())
+
+    def before_controls(self, collection: bool) -> None:
+        """Seal the old observation interval before publishing SDK controls."""
+        replacement: deque[Collected | RemovedType] = deque()
         with self.runtime._lock:
-            entry = self.types.pop(identity, None)
-            if entry is None:
+            with self._pending_lock:
+                previous = self._pending
+                self._pending = replacement
+                self._control_collection = collection
+            # Later GC belongs to the new interval. Publish only the sealed
+            # prefix here, while both runtime and SDK still use the old state.
+            self._drain(iter(previous))
+
+    def after_controls(self) -> None:
+        """Resume reading the committed runtime state after a control attempt."""
+        with self._pending_lock:
+            self._control_collection = None
+
+    def _pending_events(self) -> Iterator[Collected | RemovedType]:
+        while True:
+            with self._pending_lock:
+                if not self._pending:
+                    return
+                event = self._pending.popleft()
+            yield event
+
+    def _drain(self, events: Iterator[Collected | RemovedType]) -> None:
+        with self.runtime._lock:
+            if self._draining:
                 return
-            codes = (() if entry.initializer is None else (entry.initializer,)) + entry.releases
-            for code in {id(code): code for code in codes}.values():
-                saved, count = self.codes[id(code)]
-                if count == 1:
-                    del self.codes[id(code)]
-                else:
-                    self.codes[id(code)] = saved, count - 1
+            self._draining = True
+            try:
+                for event in events:
+                    if type(event) is RemovedType:
+                        self._forget_type(event.identity, event.reference)
+                    else:
+                        try:
+                            self._record_collected(event)
+                        except Exception:
+                            self.reject('gc_observation')
+            finally:
+                self._draining = False
+
+    def _forget_type(self, identity: int, reference: weakref.ReferenceType[type]) -> None:
+        entry = self.types.get(identity)
+        # An old deferred callback must not remove a newly reused class ID.
+        if entry is None or entry.reference is not reference:
+            return
+        del self.types[identity]
+        codes = (() if entry.initializer is None else (entry.initializer,)) + entry.releases
+        for code in {id(code): code for code in codes}.values():
+            saved, count = self.codes[id(code)]
+            if count == 1:
+                del self.codes[id(code)]
+            else:
+                self.codes[id(code)] = saved, count - 1
+
+    def selected(self, cls: type) -> bool:
+        """Reject unrelated SDK/stdlib classes before taking the runtime lock."""
+        entry = self.types.get(id(cls))
+        if entry is not None and entry.reference() is cls:
+            return True
+        initializer = objects.function_code(objects.resolved(cls, '__init__'))
+        source = objects.source_name(cls, self.root, initializer)
+        return (source is not None and self.sources.accepts(source[0])
+                and self.selection.accepts(source[1]))
 
     def metadata(self, cls: type) -> ClassInfo | None:
         entry = self.types.get(id(cls))
         if entry is not None and entry.reference() is cls:
             return entry
+        if entry is not None:
+            self._forget_type(id(cls), entry.reference)
         initializer = objects.function_code(objects.resolved(cls, '__init__'))
         source = objects.source_name(cls, self.root, initializer)
         if source is None or not self.sources.accepts(source[0]) or not self.selection.accepts(source[1]):
@@ -132,7 +224,7 @@ class Lifetimes:
             elif method is not None:
                 self.reject('unsupported_release')
         identity = id(cls)
-        reference = weakref.ref(cls, lambda _: self._remove_type(identity))
+        reference = weakref.ref(cls, lambda ref: self._remove_type(identity, ref))
         entry = ClassInfo(reference, source[1], initializer, tuple(releases))
         self.types[identity] = entry
         codes = (() if initializer is None else (initializer,)) + entry.releases
@@ -141,9 +233,12 @@ class Lifetimes:
         return entry
 
     def class_call(self, frame: FrameType, offset: int, value: object) -> None:
-        if self.closed or not objects.is_class(value):
+        if self.closed or not objects.is_class(value) or not self.selected(value):
             return
         with self.runtime._lock:
+            if self.closed:
+                return
+            self.drain()
             metadata = self.metadata(value)
             if metadata is None:
                 return
@@ -158,6 +253,8 @@ class Lifetimes:
                 self.reject('unsupported_initializer')
 
     def class_finished(self, frame: FrameType, offset: int, *, failed: bool) -> None:
+        if (id(frame), offset) not in self.calls:
+            return
         with self.runtime._lock:
             call = self.calls.pop((id(frame), offset), None)
             if call is not None:
@@ -173,7 +270,12 @@ class Lifetimes:
         if code.co_name != '__init__' and id(code) not in self.codes:
             return
         value = objects.receiver(frame)
+        if not self.selected(type(value)):
+            return
         with self.runtime._lock:
+            if self.closed:
+                return
+            self.drain()
             metadata = self.metadata(type(value))
             if metadata is None:
                 return
@@ -224,6 +326,8 @@ class Lifetimes:
         self.releases[id(frame)] = item.identity, token
 
     def finish(self, frame: FrameType, value: object, error: BaseException | None) -> None:
+        if id(frame) not in self.initializers and id(frame) not in self.releases:
+            return
         with self.runtime._lock:
             initializer = self.initializers.pop(id(frame), None)
             if initializer is not None:
@@ -289,29 +393,32 @@ class Lifetimes:
             self.gauges()
 
     def _collected(self, token: int) -> None:
-        try:
-            with self.runtime._lock:
-                if self.closed:
-                    return
-                item = self.instances.pop(token, None)
-                if item is None:
-                    self.reject('stale_completion')
-                    return
-                if self.identities.get(item.identity) == token:
-                    del self.identities[item.identity]
-                self.gc_completed += 1
-                if item.metadata.releases and not item.released:
-                    self.open_resources -= 1
-                    if item.metrics:
-                        self._metric('counter', 'otelc.lifetime.incomplete', 1, item.metadata.name, 'resource')
-                self._complete(item, token, 'observed_gc')
-                self.gauges()
-        except Exception:
-            self.reject('gc_observation')
+        with self._pending_lock:
+            if self._accepting:
+                collect = (self.runtime.collection if self._control_collection is None
+                           else self._control_collection)
+                self._pending.append(Collected(token, time.perf_counter_ns(), collect))
 
-    def _complete(self, item: Instance, token: int, boundary: str) -> None:
-        elapsed = max(0, time.perf_counter_ns() - item.started)
-        if item.metrics:
+    def _record_collected(self, event: Collected) -> None:
+        item = self.instances.pop(event.token, None)
+        if item is None:
+            self.reject('stale_completion')
+            return
+        if self.identities.get(item.identity) == event.token:
+            del self.identities[item.identity]
+        self.gc_completed += 1
+        if item.metadata.releases and not item.released:
+            self.open_resources -= 1
+            if item.metrics and event.collect:
+                self._metric('counter', 'otelc.lifetime.incomplete', 1, item.metadata.name, 'resource')
+        self._complete(item, event.token, 'observed_gc', finished=event.finished,
+                       collect=event.collect)
+        self.gauges()
+
+    def _complete(self, item: Instance, token: int, boundary: str, *,
+                  finished: int | None = None, collect: bool = True) -> None:
+        elapsed = max(0, (time.perf_counter_ns() if finished is None else finished) - item.started)
+        if item.metrics and collect:
             self._metric('counter', 'otelc.lifetime.completed', 1, item.metadata.name, boundary)
             self._metric('histogram', 'otelc.lifetime.duration', elapsed / 1e9,
                          item.metadata.name, boundary, 's')
@@ -324,6 +431,7 @@ class Lifetimes:
 
     def status(self) -> dict[str, Any]:
         with self.runtime._lock:
+            self.drain()
             return {'admitted': self.admitted, 'gc_completed': self.gc_completed,
                 'resource_completed': self.resource_completed,
                 'current_live': self.censored if self.closed else len(self.instances),
@@ -336,6 +444,9 @@ class Lifetimes:
         with self.runtime._lock:
             if self.closed:
                 return
+            with self._pending_lock:
+                self._accepting = False
+            self.drain()
             self.closed = True
             self.censored = len(self.instances)
             if self.initializers or self.calls:

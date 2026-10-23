@@ -90,6 +90,7 @@ class PythonLifetimeComponentTests(unittest.TestCase):
         del obj
         gc.collect()
         self.assertIsNone(reference())
+        self.tracker.status()
         self.assertEqual((self.tracker.gc_completed, self.tracker.open_resources), (1, 0))
         self.assertTrue(any(row[0][1] == 'otelc.lifetime.duration' for row in self.runtime.metrics))
         self.assertTrue(all(row[1]['scope'] == 'io.quux.otelc.lifetimes' for row in self.runtime.metrics))
@@ -149,9 +150,11 @@ class PythonLifetimeComponentTests(unittest.TestCase):
         self.assertEqual(self.tracker.losses, {'deferred_release_result': 1})
         del obj
         gc.collect()
+        self.tracker.status()
         self.assertEqual(self.tracker.open_resources, 0)
         self.assertTrue(any(row[0][1] == 'otelc.lifetime.incomplete' for row in self.runtime.metrics))
         self.tracker._collected(999)
+        self.tracker.status()
         self.assertEqual(self.tracker.losses['stale_completion'], 1)
 
     def test_duplicate_initialisation_and_borrowed_release_are_not_duplicate_boundaries(self) -> None:
@@ -215,7 +218,104 @@ class PythonLifetimeComponentTests(unittest.TestCase):
             self.tracker.class_call(caller, 37, Item)
         self.assertEqual(self.tracker.calls, {})
         self.assertEqual(self.tracker.losses, {'type_capacity': 1, 'constructor_capacity': 1})
-        self.tracker._remove_type(id(Item))
-        self.tracker._remove_type(id(Item))
+        reference = self.tracker.types[id(Item)].reference
+        self.tracker._remove_type(id(Item), reference)
+        self.tracker._remove_type(id(Item), reference)
+        self.tracker.status()
         self.assertEqual(self.tracker.codes, {})
+
+    def test_gc_timestamp_is_observed_before_deferred_drain(self) -> None:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+        provider = TracerProvider()
+        exporter = InMemorySpanExporter()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        self.addCleanup(provider.shutdown)
+        self.tracker.tracer = provider.get_tracer('fixture')
+        with mock.patch('otelc.python_lifetimes.time.perf_counter_ns', return_value=100):
+            obj = Item()
+            self.admit(obj)
+        with mock.patch('otelc.python_lifetimes.time.perf_counter_ns', return_value=150):
+            del obj
+        with mock.patch('otelc.python_lifetimes.time.perf_counter_ns', return_value=10000):
+            state = self.tracker.status()
+        self.assertEqual(state['gc_completed'], 1)
+        durations = [row[0][2] for row in self.runtime.metrics
+                     if row[0][1] == 'otelc.lifetime.duration']
+        self.assertEqual(durations, [50 / 1e9])
+        spans = exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(spans[0].end_time - spans[0].start_time, 50)
+
+    def test_gc_while_collection_off_is_not_retroactively_recorded(self) -> None:
+        obj = Item()
+        self.admit(obj)
+        self.runtime.collection = False
+        del obj
+        self.runtime.collection = True
+        self.runtime.metrics.clear()
+        self.assertEqual(self.tracker.status()['gc_completed'], 1)
+        names = [row[0][1] for row in self.runtime.metrics]
+        self.assertNotIn('otelc.lifetime.completed', names)
+        self.assertNotIn('otelc.lifetime.duration', names)
+        self.assertNotIn('otelc.lifetime.incomplete', names)
+
+    def test_close_drains_observed_gc_before_censoring_survivors(self) -> None:
+        dead, survivor = Item(), Item()
+        self.admit(dead)
+        self.admit(survivor)
+        del dead
+        self.tracker.close()
+        state = self.tracker.status()
+        self.assertEqual((state['gc_completed'], state['censored']), (1, 1))
+        self.assertEqual(state['tracked_instances'], 0)
+        del survivor
+        self.assertEqual(self.tracker.status()['gc_completed'], 1)
+        self.assertEqual(len(self.tracker._pending), 0)
+
+    def test_old_class_callback_cannot_remove_replacement_metadata(self) -> None:
+        from otelc.python_lifetimes import ClassInfo
+        first = self.tracker.metadata(Item)
+        other = ClassInfo(weakref.ref(DefaultItem), 'replacement', None, ())
+        self.tracker.types[id(Item)] = other
+        self.tracker._remove_type(id(Item), first.reference)
+        self.tracker.status()
+        self.assertIs(self.tracker.types[id(Item)], other)
+
+    def test_deferred_class_cleanup_decrements_shared_initializer_code(self) -> None:
+        class Child(Item):
+            pass
+
+        self.tracker.metadata(Item)
+        self.tracker.metadata(Child)
+        code = Item.__init__.__code__
+        self.assertEqual(self.tracker.codes[id(code)][1], 2)
+        reference = weakref.ref(Child)
+        del Child
+        gc.collect()
+        self.tracker.status()
+        self.assertIsNone(reference())
+        self.assertEqual(self.tracker.codes[id(code)][1], 1)
+
+    def test_failed_gc_publication_is_reported_and_drain_guard_recovers(self) -> None:
+        obj = Item()
+        self.admit(obj)
+        del obj
+        with mock.patch.object(self.tracker, '_complete', side_effect=ValueError('handoff')):
+            self.tracker.status()
+        self.assertEqual(self.tracker.losses, {'gc_observation': 1})
+        self.assertFalse(self.tracker._draining)
+
+    def test_observed_gc_releases_capacity_before_next_construction(self) -> None:
+        self.tracker.maximum = 1
+        first = Item()
+        self.admit(first)
+        del first
+        second = Item()
+        self.admit(second)
+        state = self.tracker.status()
+        self.assertEqual((state['admitted'], state['gc_completed'], state['lost']), (2, 1, 0))
+        self.assertEqual(state['tracked_instances'], 1)
 

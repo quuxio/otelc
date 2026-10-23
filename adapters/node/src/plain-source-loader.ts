@@ -2,6 +2,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { transpile } from './compiler/typescript.mjs';
+import { observeModuleEntry } from './compiler/transform.mjs';
 import { sourceName } from './selection.ts';
 import type { ISourcePlan } from './source-plan.ts';
 import { SourceInputs } from './source-inputs.ts';
@@ -23,8 +24,9 @@ registerHooks({ load(url, context, nextLoad) {
   const output = transpile(inputs.source(file), file, name, plan, root, context.format?.replace('-typescript', ''), inputs.config);
   inputs.compilation(loadIdentity, output.compilation);
   inputs.emitted(loadIdentity, output.code, output.format, 'compiled', output.map);
-  const source = output.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(output.map)).toString('base64');
-  inputs.emitted(loadIdentity, source, output.format ?? 'module', 'loaded', output.map);
-  return { format: output.format ?? 'module', shortCircuit: true,
+  const observed = observeModuleEntry(output.code, file, output.map, output.format, loadIdentity.id);
+  const source = observed.code + '\n//# sourceMappingURL=data:application/json;base64,' + Buffer.from(JSON.stringify(observed.map)).toString('base64');
+  inputs.emitted(loadIdentity, source, output.format, 'loaded', observed.map, output.format);
+  return { format: output.format, shortCircuit: true,
     source };
 } });
