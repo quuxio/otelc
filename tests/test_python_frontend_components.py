@@ -20,6 +20,7 @@ from unittest import mock
 from opentelemetry import trace
 
 from otelc import control, python as adapter
+from otelc import prepared_python as prepared_adapter
 from otelc.config import Policy
 from otelc.python_control import ControlServer
 from otelc.python_monitor import PythonMonitor
@@ -271,24 +272,24 @@ class PythonFrontendComponentTests(unittest.TestCase):
         with mock.patch.object(adapter.sys, 'version_info', (3, 11)):
             with self.assertRaisesRegex(ValueError, 'CPython'):
                 adapter.invocation(self.root, entry=entry, module=None, arguments=())
-        self.assertEqual(adapter.run(self.policy, self.root / 'plain', root=self.root,
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'plain', root=self.root,
                                      entry=entry, plain=True), 0)
-        self.assertFalse((self.root / 'plain').exists())
-        self.assertEqual(adapter.run(self.policy, self.root / 'native', root=self.root, entry=entry), 0)
+        self.assertFalse((self.root / 'plain/sdk').exists())
+        self.assertTrue((self.root / 'plain/python-execution.json').is_file())
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'native', root=self.root, entry=entry), 0)
         self.assertEqual(json.loads((self.root / 'native/sdk/python-sdk-status.json').read_text())['phase'], 'closed')
         entry.write_text('raise SystemExit(7)\n')
-        self.assertEqual(adapter.run(self.policy, self.root / 'exit', root=self.root, entry=entry), 7)
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'exit', root=self.root, entry=entry), 7)
         entry.write_text('import os\nos._exit(9)\n')
-        diagnostic = io.StringIO()
-        with contextlib.redirect_stderr(diagnostic):
-            self.assertEqual(adapter.run(self.policy, self.root / 'abrupt', root=self.root, entry=entry), 9)
-        self.assertIn('unverified', diagnostic.getvalue())
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'abrupt', root=self.root, entry=entry), 9)
+        diagnostic = json.loads((self.root / 'abrupt/python-supervisor-error.json').read_text())
+        self.assertIn('unverified', diagnostic['message'])
         entry.write_text('raise SystemExit(7)\n')
-        self.assertEqual(adapter.run(Policy.parse(self.policy.data | {'context': {'http': True}}),
+        self.assertEqual(prepared_adapter.run(Policy.parse(self.policy.data | {'context': {'http': True}}),
             self.root / 'http', root=self.root, entry=entry), 7)
         self.assertEqual(json.loads((self.root / 'http/sdk/python-sdk-status.json').read_text())['phase'], 'closed')
         with self.assertRaises(ValueError):
-            adapter.run(Policy.parse(self.policy.data | {'languages': ['java']}), self.root / 'refused',
+            prepared_adapter.run(Policy.parse(self.policy.data | {'languages': ['java']}), self.root / 'refused',
                         root=self.root, entry=entry)
         self.assertFalse((self.root / 'refused').exists())
         self.assertEqual(self.finish()['phase'], 'closed')

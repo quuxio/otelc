@@ -17,6 +17,16 @@ from ci import build_python_inputs as tooling
 
 
 class PythonInputBuildTests(unittest.TestCase):
+    def test_equivalent_header_directory_spelling_does_not_change_the_build_identity(self) -> None:
+        original, flags = tooling.toolchain()
+        with tempfile.TemporaryDirectory(dir='/tmp') as temporary:
+            alias = Path(temporary) / 'include-alias'
+            alias.symlink_to(tooling.sysconfig.get_path('include'), target_is_directory=True)
+            with mock.patch.object(tooling.sysconfig, 'get_path', return_value=str(alias)):
+                selected, selected_flags = tooling.toolchain()
+        self.assertEqual(flags, selected_flags)
+        self.assertTrue(original == selected, 'header path spelling changed the exact build identity')
+
     def test_build_reuse_and_changed_products_or_manifest_are_refused(self) -> None:
         with tempfile.TemporaryDirectory(dir='/tmp') as temporary:
             parent = Path(temporary)

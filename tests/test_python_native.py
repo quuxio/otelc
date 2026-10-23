@@ -94,7 +94,8 @@ timeout_ms = 1000
         plain.stdin.flush()
         plain.wait(timeout=10)
         self.assertEqual((plain.returncode, plain.stderr.read()), (0, ''))
-        self.assertFalse((self.root / 'plain').exists())
+        self.assertFalse((self.root / 'plain/sdk').exists())
+        self.assertTrue((self.root / 'plain/python-execution.json').is_file())
         runtime = self.root / 'runtime'
         process = self.launch(runtime)
         initial = self.ready(process, runtime)

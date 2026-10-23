@@ -78,7 +78,7 @@ python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json o
 
 Use `.venv/bin/python` if `python` is not available. The endpoint is private authenticated loopback; the shared client reads its token without printing it. Collection and emission switch in the existing app/SDK pair, including from initially off. Disabling metrics leaves traces enabled. An admitted export remains pending until its actual outcome; disabling emission does not cancel it. New controls do not hold the application's observation lock while waiting for an SDK acknowledgement.
 
-Module entry is also native: replace `--entry ...` with `--module package.module`. Place app arguments after `--`. `--plain` starts the same native source without instrumentation or SDK runtime files.
+Module entry is also native: replace `--entry ...` with `--module package.module`. Place app arguments after `--`. `--plain` starts the same native source without instrumentation or an SDK, retaining preparation, native entry journal and execution files. Add `--prepare-only` to print the fixed launch recipe without starting an app/SDK; see [prepared native launch](python-prepared-launch.md).
 
 ## What is observed
 
@@ -146,7 +146,7 @@ Enter `10` for ordinary work, `lifecycle` for constructor failure/release retry,
 
 ## Evidence and current limits
 
-The internal [native entry input component](python-input-journal.md) retains consumed script bytes without a Python runner frame. Its [fixed request/argv layer](python-launch-recipe.md) keeps original caller intent separate from resolved policy and preserves the installed launcher's native argv0. These components are not connected to this launcher yet; the owned fixed supervisor, complete import/code provenance and frozen-provider admission remain outstanding.
+The internal [native entry input component](python-input-journal.md) retains consumed script bytes without a Python runner frame. Its [fixed request/argv layer](python-launch-recipe.md) keeps original caller intent separate from resolved policy and preserves the installed launcher's native argv0. The [prepared native supervisor](python-prepared-launch.md) now connects these components and retains actual process ownership and post-drain input checks. Complete import/code provenance and frozen-provider admission remain outstanding.
 
 Local integration tests use CPython 3.12 and the locked SDK. They compare original script/module metadata, arguments, source hashes, seeded random values, signatures, output, tracebacks and exit codes against native baselines. Real receivers decode the four-state example's metric counts and spans, bound to the actual application PID rather than the CLI/SDK PID. Separate tests cover recursion/context boundaries, async suspension/cancellation, occupied monitoring IDs, controlled startup/probe failures, queue/transport evidence and open control connections. These are tested profiles, not a claim about arbitrary applications.
 

@@ -255,6 +255,9 @@ class SdkProcess:
             ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=diagnostic, cwd=ROOT, env=environment,
                 pass_fds=(plan, events, output))
+            io.publish(directory / 'python-sdk-spawned.json', {
+                'schema_version': 1, 'pid': process.pid, 'parent_pid': os.getpid(),
+                'launch_id': launch_id})
             for descriptor in (events, output, plan, diagnostic):
                 os.close(descriptor)
                 owned.remove(descriptor)
@@ -273,6 +276,14 @@ class SdkProcess:
                 channel.close()
             if process is not None:
                 cls._stop_process(process)
+                try:
+                    io.publish(directory / 'python-sdk-startup-failed.json', {
+                        'schema_version': 1, 'pid': process.pid, 'parent_pid': os.getpid(),
+                        'returncode': process.returncode, 'launch_id': launch_id})
+                except OSError:
+                    # Failed evidence writes remain unavailable. Preserve the
+                    # original startup failure and never overwrite an output.
+                    pass
             raise
         finally:
             for descriptor in owned:

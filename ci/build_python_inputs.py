@@ -47,7 +47,10 @@ def toolchain() -> tuple[dict, list[str]]:
             or sysconfig.get_config_var('Py_GIL_DISABLED')
             or not (sysconfig.get_config_var('Py_ENABLE_SHARED') or sysconfig.get_config_var('PYTHONFRAMEWORK'))):
         raise ValueError('native Python input evidence requires shared/framework GIL CPython3.12+ on macOS/Linux')
-    include = Path(sysconfig.get_path('include'))
+    # CPython's normal and isolated startups can spell the same installation
+    # through different prefix symlinks. These are metadata reads, not flags
+    # passed to the compiler: bind their one canonical header tree.
+    include = Path(sysconfig.get_path('include')).resolve(strict=True)
     version = re.search(r'^#define PY_VERSION\s+"([^"]+)"', (include / 'patchlevel.h').read_text(), re.M)
     if version is None or version[1] != sys.version.split()[0]:
         raise ValueError('native Python headers must match the exact interpreter version')

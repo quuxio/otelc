@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This is an internal building block for the Python candidate's source evidence. It is not yet connected to the public launcher and does not establish complete Python provenance or oteleq admission. Developers do not add imports, annotations, decorators or startup code to their application.
+This is the native entry building block used by the Python candidate's [prepared launcher](python-prepared-launch.md). It does not establish complete Python provenance or oteleq admission. Developers do not add imports, annotations, decorators or startup code to their application.
 
 The component uses CPython's public [PyConfig and Py_RunMain APIs](https://docs.python.org/3.12/c-api/init_config.html), retaining native argument parsing, main frames, metadata, exception printing and shutdown. A platform-specific stdio boundary copies the main script's opened bytes into an anonymous real-FD snapshot. CPython consumes that exact snapshot under the original filename. The implementation does not replace a developer source file or construct a Python runner frame.
 
@@ -21,7 +21,7 @@ make check
 
 `python-inputs` prints the tool-owned driver path. Its directory contains `build.json`, the shared library and the driver. The build identity binds the exact selected interpreter, Python library/config/header files, compiler, maintained native sources and flags. Products are published in a content-addressed directory; altered or partial products are refused on reuse. Profiling builds use a separate namespace. Clang and matching LLVM coverage tools are required for the native coverage gate; `CC` and `OTELC_LLVM_BIN` select installed tools.
 
-These are component commands, not a replacement for `otelc python`. The fixed public prepare/command recipe, inherited-descriptor supervisor, full import/code journal and immutable provider index still need integration. Do not launch the private driver from a command copied out of a receipt.
+These are component commands. The public `otelc python` launcher uses the fixed [prepare/command recipe and inherited-descriptor supervisor](python-prepared-launch.md). The full import/code journal and immutable provider index still need integration. Do not launch the private driver from a command copied out of a receipt.
 
 ## Evidence and failure boundary
 

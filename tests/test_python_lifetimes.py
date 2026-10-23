@@ -55,8 +55,10 @@ interval_ms=100000
             'python', '--root', str(self.application), '--entry', 'entry.py',
             '--runtime', str(runtime)], cwd=ROOT, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.stdout, baseline.stdout)
-        expected_stderr = ('Python SDK drain failed or remains unverified\n' if loss else '')
-        self.assertEqual(result.stderr, baseline.stderr + expected_stderr)
+        self.assertEqual(result.stderr, baseline.stderr)
+        if loss:
+            diagnostic = json.loads((runtime / 'python-supervisor-error.json').read_text())
+            self.assertIn('unverified', diagnostic['message'])
         self.assertEqual(self.entry.read_bytes(), before)
         report = json.loads((runtime / 'sdk/python-sdk-status.json').read_text())
         return result, report
