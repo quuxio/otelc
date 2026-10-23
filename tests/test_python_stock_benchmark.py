@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import os
 import signal
@@ -13,6 +14,7 @@ from unittest import mock
 
 from otelc import benchmark, python_stock_benchmark as stock
 from otelc.config import Policy
+from otelc.python_benchmark_launch import Application
 
 SOURCE = '''import json,os,sys
 for line in sys.stdin:
@@ -51,6 +53,18 @@ class PythonStockBenchmarkTests(unittest.TestCase):
         process.stdin.flush()
         return json.loads(process.stdout.readline())
 
+    def start_stock(self, policy: Policy, runtime: Path) -> tuple[Application, ExitStack]:
+        """Complete entry before a body/exit assertion, with fail-safe test cleanup."""
+        manager = ExitStack()
+        self.addCleanup(manager.close)
+        process = manager.enter_context(stock.application(policy, runtime))
+        return process, manager
+
+    def fail_body(self, manager: ExitStack, failure: BaseException) -> None:
+        """Pass the original body error through the already-entered application."""
+        with manager:
+            raise failure
+
     def test_direct_process_preserves_environment_without_native_observer_bootstrap_or_sdk(self) -> None:
         runtime = self.root / 'runtime'
         with mock.patch.dict(os.environ, PYTHONOPTIMIZE='1', PYTHONHASHSEED='7'), \
@@ -86,11 +100,12 @@ class PythonStockBenchmarkTests(unittest.TestCase):
                 config.write_text('schema_version=3\nlanguages=["python"]\n')
                 policy = Policy.load(config)
                 runtime = self.root / fault
+                process, manager = self.start_stock(policy, runtime)
+                self.inspect(process)
+                target = self.entry if fault == 'source' else config
+                target.write_text(target.read_text() + '\n# changed\n')
                 with self.assertRaisesRegex(ValueError, 'changed'):
-                    with stock.application(policy, runtime) as process:
-                        self.inspect(process)
-                        target = self.entry if fault == 'source' else config
-                        target.write_text(target.read_text() + '\n# changed\n')
+                    manager.close()
                 self.assertIsNotNone(process.owner.poll())
                 self.assertFalse((runtime / 'python-execution.json').exists())
 
@@ -110,57 +125,59 @@ class PythonStockBenchmarkTests(unittest.TestCase):
 
         with mock.patch.object(stock.subprocess, 'Popen', side_effect=popen), \
              mock.patch.object(stock.files, 'write', side_effect=write):
+            manager = stock.application(self.policy, self.root / 'runtime')
             with self.assertRaisesRegex(OSError, 'record unavailable'):
-                with stock.application(self.policy, self.root / 'runtime'):
-                    self.fail('failed readiness must not yield')
+                self.enterContext(manager)
         # Interpreter metadata probes also use Popen; identify the actual app.
         application = [process for process in started if str(self.entry) in process.args]
         self.assertEqual(len(application), 1)
         self.assertIsNotNone(application[0].poll())
 
     def test_primary_failure_survives_cleanup_failure_and_group_is_stopped(self) -> None:
-        with self.assertRaisesRegex(ValueError, 'original') as raised:
-            with mock.patch.object(benchmark, 'stop', side_effect=OSError('stop unavailable')):
-                with stock.application(self.policy, self.root / 'runtime') as process:
-                    self.inspect(process)
-                    original = ValueError('original')
-                    raise original
+        process, manager = self.start_stock(self.policy, self.root / 'runtime')
+        self.inspect(process)
+        original = ValueError('original')
+        with mock.patch.object(benchmark, 'stop', side_effect=OSError('stop unavailable')):
+            with self.assertRaisesRegex(ValueError, 'original') as raised:
+                self.fail_body(manager, original)
         self.assertIs(raised.exception, original)
         self.assertTrue(any('OSError' in note for note in raised.exception.__notes__),
                         raised.exception.__notes__)
         self.assertIsNotNone(process.owner.poll())
 
     def test_pipe_cleanup_error_does_not_skip_reaping_the_owned_child(self) -> None:
+        process, manager = self.start_stock(self.policy, self.root / 'runtime')
+        self.inspect(process)
+        original_close = process.owner.stdout.close
+
+        def close():
+            original_close()
+            raise OSError('pipe unavailable')
+
+        # Restore only after the launch context has completed cleanup.
+        patcher = mock.patch.object(process.owner.stdout, 'close', side_effect=close)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         with self.assertRaisesRegex(OSError, 'pipe unavailable'):
-            with stock.application(self.policy, self.root / 'runtime') as process:
-                self.inspect(process)
-                original_close = process.owner.stdout.close
-
-                def close():
-                    original_close()
-                    raise OSError('pipe unavailable')
-
-                # Restore only after the launch context has completed cleanup.
-                patcher = mock.patch.object(process.owner.stdout, 'close', side_effect=close)
-                patcher.start()
-                self.addCleanup(patcher.stop)
+            manager.close()
         self.assertIsNotNone(process.owner.poll())
 
     def test_uncooperative_owned_process_is_killed_and_reaped_within_cleanup_bound(self) -> None:
         self.entry.write_text("import json,signal,sys,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nfor line in sys.stdin:\n    print(json.dumps({'ready':True}),flush=True)\nwhile True:time.sleep(.1)\n")
+        process, manager = self.start_stock(self.policy, self.root / 'runtime')
+        self.assertTrue(self.inspect(process)['ready'])
         with mock.patch.object(benchmark, 'stop', side_effect=OSError('cooperative stop failed')):
             with self.assertRaisesRegex(OSError, 'cooperative stop failed'):
-                with stock.application(self.policy, self.root / 'runtime') as process:
-                    self.assertTrue(self.inspect(process)['ready'])
+                manager.close()
         self.assertEqual(process.owner.returncode, -signal.SIGKILL)
 
     def test_existing_output_refuses_before_any_interpreter_is_spawned(self) -> None:
         runtime = self.root / 'existing'
         runtime.mkdir()
         with mock.patch.object(stock.subprocess, 'Popen') as spawn:
+            manager = stock.application(self.policy, runtime)
             with self.assertRaises(FileExistsError):
-                with stock.application(self.policy, runtime):
-                    self.fail('existing runtime must refuse')
+                self.enterContext(manager)
         spawn.assert_not_called()
 
     def test_actual_failure_and_bad_or_timed_out_responses_never_publish_closed_evidence(self) -> None:
@@ -170,15 +187,23 @@ class PythonStockBenchmarkTests(unittest.TestCase):
                                       if fault == 'exit' else SOURCE)
                 runtime = self.root / fault
                 expected = TimeoutError if fault == 'timeout' else ValueError
-                with self.assertRaises(expected):
-                    with stock.application(self.policy, runtime) as process:
-                        if fault == 'exit':
-                            process.owner.wait(timeout=3)
-                        elif fault == 'response':
+                process, manager = self.start_stock(self.policy, runtime)
+                if fault == 'exit':
+                    process.owner.wait(timeout=3)
+                    with self.assertRaises(expected):
+                        manager.close()
+                else:
+                    def request():
+                        with manager:
                             benchmark.batch(process, 1)
-                        else:
-                            with mock.patch('otelc.benchmark.select.select', return_value=([], [], [])):
-                                benchmark.batch(process, 1)
+
+                    if fault == 'timeout':
+                        with mock.patch('otelc.benchmark.select.select', return_value=([], [], [])):
+                            with self.assertRaises(expected):
+                                request()
+                    else:
+                        with self.assertRaises(expected):
+                            request()
                 self.assertIsNotNone(process.owner.poll())
                 self.assertFalse((runtime / 'python-execution.json').exists())
                 if fault == 'exit':
@@ -195,11 +220,12 @@ for line in sys.stdin:
     if line.strip()=='quit':break
     print(json.dumps({'child':child}),flush=True)
 ''')
+        process, manager = self.start_stock(self.policy, self.root / 'runtime')
+        child = self.inspect(process)['child']
+        os.kill(process.pid, signal.SIGKILL)
+        process.owner.wait(timeout=3)
         with self.assertRaisesRegex(ValueError, 'exited unsuccessfully'):
-            with stock.application(self.policy, self.root / 'runtime') as process:
-                child = self.inspect(process)['child']
-                os.kill(process.pid, signal.SIGKILL)
-                process.owner.wait(timeout=3)
+            manager.close()
         self.assertEqual(process.owner.returncode, -signal.SIGKILL)
         with self.assertRaises(ProcessLookupError):
             os.kill(child, 0)
