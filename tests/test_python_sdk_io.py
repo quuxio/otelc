@@ -38,13 +38,15 @@ class PythonSdkIoTests(unittest.TestCase):
         with self.assertRaises(OSError):
             os.fstat(descriptor)
         path.chmod(0o644)
+        descriptor = os.open(path, os.O_RDONLY)
         with self.assertRaises(ValueError):
-            io.inherited_plan(os.open(path, os.O_RDONLY))
+            io.inherited_plan(descriptor)
         path.chmod(0o600)
         with path.open('wb') as output:
             output.truncate(1024 * 1024 + 1)
+        descriptor = os.open(path, os.O_RDONLY)
         with self.assertRaises(ValueError):
-            io.inherited_plan(os.open(path, os.O_RDONLY))
+            io.inherited_plan(descriptor)
 
     def test_nonobjects_duplicate_fields_nonfinite_and_public_reports_are_refused(self) -> None:
         for data in (b'[]', b'{"x":1,"x":2}', b'{"value":NaN}', b'{"value":1e999}'):

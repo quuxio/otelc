@@ -73,12 +73,14 @@ class PythonSdkChannelTests(unittest.TestCase):
             with self.subTest(change=change):
                 channel = self.peer(lambda record, status, change=change: [
                     {'id': record['id'], 'ok': True, 'status': status | change}])
+                pid = os.getpid()
                 with self.assertRaises(ValueError):
-                    channel.bind(os.getpid())
+                    channel.bind(pid)
         channel = self.peer(lambda record, status: [
             {'id': record['id'] + 1, 'ok': True, 'status': status}])
+        pid = os.getpid()
         with self.assertRaisesRegex(ValueError, 'reply identity differs'):
-            channel.bind(os.getpid())
+            channel.bind(pid)
 
     def test_requests_cannot_rebind_or_forge_checkpoint_identity(self) -> None:
         channel = self.peer(lambda record, status: [
