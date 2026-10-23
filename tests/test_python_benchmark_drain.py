@@ -77,6 +77,14 @@ class PythonBenchmarkDrainTests(unittest.TestCase):
             self.assertIs(caught.exception, failure)
             validate.assert_not_called()
 
+    def test_normal_exit_without_a_report_cannot_skip_validation(self) -> None:
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = self.process
+        with mock.patch.object(python_benchmark.launch, 'application', return_value=manager):
+            with self.assertRaisesRegex(ValueError, 'SDK drain is not verified'):
+                with python_benchmark.application(self.policy, self.runtime, plain=False):
+                    pass
+
     def test_stock_plain_error_has_no_sdk_drain_to_validate(self) -> None:
         failure = RuntimeError('controlled stock-body failure')
         with mock.patch.object(python_benchmark.stock, 'application', self.application), \

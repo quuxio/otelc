@@ -124,6 +124,30 @@ class PythonBenchmarkTests(unittest.TestCase):
         self.assertFalse(self.capture.points('otelc.benchmark.operation.duration'))
         self.assertEqual(json.loads((output / 'instrumented/python-execution.json').read_text())['sdk']['returncode'], 0)
 
+    def test_measured_body_failure_retains_the_real_closed_sdk_report(self) -> None:
+        runtime = self.root / 'body-failure'
+        failure = RuntimeError('controlled measured-body failure')
+        observed = []
+
+        def failed_measurement():
+            with python_benchmark.application(self.policy, runtime, plain=False) as (process, sdk_pid):
+                observed.append(process)
+                self.assertEqual(benchmark.batch(process, 1)['checksum'], benchmark.checksum(1))
+                self.assertEqual(sdk_pid, process.sdk_pid)
+                raise failure
+
+        with self.assertRaises(RuntimeError) as caught:
+            failed_measurement()
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(len(observed), 1)
+        process = observed[0]
+        self.assertIsNotNone(process.owner.poll())
+        self.assertEqual(process.sdk_report['phase'], 'closed')
+        execution = json.loads((runtime / 'python-execution.json').read_text())
+        self.assertEqual(execution['application'], {'pid': process.pid, 'returncode': 0})
+        self.assertEqual(execution['sdk']['pid'], process.sdk_pid)
+        self.assertEqual(execution['sdk']['returncode'], 0)
+
     def test_valid_body_response_survives_a_later_flush_failure_without_fake_cpu_window(self) -> None:
         process = mock.Mock(pid=os.getpid())
         response = {'calls': 10, 'elapsed_ns': 1000, 'checksum': 42, 'pid': -1}
