@@ -129,7 +129,8 @@ class PythonFrontendComponentTests(unittest.TestCase):
                 ('collection off', (False, False)), ('emission on', (False, True)),
                 ('off', (False, False)), ('on', (True, True))):
             response = control.request(descriptor, command)
-            self.assertEqual((response['collection'], response['emission']), expected)
+            actual = response['collection'], response['emission']
+            self.assertEqual(actual, expected)
         self.runtime.enter(1, 'fixture.workload')
         self.runtime.leave(1, None)
         control.request(descriptor, 'flush')
@@ -285,10 +286,28 @@ class PythonFrontendComponentTests(unittest.TestCase):
         self.assertIn('unverified', diagnostic.getvalue())
         for changes in ({'languages': ['java']}, {'lifetimes': {'enabled': True}},
                         {'context': {'http': True}}):
+            refused = Policy.parse(self.policy.data | changes)
+            directory = self.root / 'refused'
             with self.assertRaises(ValueError):
-                adapter.run(Policy.parse(self.policy.data | changes), self.root / 'refused',
+                adapter.run(refused, directory,
                             root=self.root, entry=entry)
         self.assertFalse((self.root / 'refused').exists())
+        self.assertEqual(self.finish()['phase'], 'closed')
+
+    def test_dash_prefixed_script_is_a_file_in_plain_and_instrumented_launches(self) -> None:
+        name = '-cprint(123).py'
+        source = 'import sys\nfrom pathlib import Path\nPath("ran.txt").write_text(repr(sys.argv[1:]))\n'
+        (self.root / name).write_text(source)
+        arguments = ('-c', '-m', '--', 'literal argument')
+        command = adapter.invocation(self.root, entry=Path(name), module=None, arguments=arguments)
+        self.assertEqual(command[1:], ['./' + name, *arguments])
+        for plain in (True, False):
+            with self.subTest(plain=plain):
+                self.assertEqual(adapter.run(self.policy, self.root / ('plain-dash' if plain else 'instrumented-dash'),
+                    root=self.root, entry=Path(name), arguments=arguments, plain=plain), 0)
+                self.assertEqual((self.root / 'ran.txt').read_text(), repr(list(arguments)))
+                (self.root / 'ran.txt').unlink()
+                self.assertEqual((self.root / name).read_text(), source)
         self.assertEqual(self.finish()['phase'], 'closed')
 
     def test_source_capacity_and_incomplete_observations_fail_honestly(self) -> None:
