@@ -33,8 +33,25 @@ def read_bytes(path: Path) -> bytes:
         with os.fdopen(descriptor, 'rb', closefd=False) as source:
             data = source.read(MAX_METADATA + 1)
         after = os.fstat(descriptor)
-        stable = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-        if len(data) != before.st_size or stable(before) != stable(after):
+        stable = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                               info.st_mode, info.st_uid, info.st_gid)
+        changed = (stable(before) != stable(after) or before.st_ctime_ns != after.st_ctime_ns
+                   or before.st_nlink != after.st_nlink)
+        if changed and (stable(before) == stable(after)
+                        and before.st_nlink == 2 and after.st_nlink == 1
+                        and after.st_ctime_ns >= before.st_ctime_ns):
+            # Atomic hard-link publication exposes complete bytes before the
+            # staging name is removed. That unlink alone can change ctime.
+            # Confirm identical bytes on the same descriptor with stable final
+            # metadata; do not accept a concurrent rewrite or a general retry.
+            with os.fdopen(descriptor, 'rb', closefd=False) as stream:
+                stream.seek(0)
+                confirmed = stream.read(MAX_METADATA + 1)
+            final = os.fstat(descriptor)
+            changed = (confirmed != data or stable(after) != stable(final)
+                       or after.st_ctime_ns != final.st_ctime_ns
+                       or after.st_nlink != final.st_nlink)
+        if len(data) != before.st_size or changed:
             raise ValueError('Python launch metadata changed while reading')
         return data
     finally:

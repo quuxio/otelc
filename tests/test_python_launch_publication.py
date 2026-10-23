@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -59,3 +60,80 @@ class LaunchPublicationTests(unittest.TestCase):
                 files.write(path, {'value': 'replacement'})
             self.assertEqual(files.read(path)[0], {'value': 'preserved'})
             self.assertFalse(path.with_name(path.name + '.staging').exists())
+
+
+    def test_reader_accepts_completed_publication_link_cleanup_but_refuses_changed_bytes(self) -> None:
+        for changed in (False, True):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / 'ready.json'
+                available = threading.Event()
+                release = threading.Event()
+                finished = threading.Event()
+                failures = []
+                real_link, real_stat = os.link, os.fstat
+                consumer = threading.get_ident()
+                reads = 0
+
+                def link(*args, **kwargs):
+                    real_link(*args, **kwargs)
+                    available.set()
+                    if not release.wait(3):
+                        raise TimeoutError('consumer did not open publication')
+
+                def publish():
+                    try:
+                        files.write(path, {'value': 'original'})
+                    except BaseException as error:
+                        failures.append(error)
+                    finally:
+                        finished.set()
+
+                def metadata(descriptor):
+                    nonlocal reads
+                    info = real_stat(descriptor)
+                    if threading.get_ident() == consumer:
+                        reads += 1
+                        if reads == 1:
+                            self.assertEqual(info.st_nlink, 2)
+                            release.set()
+                            self.assertTrue(finished.wait(3))
+                        elif reads == 2 and changed:
+                            path.write_bytes(recipe.encoded({'value': 'replaced'}).encode())
+                            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+                            info = real_stat(descriptor)
+                    return info
+
+                with patch.object(io.os, 'link', side_effect=link), \
+                     patch.object(files.os, 'fstat', side_effect=metadata):
+                    publisher = threading.Thread(target=publish)
+                    publisher.start()
+                    try:
+                        self.assertTrue(available.wait(3))
+                        if changed:
+                            with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                                files.read(path)
+                        else:
+                            self.assertEqual(files.read(path)[0], {'value': 'original'})
+                    finally:
+                        release.set()
+                        publisher.join(timeout=3)
+                self.assertFalse(publisher.is_alive())
+                self.assertEqual(failures, [])
+
+    def test_ctime_change_without_publication_link_cleanup_still_refuses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'ready.json'
+            files.write(path, {'value': 'original'})
+            real_stat = os.fstat
+            reads = 0
+
+            def metadata(descriptor):
+                nonlocal reads
+                reads += 1
+                if reads == 2:
+                    os.chmod(path, 0o600)
+                return real_stat(descriptor)
+
+            with patch.object(files.os, 'fstat', side_effect=metadata):
+                with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                    files.read(path)
