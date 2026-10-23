@@ -141,8 +141,10 @@ class PythonBenchmarkTests(unittest.TestCase):
 
     def test_disabled_policy_is_refused_before_any_process(self) -> None:
         output = self.root / 'refused'
-        with mock.patch('otelc.python_benchmark.application') as launch, self.assertRaises(ValueError):
-            python_benchmark.run(Policy.parse(self.policy.data | {'languages': ['java']}), output)
+        with mock.patch('otelc.python_benchmark.application') as launch:
+            prepared_input = Policy.parse(self.policy.data | {'languages': ['java']})
+            with self.assertRaises(ValueError):
+                python_benchmark.run(prepared_input, output)
         launch.assert_not_called()
         self.assertFalse(output.exists())
 

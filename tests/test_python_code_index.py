@@ -65,8 +65,9 @@ class PythonCodeIndexTests(unittest.TestCase):
                 value = graph()
                 value['nodes'].append({'id': 9, 'type': 'tuple', 'items': [999]})
                 value['nodes'][0]['fields'][field] = 9
+                prepared_input = record(value)
                 with self.assertRaisesRegex(ValueError, 'missing node'):
-                    index.decode(record(value))
+                    index.decode(prepared_input)
 
     def test_all_constant_types_preserve_bits_and_shared_references(self) -> None:
         data = graph()
@@ -113,21 +114,29 @@ class PythonCodeIndexTests(unittest.TestCase):
                  {'descriptor_version': 1}, {'descriptor_version': 3}, {'python_version': True},
                  {'python_version': 0x030b00f0}, {'python_version': 2**32})
         for change in cases:
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                index.decode(record(**change))
+            with self.subTest(change=change):
+                prepared_input = record(**change)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
         with self.assertRaises(ValueError):
             index.decode(object())
-        with mock.patch.object(index, 'MAX_SOURCE', 8), self.assertRaises(ValueError):
-            index.decode(record())
-        with mock.patch.object(index, 'MAX_PATH', 8), self.assertRaises(ValueError):
-            index.decode(record())
+        with mock.patch.object(index, 'MAX_SOURCE', 8):
+            prepared_input = record()
+            with self.assertRaises(ValueError):
+                index.decode(prepared_input)
+        with mock.patch.object(index, 'MAX_PATH', 8):
+            prepared_input = record()
+            with self.assertRaises(ValueError):
+                index.decode(prepared_input)
 
     def test_json_duplicate_keys_float_numbers_encoding_and_recursion_refuse(self) -> None:
         for payload in (b'{', b'{}{}', b'[]', b'null', b'{"schema_version":1,"schema_version":1}',
                         b'{"schema_version":1.0}', b'{"x":NaN}', b'{"x":Infinity}',
                         b'{"x":123456789012}', b'\xff', b'"\xc3\xa9"', b'[' * 1500 + b']' * 1500):
-            with self.subTest(payload=payload[:60]), self.assertRaises(ValueError):
-                index.decode(record(payload))
+            with self.subTest(payload=payload[:60]):
+                prepared_input = record(payload)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
 
     def test_schema_identity_reference_and_unknown_fields_refuse(self) -> None:
         cases = []
@@ -144,27 +153,36 @@ class PythonCodeIndexTests(unittest.TestCase):
         changed = graph();changed['nodes'][1]['items'] = [True];cases.append(changed)
         changed = graph();changed['nodes'][1]['items'] = [999];cases.append(changed)
         for data in cases:
-            with self.subTest(data=data), self.assertRaises(ValueError):
-                index.decode(record(data))
+            with self.subTest(data=data):
+                prepared_input = record(data)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
 
     def test_code_metadata_and_field_shapes_are_checked_independently(self) -> None:
         for key, value in (('co_flags', -1), ('co_flags', 2**31),
                            ('co_firstlineno', True), ('co_nlocals', 1)):
             data = graph();data['nodes'][0]['metadata'][key] = value
-            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
-                index.decode(record(data))
+            with self.subTest(key=key, value=value):
+                prepared_input = record(data)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
         for field, identity in (('co_consts', 3), ('co_filename', 4),
                                 ('co_code', 6), ('co_names', 2)):
             data = graph();data['nodes'][0]['fields'][field] = identity
-            with self.subTest(field=field), self.assertRaises(ValueError):
-                index.decode(record(data))
+            with self.subTest(field=field):
+                prepared_input = record(data)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
         for key in ('fields', 'metadata'):
             data = graph();data['nodes'][0][key] = {}
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                index.decode(record(data))
+            with self.subTest(key=key):
+                prepared_input = record(data)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
         data = graph();data['nodes'][7]['data'] = '97'
+        prepared_input = record(data)
         with self.assertRaisesRegex(ValueError, 'bytecode width'):
-            index.decode(record(data))
+            index.decode(prepared_input)
 
     def test_binary_literals_and_container_shapes_refuse_noncanonical_data(self) -> None:
         for node in ({'type': 'literal', 'value': 1}, {'type': 'unicode', 'value': 1},
@@ -176,19 +194,25 @@ class PythonCodeIndexTests(unittest.TestCase):
                      {'type': 'frozenset', 'items': [3, 3]}, {'type': 'bytes'}):
             data = graph();data['nodes'][1]['items'].append(9)
             data['nodes'].append({'id': 9, **node})
-            with self.subTest(node=node), self.assertRaises(ValueError):
-                index.decode(record(data))
+            with self.subTest(node=node):
+                prepared_input = record(data)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
 
     def test_cycles_unreachable_nodes_and_all_graph_budgets_refuse(self) -> None:
         data = graph();data['nodes'][1]['items'] = [1]
+        prepared_input = record(data)
         with self.assertRaisesRegex(ValueError, 'cycle'):
-            index.decode(record(data))
+            index.decode(prepared_input)
         data = graph();data['nodes'].append({'id': 9, 'type': 'ellipsis'})
+        prepared_input = record(data)
         with self.assertRaisesRegex(ValueError, 'unreachable'):
-            index.decode(record(data))
+            index.decode(prepared_input)
         for name, limit in (('MAX_NODES', 7), ('MAX_EDGES', 2), ('MAX_DEPTH', 1)):
-            with self.subTest(bound=name), mock.patch.object(index, name, limit), self.assertRaises(ValueError):
-                index.decode(record())
+            with self.subTest(bound=name), mock.patch.object(index, name, limit):
+                prepared_input = record()
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
 
     def test_cached_shared_subgraphs_cannot_hide_a_longer_path_over_the_depth_limit(self) -> None:
         for wrappers in (6, 7):
@@ -207,8 +231,9 @@ class PythonCodeIndexTests(unittest.TestCase):
                 if wrappers == 6:
                     self.assertEqual(index.decode(record(data)).root, 1)
                 else:
+                    prepared_input = record(data)
                     with self.assertRaisesRegex(ValueError, 'graph depth'):
-                        index.decode(record(data))
+                        index.decode(prepared_input)
 
     def test_recorded_filesystem_codec_does_not_assume_the_verifier_codec(self) -> None:
         data = graph()
@@ -216,8 +241,9 @@ class PythonCodeIndexTests(unittest.TestCase):
         data['nodes'][4]['value'] = '/source/caf\u00e9.py'
         value = record(data, path=b'/source/caf\xe9.py')
         self.assertEqual(index.decode(value).filesystem_encoding, 'iso8859-1')
+        prepared_input = record(data, path=b'/source/caf\xc3\xa9.py')
         with self.assertRaisesRegex(ValueError, 'filename bytes differ'):
-            index.decode(record(data, path=b'/source/caf\xc3\xa9.py'))
+            index.decode(prepared_input)
 
     def test_unknown_or_malformed_filesystem_codec_fields_refuse(self) -> None:
         for filesystem in ({}, None, {'encoding': 'utf-8'},
@@ -229,14 +255,18 @@ class PythonCodeIndexTests(unittest.TestCase):
                            {'encoding': 'utf-8', 'errors': 'nonexistent_handler'},
                            {'encoding': 'nonexistent_codec', 'errors': 'strict'}):
             data = graph();data['filesystem'] = filesystem
-            with self.subTest(filesystem=filesystem), self.assertRaises(ValueError):
-                index.decode(record(data))
+            with self.subTest(filesystem=filesystem):
+                prepared_input = record(data)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
 
     def test_filename_mismatch_nul_and_bad_encoding_refuse_surrogateescape_passes(self) -> None:
         for name in ('different.py', '/source/app.py\0suffix', '\ud800'):
             data = graph();data['nodes'][4]['value'] = name
-            with self.subTest(name=name), self.assertRaises(ValueError):
-                index.decode(record(data))
+            with self.subTest(name=name):
+                prepared_input = record(data)
+                with self.assertRaises(ValueError):
+                    index.decode(prepared_input)
         data = graph();data['nodes'][4]['value'] = '/source/app.py\udcff'
         value = record(data, path=b'/source/app.py\xff')
         self.assertEqual(index.decode(value).nodes[4].value, os.fsdecode(value.path))
