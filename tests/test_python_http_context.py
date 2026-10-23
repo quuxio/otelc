@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -59,9 +60,11 @@ def app(environ,start_response):
     start_response('200 OK',[('Content-Length','2')])
     return Body()
 server=make_server('127.0.0.1',0,app,handler_class=Quiet)
+server.timeout=5
 worker=threading.Thread(target=server.handle_request)
 worker.start()
-with urllib.request.urlopen('http://127.0.0.1:'+str(server.server_port)+'/') as response:
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open('http://127.0.0.1:'+str(server.server_port)+'/',timeout=5) as response:
     body=response.read()
 worker.join(5)
 assert not worker.is_alive()
@@ -89,13 +92,18 @@ http=true
 ''')
             for mode in ('ordinary', 'changing'):
                 with self.subTest(mode=mode):
+                    # This fixture declares direct loopback traffic in both lanes.
+                    # An unusable ambient proxy must not redirect that traffic.
+                    environment = {**os.environ, 'http_proxy': 'http://127.0.0.1:0',
+                                   'HTTP_PROXY': 'http://127.0.0.1:0',
+                                   'no_proxy': '', 'NO_PROXY': ''}
                     native = subprocess.run([sys.executable, str(entry), mode], cwd=root,
-                        capture_output=True, timeout=20)
+                        env=environment, capture_output=True, timeout=20)
                     runtime = root / mode
                     observed = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'),
                         '--config', str(policy), 'python', '--root', str(root),
                         '--entry', 'entry.py', '--runtime', str(runtime), '--', mode],
-                        cwd=ROOT, capture_output=True, timeout=30)
+                        cwd=ROOT, env=environment, capture_output=True, timeout=30)
                     self.assertEqual((native.returncode, native.stderr), (0, b''))
                     self.assertEqual(json.loads(native.stdout), {'lookups': 2,
                         'calls': [2] if mode == 'changing' else ['closed'], 'body': '6f6b'})
