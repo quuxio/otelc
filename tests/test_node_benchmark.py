@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from otelc import benchmark, node_benchmark
+from otelc import benchmark, benchmark_process, node_benchmark
 from otelc.config import Policy
 from test_java_integration import Capture
 
@@ -31,9 +31,9 @@ class NodeBenchmarkTests(unittest.TestCase):
             schedules = []
             for _ in range(2):
                 records = benchmark.Measurements()
-                with patch('otelc.node_benchmark.benchmark.switch_state', side_effect=switched), \
-                        patch('otelc.node_benchmark.measured_batch', return_value={'checksum': expected, 'elapsed_ns': 10}):
-                    node_benchmark.measure_batches(process, policy, output, output / 'control.json', 456, expected, records)
+                with patch('otelc.benchmark_process.benchmark.switch_state', side_effect=switched), \
+                        patch('otelc.benchmark_process.measured_batch', return_value={'checksum': expected, 'elapsed_ns': 10}):
+                    benchmark_process.measure_batches(process, policy, output, output / 'control.json', 456, expected, records)
                 orders = [[item['mode'] for item in records.transitions if item['sample'] == sample] for sample in range(8)]
                 for sample in orders:
                     self.assertEqual(set(sample), set(benchmark.STATES))
@@ -44,9 +44,9 @@ class NodeBenchmarkTests(unittest.TestCase):
                 schedules.append(orders)
             self.assertEqual(schedules[0], schedules[1])
             plain = benchmark.Measurements()
-            with patch('otelc.node_benchmark.benchmark.switch_state') as switch, \
-                    patch('otelc.node_benchmark.measured_batch', return_value={'checksum': expected, 'elapsed_ns': 10}):
-                node_benchmark.measure_batches(process, policy, output, None, None, expected, plain)
+            with patch('otelc.benchmark_process.benchmark.switch_state') as switch, \
+                    patch('otelc.benchmark_process.measured_batch', return_value={'checksum': expected, 'elapsed_ns': 10}):
+                benchmark_process.measure_batches(process, policy, output, None, None, expected, plain)
             switch.assert_not_called()
             self.assertEqual(len(plain.samples['plain']), 8)
             self.assertFalse(plain.transitions)
@@ -111,13 +111,13 @@ class NodeBenchmarkTests(unittest.TestCase):
                         node_benchmark.validate_drain(changed, report['pids']['instrumented'], report['sdk_pid'])
 
     def test_cpu_time_parser_retains_ps_precision(self) -> None:
-        self.assertEqual(node_benchmark.cpu_time_ns('0:00.25'), 250_000_000)
-        self.assertEqual(node_benchmark.cpu_time_ns('120:00.00'), 7_200_000_000_000)
-        self.assertEqual(node_benchmark.cpu_time_ns('01:02:03'), 3_723_000_000_000)
-        self.assertEqual(node_benchmark.cpu_time_ns('2-01:02:03'), 176_523_000_000_000)
+        self.assertEqual(benchmark_process.cpu_time_ns('0:00.25'), 250_000_000)
+        self.assertEqual(benchmark_process.cpu_time_ns('120:00.00'), 7_200_000_000_000)
+        self.assertEqual(benchmark_process.cpu_time_ns('01:02:03'), 3_723_000_000_000)
+        self.assertEqual(benchmark_process.cpu_time_ns('2-01:02:03'), 176_523_000_000_000)
         for value in ('bad', '-1:00', '00:99', '00:NaN'):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                node_benchmark.cpu_time_ns(value)
+                benchmark_process.cpu_time_ns(value)
 
     def test_incomplete_drain_retains_raw_results_without_publishing_driver_metrics(self) -> None:
         capture = Capture()

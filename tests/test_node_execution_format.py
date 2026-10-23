@@ -138,7 +138,7 @@ compileFunction(second.marked.code,['require'],{{filename:file}})(createRequire(
             '[functions]\ninclude=["*.workload"]\n[traces]\nenabled=true\nsample_ratio=1.0\n'
             f'[export]\nendpoint="http://127.0.0.1:{capture.server.server_port}"\n')
         runtime = root / ('runtime-plain' if plain else 'runtime')
-        result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(config),
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(config),
             'node', '--language', language, '--root', str(root), '--entry', str(entry),
             '--runtime', str(runtime), '--backend', backend, *(['--plain'] if plain else [])],
             cwd=ROOT, capture_output=True, text=True, timeout=40)

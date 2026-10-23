@@ -1,9 +1,8 @@
-"""Candidate native Python launcher: original sources plus generated startup hook."""
+"""Native Python invocation and generated-startup helpers, without app rewrites."""
 
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -99,49 +98,7 @@ def prepare(policy: Policy, directory: Path, sdk: SdkProcess, root: Path
         raise
 
 
-def run(policy: Policy, directory: Path, *, root: Path, entry: Path | None = None,
-        module: str | None = None, arguments: tuple[str, ...] = (),
-        plain: bool = False) -> int:
-    """Wait for SDK drain outside the app, preserving a failing app's exit code."""
-    root = root.resolve(strict=True)
-    command = invocation(root, entry=entry, module=module, arguments=arguments)
-    if plain:
-        return subprocess.call(command, cwd=root)
+def validate_policy(policy: Policy) -> None:
+    """The CLI and benchmark must reject the same unimplemented profile."""
     if 'python' not in policy.data['languages']:
         raise ValueError('Python is disabled by policy')
-    if any(policy.data['context'].values()):
-        raise ValueError('Python candidate library-context integration is not available yet')
-    directory = directory.resolve()
-    directory.mkdir(mode=0o700)
-    sdk = SdkProcess.start(policy, directory / 'sdk', bind=False)
-    descriptor = None
-    application = None
-    try:
-        descriptor, environment = prepare(policy, directory, sdk, root)
-        application = subprocess.Popen(command, cwd=root, env=environment,
-            pass_fds=(*sdk.channel.descriptors, descriptor))
-        sdk.channel.close()
-        os.close(descriptor)
-        descriptor = None
-        result = application.wait()
-        try:
-            report = sdk.wait_report(application_pid=application.pid)
-            clean = report['phase'] == 'closed'
-        except (ValueError, OSError, subprocess.SubprocessError):
-            clean = False
-        if not clean:
-            print('Python SDK drain failed or remains unverified', file=sys.stderr)
-        if result:
-            return result
-        return 0 if clean else 1
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if application is not None and application.poll() is None:
-            application.terminate()
-            try:
-                application.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                application.kill()
-                application.wait(timeout=2)
-        sdk.abort()
