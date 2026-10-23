@@ -3,6 +3,7 @@
 #include <Python.h>
 #include <opcode.h>
 #include "InputJournal.h"
+#include "NativeEncoder.h"
 
 #include <stdint.h>
 #include <limits.h>
@@ -138,6 +139,11 @@ static int actual_start(PyObject *code, int offset) {
     return matches;
 }
 
+int otelc_py_code_safe(PyObject *code) {
+    size_t remaining = OTELC_PY_SOURCE_LIMIT, nodes = NODE_LIMIT;
+    return PyCode_Check(code) && safe_value(code, &remaining, &nodes, 0);
+}
+
 static PyObject *target(PyObject *weak) {
 #if PY_VERSION_HEX >= 0x030D0000
     PyObject *value = NULL;
@@ -249,9 +255,15 @@ static PyObject *observe(PyObject *module, PyObject *arguments) {
     return identity_result(identity);
 }
 
+static PyObject *native_encode(PyObject *module, PyObject *code) {
+    (void)module;
+    return otelc_py_native_encode(code);
+}
+
 static PyMethodDef methods[] = {
     {"bind", bind_callback, METH_VARARGS, NULL},
     {"observe", observe, METH_VARARGS, NULL},
+    {"encode", native_encode, METH_O, NULL},
     {NULL, NULL, 0, NULL}
 };
 

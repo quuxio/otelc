@@ -57,7 +57,7 @@ def manifest(original: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     """Derive maintained tooling/entry identities without executing app code."""
     driver = native_tool()
     maintained = [ROOT / 'bin/quux-otelc', *sorted((ROOT / 'otelc').glob('*.py')),
-                  ROOT / 'ci/build_python_inputs.py', ROOT / 'requirements.txt',
+                  ROOT / 'ci/build_python_inputs.py', ROOT / 'ci/native_encoder.py', ROOT / 'requirements.txt',
                   ROOT / 'requirements-dev.txt']
     entry = original['paths'].get('entry')
     return {'schema_version': 1, 'kind': 'otelc.python.prepared',

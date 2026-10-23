@@ -16,8 +16,11 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
+from ci import native_encoder
+
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'InputJournal.h', 'NativeMain.c')
+SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'InputJournal.h',
+           'NativeMain.c', 'NativeEncoder.c', 'NativeEncoder.h')
 
 
 def digest(path: Path) -> dict[str, str]:
@@ -69,6 +72,7 @@ def toolchain() -> tuple[dict, list[str]]:
                 'headers': [digest(path) for path in sorted(include.rglob('*.h'))],
                 'compiler': digest(Path(compiler())),
                 'sources': [digest(ROOT / 'native/python' / name) for name in SOURCES]}
+    identity['encoder'] = native_encoder.inputs(ROOT)
     return identity, flags
 
 
@@ -77,9 +81,10 @@ def verify(directory: Path, expected: dict) -> Path:
     manifest = json.loads((directory / 'build.json').read_text())
     library = 'libotelc_python_inputs' + ('.dylib' if sys.platform == 'darwin' else '.so')
     if (manifest['inputs'] != expected or manifest['library'] != library
-            or set(manifest['products']) != {'otelc-python-inputs', library}):
+            or set(manifest['products']) != {'otelc-python-inputs', library, 'EncoderFactory.h'}
+            or manifest['products']['EncoderFactory.h']['sha256'] != expected['encoder']['header_sha256']):
         raise ValueError('native Python build inputs differ')
-    for name in ('otelc-python-inputs', library):
+    for name in ('otelc-python-inputs', library, 'EncoderFactory.h'):
         if (directory / name).is_symlink() or digest(directory / name) != manifest['products'][name]:
             raise ValueError('native Python build product changed')
     return directory / 'otelc-python-inputs'
@@ -100,6 +105,10 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
     options = [*flags, '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pthread', *instrumentation]
     with tempfile.TemporaryDirectory(prefix='python-inputs-', dir=parent) as temporary:
         candidate = Path(temporary)
+        generated, encoder_inputs = native_encoder.generate(ROOT)
+        if encoder_inputs != identity['encoder']:
+            raise ValueError('native encoder inputs changed while preparing')
+        (candidate / 'EncoderFactory.h').write_bytes(generated)
         sources = ROOT / 'native/python'
         link = (['-dynamiclib', '-install_name', '@rpath/' + library] if sys.platform == 'darwin'
                 else ['-shared', '-fPIC', '-Wl,-soname,' + library])
@@ -107,7 +116,8 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
         selected = identity['compiler']['path']
         commands = [[selected, *link, str(sources / 'CodeCapture.c'),
                      str(sources / 'EntryCapture.c'), str(sources / 'ImportCapture.c'),
-                     str(sources / 'InputJournal.c'),
+                     str(sources / 'InputJournal.c'), str(sources / 'NativeEncoder.c'),
+                     '-I', str(candidate),
                      '-o', str(candidate / library), *options],
                     [selected, str(sources / 'NativeMain.c'), str(candidate / library),
                      '-Wl,-rpath,' + origin, '-Wl,-rpath,' + str(sysconfig.get_config_var('LIBDIR')),
@@ -118,7 +128,7 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
         current.update(flags=current_flags, coverage=coverage)
         if current != identity:
             raise ValueError('native Python build inputs changed while compiling')
-        products = {name: digest(candidate / name) for name in ('otelc-python-inputs', library)}
+        products = {name: digest(candidate / name) for name in ('otelc-python-inputs', library, 'EncoderFactory.h')}
         for name, value in products.items():
             value.update(path=str(destination / name), resolved_path=str(destination / name))
         (candidate / 'build.json').write_text(json.dumps({'inputs': identity, 'library': library,

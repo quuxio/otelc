@@ -36,6 +36,14 @@ class PythonInputBuildTests(unittest.TestCase):
             manifest_path = binary.parent / 'build.json'
             manifest = json.loads(manifest_path.read_text())
             self.assertEqual(manifest['inputs']['version'], sys.version)
+            generated = binary.parent / 'EncoderFactory.h'
+            original_header = generated.read_bytes()
+            self.assertEqual(manifest['products']['EncoderFactory.h']['sha256'],
+                             manifest['inputs']['encoder']['header_sha256'])
+            generated.write_bytes(original_header + b'changed')
+            with self.assertRaisesRegex(ValueError, 'product changed'):
+                tooling.build(parent)
+            generated.write_bytes(original_header)
             manifest_path.write_text(json.dumps({**manifest, 'library': '../foreign'}))
             with self.assertRaisesRegex(ValueError, 'inputs differ'):
                 tooling.build(parent)
@@ -88,6 +96,9 @@ class PythonInputBuildTests(unittest.TestCase):
             native.mkdir(parents=True)
             for name in tooling.SOURCES:
                 shutil.copyfile(tooling.ROOT / 'native/python' / name, native / name)
+            (root / 'otelc').mkdir()
+            shutil.copyfile(tooling.ROOT / 'otelc/python_code_descriptor.py',
+                            root / 'otelc/python_code_descriptor.py')
             actual_run = subprocess.run
             completed = []
 
