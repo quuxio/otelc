@@ -20,6 +20,8 @@ make node-check
 
 The ordinary integration suite also makes an isolated `npm ci --omit=dev` installation and runs a typed application through both actual compiler profiles. The native Microsoft compiler and its matching platform package are runtime dependencies, not development-only tools. This packaging check verifies compiler availability and unchanged input/output; it does not replace prepared-launch provenance or full application qualification.
 
+Execution-format launch failures include bounded diagnostic JSON in the test failure log before temporary files are removed. It retains launcher exit/timeout state, exact output bytes and available SDK status, source journal and final input reports. Each channel or file retains at most 64 KiB, with explicit offsets and truncation; missing reports stay unavailable. This evidence does not establish a clean drain or repair a failed launch. Successful tests retain no additional data, and shutdown deadlines and loss checks remain unchanged.
+
 It also generates the pinned HTTP preservation product with `make node-http`. Its manifest binds exact upstream runtime files, the helper and the private product identity. Changed upstream source, stale helpers or modified products fail validation before application execution. Installed upstream packages remain unchanged.
 
 Select another installed runtime explicitly:

@@ -40,8 +40,9 @@ class PythonHttpContextTests(unittest.TestCase):
         self.exercise(inbound=True, excluded=True)
 
     def test_native_wsgi_close_keeps_getter_side_effects_and_the_second_lookup_callable(self) -> None:
-        source = '''import json,sys,threading,urllib.request
-from wsgiref.simple_server import make_server,WSGIRequestHandler
+        source = '''import faulthandler,json,socket,socketserver,sys,threading,urllib.request
+from wsgiref.simple_server import make_server,WSGIServer,WSGIRequestHandler
+faulthandler.dump_traceback_later(10)
 class Body:
     lookups=0
     calls=[]
@@ -56,10 +57,23 @@ class Body:
     def close(self): Body.calls.append('closed')
 class Quiet(WSGIRequestHandler):
     def log_message(self,*arguments): pass
+class LoopbackServer(WSGIServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name='localhost'
+        self.server_port=self.server_address[1]
+        self.setup_environ()
+def unexpected_lookup(*arguments):
+    raise AssertionError('loopback close fixture must not resolve host names')
 def app(environ,start_response):
     start_response('200 OK',[('Content-Length','2')])
     return Body()
-server=make_server('127.0.0.1',0,app,handler_class=Quiet)
+original_lookup=socket.getfqdn
+socket.getfqdn=unexpected_lookup
+try:
+    server=make_server('127.0.0.1',0,app,server_class=LoopbackServer,handler_class=Quiet)
+finally:
+    socket.getfqdn=original_lookup
 server.timeout=5
 worker=threading.Thread(target=server.handle_request)
 worker.start()
@@ -69,6 +83,7 @@ with opener.open('http://127.0.0.1:'+str(server.server_port)+'/',timeout=5) as r
 worker.join(5)
 assert not worker.is_alive()
 server.server_close()
+faulthandler.cancel_dump_traceback_later()
 print(json.dumps({'lookups':Body.lookups,'calls':Body.calls,'body':body.hex()}))
 '''
         with tempfile.TemporaryDirectory(dir='/tmp') as temporary:
@@ -90,6 +105,15 @@ enabled=false
 [context]
 http=true
 ''')
+            def execute(command: list[str], *, cwd: Path, timeout: float) -> subprocess.CompletedProcess[bytes]:
+                try:
+                    return subprocess.run(command, cwd=cwd, env=environment,
+                                          capture_output=True, timeout=timeout)
+                except subprocess.TimeoutExpired as error:
+                    self.fail(f'WSGI fixture timed out: {command!r}; '
+                              f'stdout={(error.stdout or b"")[-65536:]!r}; '
+                              f'stderr={(error.stderr or b"")[-65536:]!r}')
+
             for mode in ('ordinary', 'changing'):
                 with self.subTest(mode=mode):
                     # This fixture declares direct loopback traffic in both lanes.
@@ -97,13 +121,12 @@ http=true
                     environment = {**os.environ, 'http_proxy': 'http://127.0.0.1:0',
                                    'HTTP_PROXY': 'http://127.0.0.1:0',
                                    'no_proxy': '', 'NO_PROXY': ''}
-                    native = subprocess.run([sys.executable, str(entry), mode], cwd=root,
-                        env=environment, capture_output=True, timeout=20)
+                    native = execute([sys.executable, str(entry), mode], cwd=root, timeout=20)
                     runtime = root / mode
-                    observed = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'),
+                    observed = execute([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'),
                         '--config', str(policy), 'python', '--root', str(root),
                         '--entry', 'entry.py', '--runtime', str(runtime), '--', mode],
-                        cwd=ROOT, env=environment, capture_output=True, timeout=30)
+                        cwd=ROOT, timeout=30)
                     self.assertEqual((native.returncode, native.stderr), (0, b''))
                     self.assertEqual(json.loads(native.stdout), {'lookups': 2,
                         'calls': [2] if mode == 'changing' else ['closed'], 'body': '6f6b'})
