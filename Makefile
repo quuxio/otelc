@@ -10,7 +10,7 @@ BENCHMARK_LANGUAGE ?= java
 .NOTPARALLEL: check
 
 help:
-	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint and Java/Node/Python tests with component coverage gates' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry input component' 'python-inputs-check Profile real native entry cases and require 80% per-file lines' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile offline diagnostic action bindings (no runtime witness yet)' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
+	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint and Java/Node/Python tests with component coverage gates' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile offline diagnostic action bindings (no runtime witness yet)' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
 setup:
 	python3 -m venv .venv
@@ -32,7 +32,7 @@ node-native-coverage: node-observer
 	OTELC_NODE="$(NODE)" $(PYTHON) ci/check_node_native_coverage.py
 
 python-inputs:
-	$(PYTHON) ci/build_python_inputs.py
+	$(PYTHON) -m ci.build_python_inputs
 
 python-inputs-check:
 	$(PYTHON) -m ci.check_python_inputs_coverage
@@ -64,6 +64,8 @@ test: java-build node-observer node-http
 	mkdir -p build
 	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
 	$(PYTHON) -m coverage report --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/native_encoder.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/python_origin_journal.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 
 check: lint java-check node-check python-inputs-check test
@@ -78,7 +80,7 @@ stack-down:
 	docker compose down
 
 benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http)
-	$(PYTHON) -m otelc benchmark --language $(BENCHMARK_LANGUAGE) --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
+	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc benchmark --language $(BENCHMARK_LANGUAGE) --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
 
 sonar-policy:
 	$(PYTHON) ci/verify_sonar_policy.py

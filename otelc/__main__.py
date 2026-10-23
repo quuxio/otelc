@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import sys
+
+if __name__ == "__main__":
+    # Normal module startup has already run site hooks. Refuse this CLI path
+    # before SDK imports instead of returning contaminated application/JSON data.
+    print("Use bin/quux-otelc for isolated CLI startup.", file=sys.stderr)
+    raise SystemExit(2)
+
 import argparse
 import json
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java
-from otelc import python as python_adapter
+from otelc import prepared_python as python_adapter
 from otelc import python_benchmark
 from otelc.config import LANGUAGES, Policy
 
@@ -66,12 +73,13 @@ def main() -> int:
     original.add_argument("--plain", action="store_true")
     original.add_argument("arguments", nargs=argparse.REMAINDER)
     python = commands.add_parser("python", help="candidate: launch original CPython sources")
-    python.add_argument("--root", type=Path, default=Path.cwd())
+    python.add_argument("--root", default=str(Path.cwd()))
     python_entry = python.add_mutually_exclusive_group(required=True)
-    python_entry.add_argument("--entry", type=Path)
+    python_entry.add_argument("--entry")
     python_entry.add_argument("--module")
     python.add_argument("--runtime", type=Path, required=True, help="new private directory retained for reports")
     python.add_argument("--plain", action="store_true")
+    python.add_argument("--prepare-only", action="store_true", help="emit fixed JSON launch recipe without starting app or SDK")
     python.add_argument("arguments", nargs=argparse.REMAINDER)
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--socket", type=Path, required=True)
@@ -91,21 +99,22 @@ def main() -> int:
             return 0
         policy = Policy.load(args.config)
         if args.command == "python":
-            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            arguments = application_arguments(args.arguments)
             return python_adapter.run(policy, args.runtime, root=args.root, entry=args.entry,
-                                      module=args.module, plain=args.plain, arguments=tuple(arguments))
+                                      module=args.module, plain=args.plain, arguments=tuple(arguments),
+                                      prepare_only=args.prepare_only)
         if args.command == "node":
-            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            arguments = application_arguments(args.arguments)
             return node.run(policy, args.runtime, args.language, root=args.root, entry=args.entry,
                             backend=args.backend, plain=args.plain, arguments=tuple(arguments))
         if args.command == "java":
-            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            arguments = application_arguments(args.arguments)
             return prepared_java.run(args.manifest, policy, args.runtime, plain=args.plain,
                                      prepare_only=args.prepare_only, arguments=tuple(arguments),
                                      diagnostic_profile=args.diagnostic_profile)
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"],
-                              "candidates": ["typescript", "javascript"],
+                              "candidates": ["typescript", "javascript", "python"],
                               "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":
@@ -115,6 +124,13 @@ def main() -> int:
         return run_example(policy, args.language, plain=args.plain)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f"quux-otelc: {error}\n")
+
+
+def application_arguments(arguments: list[str]) -> tuple[str, ...]:
+    """Remove only the CLI separator, retaining literal application arguments."""
+    if arguments[:1] == ['--']:
+        return tuple(arguments[1:])
+    return tuple(arguments)
 
 
 def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
@@ -127,7 +143,3 @@ def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
                                     comparison_id=args.comparison_id)
     return node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
                               publish=not args.no_publish, comparison_id=args.comparison_id)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

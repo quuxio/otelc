@@ -2,6 +2,7 @@
 #define OTELC_PYTHON_INPUT_JOURNAL_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <sys/stat.h>
 
 #define OTELC_PY_SOURCE_LIMIT (16U * 1024U * 1024U)
@@ -10,12 +11,27 @@
 
 /* Takes ownership only on success. No Python API is used by this writer. */
 int otelc_py_journal_open(int descriptor);
+int otelc_py_journal_open_version(int descriptor, unsigned version);
+int otelc_py_journal_source_event(const char *path, const unsigned char *bytes,
+                                 size_t length, const struct stat *metadata, uint64_t *event);
+int otelc_py_journal_import_event(const char *path, const unsigned char *bytes,
+                                 size_t length, const struct stat *metadata, uint64_t *event);
 int otelc_py_journal_source(const char *path, const unsigned char *bytes,
                            size_t length, const struct stat *metadata);
+int otelc_py_journal_import(const char *path, const unsigned char *bytes,
+                           size_t length, const struct stat *metadata);
+int otelc_py_journal_code(const char *path, const unsigned char *bytes, size_t length,
+                         uint64_t identity, uint64_t offset, uint64_t version,
+                         uint64_t descriptor_version);
+int otelc_py_journal_origin(unsigned kind, const char *path, const unsigned char *bytes,
+                           size_t length, const uint64_t *fields, size_t field_count);
 void otelc_py_journal_capture_failed(void);
 void otelc_py_journal_finish(int python_finalized, int entry_expected);
 
 int otelc_py_capture_enable(const char *path);
 void otelc_py_capture_finish(void);
+int otelc_py_imports_install(void);
+int otelc_py_imports_ready(void);
+int otelc_py_code_install(void);
 
 #endif

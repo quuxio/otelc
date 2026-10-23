@@ -6,7 +6,7 @@ This is an internal SDK/adapter building block. The [native Python candidate](py
 
 ## Process ownership
 
-The command-line supervisor starts `SdkProcess` from otelc's SDK environment. The worker uses that interpreter with `-I -B`, its exact script, a private inherited plan and inherited pipes. SDK diagnostics go to `python-sdk.log`; its stdout is separate from application stdout. The supervisor can pass only the channel descriptors and launch identity into the application, then close its own descriptor copies.
+The command-line supervisor starts `SdkProcess` from otelc's SDK environment. The worker uses that interpreter with `-I -S -B`, explicit installed SDK wheel paths without processing site hooks, its exact script, a private inherited plan and inherited pipes. SDK diagnostics go to `python-sdk.log`; its stdout is separate from application stdout. The supervisor can pass only the channel descriptors and launch identity into the application, then close its own descriptor copies.
 
 ```mermaid
 flowchart LR

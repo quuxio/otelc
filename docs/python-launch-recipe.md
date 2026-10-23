@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-`otelc.python_recipe` is the request/argv layer for the candidate [native input component](python-input-journal.md). It does not yet replace the public `otelc python` launcher. The public prepare/command API, owned supervisor and complete import/code evidence still need integration. Python remains a candidate.
+`otelc.python_recipe` is the request/argv layer for the candidate [native input component](python-input-journal.md). The public [prepared launcher](python-prepared-launch.md) uses it for native app/SDK ownership and post-drain rechecks. Complete import/code evidence and independent provider admission remain outstanding. Python remains a candidate.
 
 The original request keeps the complete schema-3 common policy, its original TOML read when available, script or module, arguments, caller cwd, requested/resolved paths, interpreter file/version/cache tag and declared environment inputs. Resolution produces a separate plan; changing the plan cannot change the retained request. Script paths resolve from the application root. Root/runtime paths resolve from the caller cwd. String inputs retain relative, Unicode and symlink spelling; a caller that already converted a string to `Path` has already applied that class's lexical normalisation.
 

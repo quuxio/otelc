@@ -1,9 +1,8 @@
-"""Candidate native Python launcher: original sources plus generated startup hook."""
+"""Native Python invocation and generated-startup helpers, without app rewrites."""
 
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -28,7 +27,10 @@ def invocation(root: Path, *, entry: Path | None, module: str | None,
             raise ValueError('Python entry must be a source .py file inside the application root')
         # Root is the command cwd. Preserve the caller's spelling and native
         # __file__/argv semantics rather than substituting a generated runner.
-        return [sys.executable, str(entry), *arguments]
+        script = str(entry)
+        if script.startswith('-'):
+            script = './' + script
+        return [sys.executable, script, *arguments]
     if type(module) is not str or not all(part.isidentifier() for part in module.split('.')):
         raise ValueError('invalid Python module entry')
     return [sys.executable, '-m', module, *arguments]
@@ -94,49 +96,6 @@ def prepare(policy: Policy, directory: Path, sdk: SdkProcess, root: Path
     except BaseException:
         os.close(descriptor)
         raise
-
-
-def run(policy: Policy, directory: Path, *, root: Path, entry: Path | None = None,
-        module: str | None = None, arguments: tuple[str, ...] = (),
-        plain: bool = False) -> int:
-    """Wait for SDK drain outside the app, preserving a failing app's exit code."""
-    root = root.resolve(strict=True)
-    command = invocation(root, entry=entry, module=module, arguments=arguments)
-    if plain:
-        return subprocess.call(command, cwd=root)
-    validate_policy(policy)
-    directory = directory.resolve()
-    directory.mkdir(mode=0o700)
-    sdk = SdkProcess.start(policy, directory / 'sdk', bind=False)
-    descriptor = None
-    application = None
-    try:
-        descriptor, environment = prepare(policy, directory, sdk, root)
-        application = subprocess.Popen(command, cwd=root, env=environment,
-            pass_fds=(*sdk.channel.descriptors, descriptor))
-        sdk.channel.close()
-        os.close(descriptor)
-        descriptor = None
-        result = application.wait()
-        try:
-            report = sdk.wait_report(application_pid=application.pid)
-            clean = report['phase'] == 'closed'
-        except (ValueError, OSError, subprocess.SubprocessError):
-            clean = False
-        if not clean:
-            print('Python SDK drain failed or remains unverified', file=sys.stderr)
-        return result if result else 0 if clean else 1
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if application is not None and application.poll() is None:
-            application.terminate()
-            try:
-                application.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                application.kill()
-                application.wait(timeout=2)
-        sdk.abort()
 
 
 def validate_policy(policy: Policy) -> None:

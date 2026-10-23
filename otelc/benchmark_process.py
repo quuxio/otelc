@@ -37,10 +37,13 @@ def process_usage(pid: int) -> dict[str, int]:
             'observed_at_unix_ns': time.time_ns()}
 
 
-def measured_batch(process: subprocess.Popen[str], count: int, endpoint: Path | None,
-                   sdk_pid: int | None, output: Path, sample: int, mode: str) -> dict[str, Any]:
+def measured_batch(process: benchmark.Application, count: int, endpoint: Path | None,
+                   sdk_pid: int | None, output: Path, sample: int, mode: str, *,
+                   supervisor_pid: int | None = None) -> dict[str, Any]:
     """Keep application-body latency separate from the CPU window including SDK flush."""
     pids = {'application': process.pid, **({'sdk': sdk_pid} if sdk_pid is not None else {})}
+    if supervisor_pid is not None:
+        pids['supervisor'] = supervisor_pid
     before = {role: process_usage(pid) for role, pid in pids.items()}
     result = benchmark.batch(process, count)
     with (output / 'responses.jsonl').open('a') as raw:
@@ -58,8 +61,9 @@ def measured_batch(process: subprocess.Popen[str], count: int, endpoint: Path | 
     return {**result, 'process_usage': usage}
 
 
-def measure_batches(process: subprocess.Popen[str], policy: Policy, output: Path, endpoint: Path | None,
-                    sdk_pid: int | None, expected: int, records: benchmark.Measurements) -> None:
+def measure_batches(process: benchmark.Application, policy: Policy, output: Path, endpoint: Path | None,
+                    sdk_pid: int | None, expected: int, records: benchmark.Measurements, *,
+                    supervisor_pid: int | None = None) -> None:
     """Alternate live states, retaining each raw response before checksum acceptance."""
     configuration = policy.data['benchmark']
     for sample in range(configuration['samples']):
@@ -69,7 +73,8 @@ def measure_batches(process: subprocess.Popen[str], policy: Policy, output: Path
                 if state['sdk_pid'] != sdk_pid or (state['collection'], state['emission']) != benchmark.STATES[mode]:
                     raise ValueError('benchmark live state or SDK process changed')
                 records.transitions.append({'sample': sample, 'mode': mode, **state})
-            result = measured_batch(process, configuration['iterations'], endpoint, sdk_pid, output, sample, mode)
+            result = measured_batch(process, configuration['iterations'], endpoint, sdk_pid,
+                                    output, sample, mode, supervisor_pid=supervisor_pid)
             with (output / 'raw.jsonl').open('a') as raw:
                 raw.write(json.dumps({**result, 'sample': sample, 'mode': mode, 'pid': process.pid}) + '\n')
             if result['checksum'] != expected:

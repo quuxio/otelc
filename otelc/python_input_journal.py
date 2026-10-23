@@ -1,4 +1,4 @@
-"""Decode bounded native entry receipts; source hashes alone are not provenance."""
+"""Decode native input/code envelopes; file reads do not prove execution."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pathlib import Path
 
 HEADER = struct.Struct('!8sBBHQQQ')
 SOURCE = struct.Struct('!QQQQqQQ')
+CODE = struct.Struct('!7Q')
 FINAL = struct.Struct('!7Q')
 MAGIC = b'OTLCPY1\0'
 MAX_SOURCE = 16 * 1024 * 1024
@@ -21,7 +22,7 @@ MAX_PATH = 65535
 
 @dataclass(frozen=True)
 class SourceInput:
-    """Exact bytes handed to the native interpreter, with opened-file metadata."""
+    """Exact bytes supplied to an entry or loader, with opened-file metadata."""
 
     path: bytes
     content: bytes
@@ -45,12 +46,30 @@ class InputJournal:
     journal_failures: int
     python_finalized: bool
     entry_expected: bool
+    imports: tuple[SourceInput, ...] = ()
+    codes: tuple[CodeInput, ...] = ()
 
     @property
     def complete(self) -> bool:
-        """Describe this entry receipt, not imports, SDK health or app success."""
+        """Check final entry/capture status, not coverage, SDK health or app success."""
         return (self.python_finalized and self.entry_expected and bool(self.sources)
                 and not self.capture_failures and not self.journal_failures)
+
+
+@dataclass(frozen=True)
+class CodeInput:
+    """Version-bound data; envelope decoding does not validate or execute its graph."""
+
+    path: bytes
+    content: bytes
+    identity: int
+    offset: int
+    python_version: int
+    descriptor_version: int
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.content).hexdigest()
 
 
 def decode(data: bytes, *, expected_pid: int) -> InputJournal:
@@ -60,12 +79,14 @@ def decode(data: bytes, *, expected_pid: int) -> InputJournal:
         raise ValueError('invalid native Python journal identity or size')
     offset = sequence = 0
     sources: list[SourceInput] = []
+    imports: list[SourceInput] = []
+    codes: list[CodeInput] = []
     while offset < len(data):
         if len(data) - offset < HEADER.size:
             raise ValueError('incomplete native Python journal header')
         magic, kind, flags, reserved, current, path_size, size = HEADER.unpack_from(data, offset)
         offset += HEADER.size
-        if (magic != MAGIC or kind not in (1, 2) or flags or reserved
+        if (magic != MAGIC or kind not in (1, 2, 3, 4) or flags or reserved
                 or current != sequence + 1 or current > MAX_RECORDS
                 or path_size > MAX_PATH or size > MAX_SOURCE + SOURCE.size
                 or size < SOURCE.size or offset + path_size + size > len(data)):
@@ -76,31 +97,50 @@ def decode(data: bytes, *, expected_pid: int) -> InputJournal:
         payload = data[offset:offset + size]
         offset += size
         if kind == 2:
-            return _final(payload, path, offset == len(data), sources, expected_pid)
+            return _final(payload, path, offset == len(data), sources, imports, codes, expected_pid)
+        if kind == 4:
+            pid, identity, position, version, descriptor_version, length, reserved_code = CODE.unpack_from(payload)
+            if (pid != expected_pid or not path or b'\0' in path or not identity
+                    or any(code.identity == identity for code in codes)
+                    or position % 2 or version > 0xffffffff or version >> 24 != 3
+                    or (version >> 16 & 255) < 12 or descriptor_version not in (1, 2)
+                    or not length or length != len(payload) - CODE.size or reserved_code):
+                raise ValueError('native Python code metadata or identity differs')
+            codes.append(CodeInput(path, payload[CODE.size:], identity, position, version, descriptor_version))
+            continue
         pid, device, inode, length, seconds, nanos, mode = SOURCE.unpack_from(payload)
         if (pid != expected_pid or not path or b'\0' in path or nanos >= 10 ** 9
                 or not stat.S_ISREG(mode) or length != len(payload) - SOURCE.size):
             raise ValueError('native Python source metadata or identity differs')
-        sources.append(SourceInput(path, payload[SOURCE.size:], device, inode,
-                                   seconds * 10 ** 9 + nanos, mode))
+        collection = sources if kind == 1 else imports
+        collection.append(SourceInput(path, payload[SOURCE.size:], device, inode,
+                                      seconds * 10 ** 9 + nanos, mode))
     raise ValueError('native Python journal lacks finalization evidence')
 
 
 def _final(payload: bytes, path: bytes, at_eof: bool, sources: list[SourceInput],
-           expected_pid: int) -> InputJournal:
+           imports: list[SourceInput], codes: list[CodeInput], expected_pid: int) -> InputJournal:
     if path or len(payload) != FINAL.size or not at_eof:
         raise ValueError('invalid native Python journal final record')
     pid, count, size, capture_failures, journal_failures, finalized, expected = FINAL.unpack(payload)
-    if (pid != expected_pid or count != len(sources)
-            or size != sum(len(source.content) for source in sources)
+    if (pid != expected_pid or count != len(sources) + len(imports) + len(codes)
+            or size != sum(len(source.content) for source in (*sources, *imports, *codes))
             or finalized not in (0, 1) or expected not in (0, 1)):
         raise ValueError('native Python journal final counts or identity differ')
+    if (not capture_failures and not journal_failures
+            and {code.identity for code in codes} != set(range(1, len(codes) + 1))):
+        raise ValueError('native Python journal has incomplete code identities')
     return InputJournal(pid, tuple(sources), capture_failures, journal_failures,
-                        bool(finalized), bool(expected))
+                        bool(finalized), bool(expected), tuple(imports), tuple(codes))
 
 
 def read(path: Path, *, expected_pid: int) -> InputJournal:
     """Read a private journal; the caller must first wait for its owning process."""
+    return decode(_read_bytes(path), expected_pid=expected_pid)
+
+
+def _read_bytes(path: Path) -> bytes:
+    """Share bounded, non-following file IO without sharing wire-version policy."""
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         before = os.fstat(descriptor)
@@ -116,4 +156,4 @@ def read(path: Path, *, expected_pid: int) -> InputJournal:
             raise ValueError('native Python journal changed while reading')
     finally:
         os.close(descriptor)
-    return decode(data, expected_pid=expected_pid)
+    return data

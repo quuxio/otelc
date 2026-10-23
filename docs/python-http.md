@@ -21,7 +21,7 @@ mkdir -p build/python-http
 In terminal 1, start the server. Use a fresh runtime path for each run:
 
 ```sh
-.venv/bin/python -m otelc --config examples/http-context.toml python \
+bin/quux-otelc --config examples/http-context.toml python \
   --root "$PWD" --entry examples/python/HttpContextApp.py \
   --runtime build/python-http/server -- \
   server build/python-http/requests.jsonl http://127.0.0.1:1 \
@@ -34,7 +34,7 @@ In terminal 2, read that port and start an interactive client:
 
 ```sh
 port="$(.venv/bin/python -c 'import json; from pathlib import Path; print(int(json.loads(Path("build/python-http/server.stdout").read_text().splitlines()[0])["port"]))')"
-.venv/bin/python -m otelc --config examples/http-context.toml python \
+bin/quux-otelc --config examples/http-context.toml python \
   --root "$PWD" --entry examples/python/HttpContextApp.py \
   --runtime build/python-http/client -- client "http://127.0.0.1:$port" http://127.0.0.1:1
 ```
@@ -42,8 +42,8 @@ port="$(.venv/bin/python -c 'import json; from pathlib import Path; print(int(js
 After the client prints its ready line, enable metrics for both apps in terminal 3:
 
 ```sh
-.venv/bin/python -m otelc metrics --socket build/python-http/server/control.json on
-.venv/bin/python -m otelc metrics --socket build/python-http/client/control.json on
+bin/quux-otelc metrics --socket build/python-http/server/control.json on
+bin/quux-otelc metrics --socket build/python-http/client/control.json on
 ```
 
 Paste these lines in the client terminal:
