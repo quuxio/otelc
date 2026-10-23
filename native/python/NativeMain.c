@@ -3,6 +3,7 @@
 #include <Python.h>
 #include "InputJournal.h"
 #include "NativeEncoder.h"
+#include "OriginPins.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -33,6 +34,7 @@ int main(int argc, char **argv) {
     if (errno || end == argv[1] || *end || descriptor < 0 || descriptor > INT_MAX ||
             otelc_py_journal_open((int)descriptor)) return 64;
     if (atexit(process_exit)) return 78;
+    if (origins && otelc_py_origin_pins_install()) return 78;
     if (otelc_py_imports_install()) return 78;
     if (otelc_py_code_install()) return 78;
     int native_argc = argc - 3;
@@ -55,6 +57,7 @@ int main(int argc, char **argv) {
     checked(PyConfig_SetBytesString(&config, &config.executable, OTELC_PY_INITIAL_EXECUTABLE), &config);
     checked(PyConfig_SetBytesString(&config, &config.base_executable, OTELC_PY_BASE_EXECUTABLE), &config);
     checked(Py_InitializeFromConfig(&config), &config);
+    if (origins && otelc_py_origin_pins_ready()) otelc_py_journal_capture_failed();
     if (origins && otelc_py_encoder_ready(config.filesystem_encoding, config.filesystem_errors)) {
         PyConfig_Clear(&config);
         PyErr_Clear();

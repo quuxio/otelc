@@ -49,3 +49,11 @@ make python-inputs-check
 ```
 
 The reader has an explicit 80% line floor in `make test`, in addition to the existing overall Python and per-file native gates. Actual native entry, live loader transactions, pinned compiler returns, bounded weak code membership, both-lane supervisor wiring and independent oteleq admission still need implementation and qualification. Custom loaders, arbitrary dynamic compilation and whole-program closure remain separate capabilities.
+
+## Pre-startup helper guard
+
+The explicit native `--origin-observer` profile retains the original frozen `SourceLoader.get_code`, `SourceLoader.source_to_code`, `FileLoader.get_data`, `_call_with_frames_removed` and builtin compiler before application startup hooks run. It retains the four Python functions' original code objects too: changing a function's `__code__` preserves its function identity and must not pass that guard. Fixed native dictionary lookups avoid application attribute getters. The guard preserves an exception already in flight and refuses a fork or another interpreter before dereferencing the owning interpreter's references.
+
+After ordinary interpreter startup, missing or changed helpers produce capture loss while the application continues with its original startup hooks, outputs and exceptions. The normal profile does not install this guard. The retained references are bounded toolchain objects, not application code or a code-object origin catalogue.
+
+This guard is a prerequisite for the future live transaction observer. It emits no origin records and proves no compiler return, input-to-code relation, descendant membership or selected execution. The driver still writes journal 1, normal public format negotiation is unchanged, and Python remains a candidate. The native guard has its own 80% line floor alongside the other native components.
