@@ -25,6 +25,21 @@ PLAN = 'python-resolved-plan.json'
 PREPARED = 'python-prepared.json'
 
 
+def protocols() -> dict[str, Any]:
+    """Describe readable/written formats without preparing or launching an app.
+
+    This handshake is format metadata, not source closure, toolchain support,
+    successful export or independent qualification of a provider.
+    """
+    return {'schema_version': 1, 'kind': 'otelc.python.protocols',
+            'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
+            'execution': 1,
+            'journal': {'schema_version': 1, 'record_kinds': [1, 2, 3, 4]},
+            'code': {'written': 2, 'readable': [2]},
+            'health': 2, 'sdk': 1, 'code_comparisons': 1,
+            'source_complete': False}
+
+
 def digest(value: dict[str, Any]) -> str:
     """Bind canonical complete requests rather than selected policy fragments."""
     return hashlib.sha256(recipe.encoded(value).encode()).hexdigest()

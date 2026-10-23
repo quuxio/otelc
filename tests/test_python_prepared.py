@@ -222,7 +222,7 @@ timeout_ms=1000
         data['metrics'].update(collection=True, emission=True)
         self.policy = Policy.parse(data)
         original = self.entry.read_bytes()
-        directory, _ = self.prepare()
+        directory, command = self.prepare()
         owner = Owner(directory)
         self.assertEqual(owner.execute(), 0)
         receipt, _ = files.read(directory / 'python-execution.json')
@@ -231,6 +231,15 @@ timeout_ms=1000
         self.assertTrue(evidence.complete)
         self.assertEqual(len(evidence.codes), 1)
         code = evidence.codes[0]
+        protocol = prepared.protocols()
+        for name in ('request', 'plan', 'prepared'):
+            self.assertEqual(command[name]['schema_version'], protocol[name])
+        self.assertEqual(command['schema_version'], protocol['command'])
+        self.assertEqual(receipt['schema_version'], protocol['execution'])
+        self.assertEqual(owner.sdk_report['schema_version'], protocol['sdk'])
+        self.assertEqual(health.read(directory / 'health.json')['schema_version'], protocol['health'])
+        self.assertEqual(code.descriptor_version, protocol['code']['written'])
+        self.assertIn(code.descriptor_version, protocol['code']['readable'])
         self.assertEqual(receipt['entry_evidence']['codes'][0]['sha256'], code.sha256)
         self.assertEqual(receipt['entry_evidence']['codes'][0]['id'], code.identity)
         spans = [span for message in self.capture.traces for resource in message.resource_spans
