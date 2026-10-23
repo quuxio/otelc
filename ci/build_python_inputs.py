@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ('EntryCapture.c', 'InputJournal.c', 'InputJournal.h', 'NativeMain.c')
+SOURCES = ('EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'InputJournal.h', 'NativeMain.c')
 
 
 def digest(path: Path) -> dict[str, str]:
@@ -105,7 +105,8 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
                 else ['-shared', '-fPIC', '-Wl,-soname,' + library])
         origin = '@loader_path' if sys.platform == 'darwin' else '$ORIGIN'
         selected = identity['compiler']['path']
-        commands = [[selected, *link, str(sources / 'EntryCapture.c'), str(sources / 'InputJournal.c'),
+        commands = [[selected, *link, str(sources / 'EntryCapture.c'), str(sources / 'ImportCapture.c'),
+                     str(sources / 'InputJournal.c'),
                      '-o', str(candidate / library), *options],
                     [selected, str(sources / 'NativeMain.c'), str(candidate / library),
                      '-Wl,-rpath,' + origin, '-Wl,-rpath,' + str(sysconfig.get_config_var('LIBDIR')),

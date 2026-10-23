@@ -19,6 +19,7 @@ from unittest.mock import Mock, call, patch
 from otelc.config import Policy
 from otelc import prepared_python as prepared
 from otelc import python_launch_files as files
+from otelc import python_input_journal as inputs
 from otelc.python_supervisor import Owner
 from test_java_integration import Capture
 
@@ -126,6 +127,32 @@ timeout_ms=1000
         self.assertEqual(receipt['sdk']['pid'], owner.sdk.process.pid)
         self.assertEqual((owner.application.poll(), owner.sdk.process.poll()), (0, 0))
         self.assertEqual(receipt['failures'], {})
+
+    def test_public_plain_and_instrumented_launch_retain_original_import_reads(self) -> None:
+        helper = self.app / 'helper.py'
+        content = b'value = 7\n'
+        helper.write_bytes(content)
+        source = b'import helper\nassert helper.value == 7\n'
+        self.entry.write_bytes(source)
+        for plain in (True, False):
+            directory, _ = self.prepare(plain=plain)
+            owner = Owner(directory)
+            self.assertEqual(owner.execute(), 0)
+            receipt, _ = files.read(directory / 'python-execution.json')
+            self.assertFalse(receipt['source_complete'])
+            evidence = inputs.read(directory / 'python-inputs.journal',
+                                   expected_pid=receipt['application']['pid'])
+            self.assertTrue(evidence.complete)
+            records = [record for record in receipt['entry_evidence']['imports']
+                       if Path(os.fsdecode(bytes.fromhex(record['path_hex']))).name.startswith('helper.')]
+            # The instrumented lane can use bytecode cached by the plain lane.
+            # Its receipt must still agree with the actual captured file read.
+            matching = [value for value in evidence.imports
+                        if Path(os.fsdecode(value.path)).name.startswith('helper.')]
+            self.assertTrue(matching)
+            self.assertEqual({(value['path_hex'], value['sha256']) for value in records},
+                             {(value.path.hex(), value.sha256) for value in matching})
+            self.assertEqual((helper.read_bytes(), self.entry.read_bytes()), (content, source))
 
     def test_altered_prepared_request_plan_or_product_is_refused_before_app_start(self) -> None:
         marker = self.app / 'executed'

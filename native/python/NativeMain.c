@@ -29,6 +29,7 @@ int main(int argc, char **argv) {
     if (errno || end == argv[1] || *end || descriptor < 0 || descriptor > INT_MAX ||
             otelc_py_journal_open((int)descriptor)) return 64;
     if (atexit(process_exit)) return 78;
+    if (otelc_py_imports_install()) return 78;
     int native_argc = argc - 3;
     char **native_argv = malloc((size_t)native_argc * sizeof(char *));
     if (!native_argv) return 78;
@@ -46,6 +47,10 @@ int main(int argc, char **argv) {
     }
     checked(PyConfig_SetBytesString(&config, &config.executable, argv[2]), &config);
     checked(Py_InitializeFromConfig(&config), &config);
+    if (otelc_py_imports_ready()) {
+        otelc_py_journal_capture_failed();
+        PyErr_Clear();
+    }
     if (config.run_filename) {
         PyObject *name = PyUnicode_FromWideChar(config.run_filename, -1);
         PyObject *encoded = name ? PyUnicode_EncodeFSDefault(name) : NULL;
