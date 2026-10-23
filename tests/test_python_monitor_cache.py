@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import tempfile
+import threading
 import unittest
 import weakref
 from pathlib import Path
@@ -88,3 +89,34 @@ class PythonMonitorCacheTests(unittest.TestCase):
         self.monitor.selected(code)
         self.monitor.close()
         self.assertFalse(self.monitor._rejected)
+
+    def test_contended_cache_insert_gc_removal_and_close_do_not_wait_or_retain_code(self) -> None:
+        code = self.code('unselected')
+        identity, reference = id(code), weakref.ref(code)
+        self.monitor.selected(code)
+        held, release = threading.Event(), threading.Event()
+        expired = []
+
+        def hold_cache() -> None:
+            with self.monitor._rejected_lock:
+                held.set()
+                expired.append(not release.wait(4))
+
+        worker = threading.Thread(target=hold_cache)
+        worker.start()
+        try:
+            self.assertTrue(held.wait(4))
+            self.assertIsNone(self.monitor.selected(self.code('another_unselected')))
+            del code
+            self.assertIsNone(reference())
+            self.assertIsNone(self.monitor._rejected[identity]())
+            self.monitor.close()
+        finally:
+            release.set()
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(expired, [False])
+        self.assertEqual(len(self.monitor._rejected), 1)
+        self.monitor.close()
+        self.assertFalse(self.monitor._rejected)
+        self.runtime.reject.assert_not_called()

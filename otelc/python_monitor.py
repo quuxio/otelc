@@ -73,16 +73,26 @@ class PythonMonitor:
 
     def _cache_rejection(self, code: CodeType) -> None:
         """Bound hot-path exclusions without retaining arbitrary code constants."""
-        with self._rejected_lock:
-            if len(self._rejected) < MAX_REJECTED_CODES:
-                identity = id(code)
+        # GC can enter monitoring while holding the lifetime queue lock.
+        # Cache maintenance is optional and must never wait for another owner.
+        if not self._rejected_lock.acquire(blocking=False):
+            return
+        try:
+            identity = id(code)
+            if identity in self._rejected or len(self._rejected) < MAX_REJECTED_CODES:
                 self._rejected[identity] = weakref.ref(code,
                     lambda reference: self._forget_rejection(identity, reference))
+        finally:
+            self._rejected_lock.release()
 
     def _forget_rejection(self, identity: int, reference: weakref.ReferenceType[CodeType]) -> None:
-        with self._rejected_lock:
+        if not self._rejected_lock.acquire(blocking=False):
+            return
+        try:
             if self._rejected.get(identity) is reference:
                 self._rejected.pop(identity, None)
+        finally:
+            self._rejected_lock.release()
 
     def _selection_name(self, code: CodeType) -> str | None:
         """Resolve immutable code metadata against this process's fixed policy."""
@@ -207,8 +217,11 @@ class PythonMonitor:
 
     def close(self) -> None:
         """Disable callbacks explicitly before releasing the monitoring ID."""
-        with self._rejected_lock:
-            self._rejected.clear()
+        if self._rejected_lock.acquire(blocking=False):
+            try:
+                self._rejected.clear()
+            finally:
+                self._rejected_lock.release()
         if self.tool is None:
             return
         monitoring = sys.monitoring
