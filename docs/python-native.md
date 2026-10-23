@@ -126,6 +126,10 @@ An object has separate `observed_gc` and `resource` boundaries. Successful retur
 
 Weak references observe GC without retaining the object, its frames or its class. The observer never forces application collection. GC before release records an incomplete resource. Objects still alive at shutdown are censored, with no fabricated GC or release span. Lifetime spans have their own trace roots and link to the creating context when it exists. Their duration starts after successful construction and ends at the observed boundary; it is not allocation-to-free time.
 
+GC callbacks record the observed monotonic time and collection state in a queue bounded by tracked instances and classes. They do not take the runtime lock or call the SDK: GC can occur while an SDK writer lock is held. Selected observations, status/flush, control updates and shutdown drain this queue under the runtime lock, releasing the queue lock before publication. Reporting delay does not extend the lifetime duration. GC observed while collection is off does not become a completion metric after re-enable. Shutdown drains already observed GC before censoring survivors.
+
+A collection switch seals the previous GC interval under the queue lock. It publishes that interval before the SDK control record, while later callbacks capture the requested new state. The queue lock stays released during all SDK writes. A callback during an in-progress control handoff therefore belongs to the new interval; it cannot silently use the old flag and then lose its metric after the switch. Failed handoffs retain the runtime control loss and cannot become a healthy final report.
+
 Metrics use `otelc.lifetime.admitted`, `completed`, `incomplete`, `lost`, `duration` and `live`, under the `io.quux.otelc.lifetimes` scope. Type and boundary labels distinguish observations. Live gauges use `type=all` and resynchronise when collection is enabled. Completion metrics require admission and completion with collection enabled; tracing stays independent. Status and the final SDK checkpoint include admissions, failures, live/censored objects and explicit loss reasons.
 
 This profile requires a Python initializer and weak-reference support. Default/C-only initializers, instances without weak references, custom metaclass `__call__`, non-Python release descriptors and capacity exhaustion record explicit losses and prevent a clean final report. This does not cover every allocation, implicit builtin resources, finaliser resurrection, forks or arbitrary metaclass construction. It does not claim exact destruction time.
@@ -151,7 +155,8 @@ Run the focused tests from a prepared checkout:
 ```sh
 PYTHONPATH=tests .venv/bin/python -m unittest \
   test_python_monitor test_python_native test_python_frontend_components \
-  test_python_lifetimes test_python_lifetime_components test_python_tasks -v
+  test_python_lifetimes test_python_lifetime_components \
+  test_python_lifetime_locks test_python_lifetime_controls test_python_tasks -v
 make check
 ```
 

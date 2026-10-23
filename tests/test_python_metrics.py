@@ -88,6 +88,30 @@ class PythonMetricGateTests(unittest.TestCase):
             {'library.role': 'test'},
         )
 
+    def test_sync_wrappers_preserve_actual_sdk_public_instrument_metadata(self) -> None:
+        sdk_meter = self.sdk.get_meter('ordinary-library', '1.2', 'https://example.test/schema',
+                                       {'library.role': 'test'})
+        for kind in ('counter', 'up_down_counter', 'histogram', 'gauge'):
+            with self.subTest(kind=kind):
+                create = getattr(self.meter, 'create_' + kind)
+                raw_create = getattr(sdk_meter, 'create_' + kind)
+                options = {'explicit_bucket_boundaries_advisory': [.1, .5, 1.]} if kind == 'histogram' else {}
+                wrapped = create('original_' + kind, 's', 'Original description', **options)
+                raw = raw_create('original_' + kind, 's', 'Original description', **options)
+                for field in ('name', 'unit', 'description', 'instrumentation_scope'):
+                    self.assertEqual(getattr(wrapped, field), getattr(raw, field))
+                self.assertIs(wrapped.instrumentation_scope, raw.instrumentation_scope)
+                self.assertIs(wrapped, create('original_' + kind, 's', 'Original description', **options))
+        self.controls.update(collection=True, emission=True)
+        self.meter.create_histogram('original_histogram', 's', 'Original description',
+            explicit_bucket_boundaries_advisory=[.1, .5, 1.]).record(.25)
+        data = self.reader.get_metrics_data()
+        histogram = points(data)['original_histogram'][0]
+        self.assertEqual(tuple(histogram.explicit_bounds), (.1, .5, 1.))
+        metric = next(metric for resource in data.resource_metrics for scope in resource.scope_metrics
+                      for metric in scope.metrics if metric.name == 'original_histogram')
+        self.assertEqual((metric.unit, metric.description), ('s', 'Original description'))
+
     def test_cached_sync_instruments_enable_disable_and_keep_sdk_semantics(self) -> None:
         counter = self.meter.create_counter('calls', '{call}', 'Call count')
         up_down = self.meter.create_up_down_counter('active')
