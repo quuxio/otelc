@@ -14,7 +14,7 @@ import time
 import unittest
 import venv
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 from otelc.config import Policy
 from otelc import prepared_python as prepared
@@ -412,3 +412,55 @@ class PythonLaunchFilesTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     files.write(root / 'too-large', {'value': 1})
             self.assertFalse((root / 'too-large').exists())
+
+
+class ProcessGroupCleanupTests(unittest.TestCase):
+    def test_vanished_macos_group_is_confirmed_before_permission_error_is_forgiven(self) -> None:
+        process = Mock(pid=431)
+        with patch.object(prepared.sys, 'platform', 'darwin'), \
+                patch.object(prepared.os, 'killpg', side_effect=[None, PermissionError('gone')]) as send, \
+                patch.object(prepared.subprocess, 'check_output', return_value='0\n1\n432\n') as inspect:
+            prepared.stop_group(process)
+        self.assertEqual(send.call_args_list, [call(431, signal.SIGTERM), call(431, 0)])
+        inspect.assert_called_once_with(['/bin/ps', '-A', '-o', 'pgid='], text=True, timeout=1)
+        process.wait.assert_called_once_with(timeout=3)
+
+    def test_live_group_permission_failure_and_non_macos_permission_failure_still_propagate(self) -> None:
+        for platform, table in (('darwin', '1\n431\n'), ('linux', '1\n')):
+            with self.subTest(platform=platform), patch.object(prepared.sys, 'platform', platform), \
+                    patch.object(prepared.os, 'killpg', side_effect=PermissionError('denied')), \
+                    patch.object(prepared.subprocess, 'check_output', return_value=table) as inspect:
+                with self.assertRaises(PermissionError):
+                    prepared.stop_group(Mock(pid=431))
+                self.assertEqual(inspect.call_count, int(platform == 'darwin'))
+
+    def test_unavailable_or_invalid_membership_never_becomes_success(self) -> None:
+        for table in ('', 'PID\n', '-431\n', '\u0664\u0663\u0661\n'):
+            with self.subTest(table=table), patch.object(prepared.sys, 'platform', 'darwin'), \
+                    patch.object(prepared.os, 'killpg', side_effect=PermissionError('unverified')), \
+                    patch.object(prepared.subprocess, 'check_output', return_value=table):
+                with self.assertRaises(ValueError):
+                    prepared.stop_group(Mock(pid=431))
+        with patch.object(prepared.sys, 'platform', 'darwin'), \
+                patch.object(prepared.os, 'killpg', side_effect=PermissionError('unverified')), \
+                patch.object(prepared.subprocess, 'check_output', side_effect=subprocess.TimeoutExpired('ps', 1)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                prepared.stop_group(Mock(pid=431))
+
+    def test_normal_missing_group_reaps_without_running_an_external_observer(self) -> None:
+        process = Mock(pid=431)
+        with patch.object(prepared.os, 'killpg', side_effect=ProcessLookupError), \
+                patch.object(prepared.subprocess, 'check_output') as inspect:
+            prepared.stop_group(process)
+        inspect.assert_not_called()
+        process.wait.assert_called_once_with(timeout=3)
+
+    def test_final_kill_also_requires_confirmed_absence_before_forgiving_permission(self) -> None:
+        process = Mock(pid=431)
+        with patch.object(prepared.sys, 'platform', 'darwin'), \
+                patch.object(prepared.os, 'killpg', side_effect=[None, PermissionError('gone')]) as send, \
+                patch.object(prepared.time, 'monotonic', side_effect=[0, 3]), \
+                patch.object(prepared.subprocess, 'check_output', return_value='1\n'):
+            prepared.stop_group(process)
+        self.assertEqual(send.call_args_list, [call(431, signal.SIGTERM), call(431, signal.SIGKILL)])
+        process.wait.assert_called_once_with(timeout=3)
