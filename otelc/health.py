@@ -1,14 +1,18 @@
-"""Version-one runtime health shape validation, not a delivery guarantee."""
+"""Versioned runtime health shape validation, not a delivery guarantee."""
 
 from __future__ import annotations
 
 import errno
-import json
 import os
 import re
 import stat
 from pathlib import Path
 from typing import Any
+
+from otelc import python_health
+from otelc.python_sdk_io import decode
+
+MAX_REPORT = 65536
 
 
 def _counter(value: object) -> bool:
@@ -53,6 +57,8 @@ def _exports(exports: Any, unit: str) -> None:
 
 def validate(value: Any) -> dict[str, Any]:
     """Require the public report shape; consumers must assess its actual evidence."""
+    if type(value) is dict and value.get('schema_version') == 2:
+        return python_health.validate(value)
     _identity(value)
     lifecycle = value.get("lifecycle")
     outcomes = ("not_started", "pending", "succeeded", "failed", "timed_out", "unavailable")
@@ -82,9 +88,12 @@ def read(path: Path) -> dict[str, Any]:
         data = _read_report(directory)
     finally:
         os.close(directory)
-    if len(data) > 4096:
+    if len(data) > MAX_REPORT:
         raise ValueError("oversized runtime health report")
-    return validate(json.loads(data))
+    value = decode(data)
+    if value.get('schema_version') != 2 and len(data) > 4096:
+        raise ValueError('oversized version-one runtime health report')
+    return validate(value)
 
 
 def _read_report(directory: int) -> bytes:
@@ -98,11 +107,11 @@ def _read_report(directory: int) -> bytes:
     try:
         metadata = os.fstat(descriptor)
         if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
-                or metadata.st_uid != os.getuid() or metadata.st_size > 4096):
+                or metadata.st_uid != os.getuid() or metadata.st_size > MAX_REPORT):
             raise ValueError("expected a bounded private runtime health report")
         # Retain ownership until the wrapper has been constructed and closed.
         # fdopen itself can raise, for example when given a directory descriptor.
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            return stream.read(4097)
+            return stream.read(MAX_REPORT + 1)
     finally:
         os.close(descriptor)

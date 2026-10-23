@@ -1,0 +1,8 @@
+#!/bin/sh
+# POSIX non-interactive sh avoids Bash's BASH_ENV startup hook as well.
+# Usage: quux-otelc [arguments]; OTELC_PYTHON selects the installed SDK Python.
+set -eu
+
+QUUX_LAUNCH_DIR=${0%/*}
+QUUX_SDK_ROOT=$(CDPATH='' cd -- "$QUUX_LAUNCH_DIR/.." && pwd -P)
+exec "${OTELC_PYTHON:-$QUUX_SDK_ROOT/.venv/bin/python}" -I -S -B "$QUUX_SDK_ROOT/otelc/cli_bootstrap.py" "$@"

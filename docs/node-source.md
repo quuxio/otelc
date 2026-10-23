@@ -11,8 +11,8 @@ Use Node 24.11+ and the native build tools needed by the observer. The Microsoft
 ```sh
 make setup node-observer node-http
 make stack-up
-.venv/bin/python -m otelc example javascript
-.venv/bin/python -m otelc example typescript
+bin/quux-otelc example javascript
+bin/quux-otelc example typescript
 ```
 
 Enter `10`, then `quit`. Both ordinary examples produce checksum `41284864`. Use `--plain` after either example language for its baseline. The TypeScript baseline still uses the selected real compiler, with probes absent. The example runner keeps its temporary files until the independent SDK drain completes. For retained reports or an existing application, use an explicit runtime directory below.
@@ -53,7 +53,7 @@ endpoint = "http://127.0.0.1:4320"
 Save that policy as `otelc.toml`. From the otelc checkout, supply the original project root and entry file. Runtime files must go in a new private directory; the launcher refuses occupied generated files.
 
 ```sh
-.venv/bin/python -m otelc --config /path/to/otelc.toml node \
+bin/quux-otelc --config /path/to/otelc.toml node \
   --language typescript --root /path/to/project --entry /path/to/project/app.ts \
   --runtime /tmp/otelc-app-run -- 7
 ```
@@ -69,11 +69,11 @@ Use another fresh directory and add `--plain` before `--` for a baseline. Plain 
 For a long-running application, use its announced descriptor with the same common commands as Java:
 
 ```sh
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-app-run/control.json status
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-app-run/control.json off
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-app-run/control.json collection on
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-app-run/control.json emission on
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-app-run/control.json flush
+bin/quux-otelc metrics --socket /tmp/otelc-app-run/control.json status
+bin/quux-otelc metrics --socket /tmp/otelc-app-run/control.json off
+bin/quux-otelc metrics --socket /tmp/otelc-app-run/control.json collection on
+bin/quux-otelc metrics --socket /tmp/otelc-app-run/control.json emission on
+bin/quux-otelc metrics --socket /tmp/otelc-app-run/control.json flush
 ```
 
 The descriptor is an authenticated loopback endpoint, despite the shared flag name `--socket`. Collection and emission are independent; both hooks are installed at launch even if they start off. Traces retain their launch-time policy. Emission-off stops new metric exports; wait for `effective_emission_off` before measuring a strict export-off interval.

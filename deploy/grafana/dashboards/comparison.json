@@ -335,6 +335,47 @@
         },
         "showUnfilled": true
       }
+    },
+    {
+      "id": 9,
+      "title": "Python launch to first workload response; includes readiness, controls and IPC",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(language, mode) (last_over_time(otelc_benchmark_launch_to_first_response_seconds_sum{comparison_id=~\"$comparison_id\"}[$__range])) / sum by(language, mode) (last_over_time(otelc_benchmark_launch_to_first_response_seconds_count{comparison_id=~\"$comparison_id\"}[$__range]))",
+          "legendFormat": "{{language}} {{mode}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "description": "One observation per lane. Starts immediately before stock app / prepared supervisor creation; includes verification, application/SDK readiness, metric-off control, IPC and the first one-call workload. Excludes preparation/build time. This is not pure interpreter startup or a statistically qualified latency estimate."
     }
   ]
 }

@@ -53,7 +53,7 @@ timeout_ms = 1000
     def launch(self, runtime: Path, *, module: str | None = None,
                arguments: tuple[str, ...] = (), plain: bool = False,
                environment: dict[str, str] | None = None) -> subprocess.Popen[str]:
-        command = [sys.executable, '-m', 'otelc', '--config', str(self.config),
+        command = [sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(self.config),
             'python', '--root', str(self.application), '--runtime', str(runtime)]
         command += ['--module', module] if module else ['--entry', 'entry.py']
         if plain:
@@ -94,7 +94,8 @@ timeout_ms = 1000
         plain.stdin.flush()
         plain.wait(timeout=10)
         self.assertEqual((plain.returncode, plain.stderr.read()), (0, ''))
-        self.assertFalse((self.root / 'plain').exists())
+        self.assertFalse((self.root / 'plain/sdk').exists())
+        self.assertTrue((self.root / 'plain/python-execution.json').is_file())
         runtime = self.root / 'runtime'
         process = self.launch(runtime)
         initial = self.ready(process, runtime)
