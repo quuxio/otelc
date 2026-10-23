@@ -1,4 +1,4 @@
-"""Shared process samples and live-state scheduling for native application benchmarks."""
+"""Shared process samples and live-state scheduling for source-free benchmarks."""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ class RunIdentity:
 def summary(policy: Policy, output: Path, records: benchmark.Measurements,
             identity: RunIdentity, pids: dict[str, int], sdk_pid: int | None,
             comparison_id: str | None) -> dict[str, Any]:
-    """Keep both native adapters on one result and resource-window format."""
+    """Keep language adapters on one result and resource-window format."""
     run_id = uuid.uuid4().hex
     return {'schema_version': 2, 'run_id': run_id, 'comparison_id': comparison_id or run_id,
             'language': identity.language, 'runtime': identity.runtime, 'compiler': identity.compiler,

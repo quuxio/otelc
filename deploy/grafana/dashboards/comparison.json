@@ -256,9 +256,9 @@
     },
     {
       "id": 7,
-      "title": "Node/Python CPU time per operation, including SDK flush window",
+      "title": "Process CPU time per operation, including SDK flush window",
       "type": "bargauge",
-      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. These process windows cover the Node and Python candidates; Java resource windows are not available yet.",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java application samples include the embedded agent/SDK in the JVM. Node/Python report independent application and SDK roles; Python also reports its supervisor. Missing historical resource samples are not zero cost.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -297,9 +297,9 @@
     },
     {
       "id": 8,
-      "title": "Node/Python process RSS snapshots; not allocation or peak memory",
+      "title": "Process RSS snapshots; not allocation or peak memory",
       "type": "bargauge",
-      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. These process windows cover the Node and Python candidates; Java resource windows are not available yet.",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java application samples include the embedded agent/SDK in the JVM. Node/Python report independent application and SDK roles; Python also reports its supervisor. Missing historical resource samples are not zero cost.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

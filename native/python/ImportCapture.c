@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <Python.h>
 #include "InputJournal.h"
+#include "FileIOCapture.h"
 
 /* One native entry owns one interpreter lifetime. Cached objects are frozen or
    builtin toolchain objects, never application values. Other interpreters pass
@@ -112,6 +113,13 @@ int otelc_py_imports_ready(void) {
         Py_XDECREF(type);
         return -1;
     }
+    PyObject *raw = io_attribute("FileIO");
+    int raw_ready = raw ? otelc_py_fileio_install(raw, PyFunction_GetCode(function)) : -1;
+    Py_XDECREF(raw);
+    if (raw_ready) {
+        Py_DECREF(reader); Py_DECREF(open); Py_DECREF(type);
+        return -1;
+    }
     get_data_code = Py_NewRef(PyFunction_GetCode(function));
     buffered_reader = reader;
     builtin_open = open;
@@ -162,7 +170,9 @@ static PyObject *open_code(PyObject *path, void *unused) {
     PyObject *open = io_attribute("open");
     if (!open) return NULL;
     int ordinary_open = open == builtin_open;
+    PyFrameObject *previous = otelc_py_fileio_suppress(PyEval_GetFrame());
     PyObject *input = PyObject_CallFunction(open, "Os", path, "rb");
+    (void)otelc_py_fileio_suppress(previous);
     Py_DECREF(open);
     if (!input || !capture) return input;
     if (!ordinary_open || (PyObject *)Py_TYPE(input) != buffered_reader) {

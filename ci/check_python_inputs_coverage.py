@@ -12,7 +12,17 @@ from pathlib import Path
 from ci import build_python_inputs as tooling
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c', 'NativeEncoder.c')
+NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c', 'NativeEncoder.c', 'FileIOCapture.c')
+
+
+def export_command(llvm: Path, objects: list[Path], profile: Path, architecture: str) -> list[str]:
+    """Select the executed architecture for every universal Mach-O object."""
+    command = [str(llvm / 'llvm-cov'), 'export', str(objects[0])]
+    for path in objects[1:]:
+        command.extend(('-object', str(path)))
+    if sys.platform == 'darwin':
+        command.extend(['-arch=' + architecture] * len(objects))
+    return [*command, '-instr-profile=' + str(profile)]
 
 
 def summaries(data: dict) -> dict:
@@ -43,7 +53,7 @@ def check() -> dict:
                        'LLVM_PROFILE_FILE': str(directory / 'inputs-%p-%m.profraw')}
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
                         'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder',
-                        'test_python_origin_writer', '-v'],
+                        'test_python_origin_writer', 'test_python_fileio_inputs', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:
@@ -54,12 +64,10 @@ def check() -> dict:
         fixture = ROOT / 'build/native' / ('python-input-fixture-' + sys.implementation.cache_tag)
         imports = ROOT / 'build/native' / ('python-import-fixture-' + sys.implementation.cache_tag)
         encoder = ROOT / 'build/native' / ('python-encoder-fixture-' + sys.implementation.cache_tag)
-        output = subprocess.check_output([str(llvm / 'llvm-cov'), 'export', str(binary),
-            '-object', str(binary.parent / manifest['library']), '-object', str(fixture),
-            '-object', str(imports), '-object', str(encoder),
-            '-instr-profile=' + str(profile)], text=True)
+        objects = [binary, binary.parent / manifest['library'], fixture, imports, encoder]
+        output = subprocess.check_output(export_command(llvm, objects, profile, manifest['inputs']['machine']), text=True)
         (ROOT / 'build/python-native-coverage.raw.json').write_text(output)
-        result = {'interpreter': manifest['inputs']['interpreter'],
+        result = {'interpreter': manifest['inputs']['interpreter'], 'architecture': manifest['inputs']['machine'],
                   'version': sys.version, 'sources': summaries(json.loads(output))}
     (ROOT / 'build/python-native-coverage.json').write_text(json.dumps(result, indent=2) + '\n')
     return result
