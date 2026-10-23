@@ -146,7 +146,7 @@ Enter `10` for ordinary work, `lifecycle` for constructor failure/release retry,
 
 ## Evidence and current limits
 
-The internal [native entry input component](python-input-journal.md) retains consumed script bytes without a Python runner frame. It is not connected to this launcher yet; complete import/code provenance and frozen-provider admission remain outstanding.
+The internal [native entry input component](python-input-journal.md) retains consumed script bytes without a Python runner frame. Its [fixed request/argv layer](python-launch-recipe.md) keeps original caller intent separate from resolved policy and preserves the installed launcher's native argv0. These components are not connected to this launcher yet; the owned fixed supervisor, complete import/code provenance and frozen-provider admission remain outstanding.
 
 Local integration tests use CPython 3.12 and the locked SDK. They compare original script/module metadata, arguments, source hashes, seeded random values, signatures, output, tracebacks and exit codes against native baselines. Real receivers decode the four-state example's metric counts and spans, bound to the actual application PID rather than the CLI/SDK PID. Separate tests cover recursion/context boundaries, async suspension/cancellation, occupied monitoring IDs, controlled startup/probe failures, queue/transport evidence and open control connections. These are tested profiles, not a claim about arbitrary applications.
 
