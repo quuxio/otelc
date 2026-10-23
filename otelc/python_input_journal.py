@@ -1,4 +1,4 @@
-"""Decode native entry and ordinary-loader reads; reads do not prove execution."""
+"""Decode native input/code envelopes; file reads do not prove execution."""
 
 from __future__ import annotations
 
@@ -51,14 +51,14 @@ class InputJournal:
 
     @property
     def complete(self) -> bool:
-        """Describe this entry receipt, not imports, SDK health or app success."""
+        """Check final entry/capture status, not coverage, SDK health or app success."""
         return (self.python_finalized and self.entry_expected and bool(self.sources)
                 and not self.capture_failures and not self.journal_failures)
 
 
 @dataclass(frozen=True)
 class CodeInput:
-    """Opaque version-bound code descriptor; the supervisor never executes it."""
+    """Version-bound data; envelope decoding does not validate or execute its graph."""
 
     path: bytes
     content: bytes
@@ -103,7 +103,7 @@ def decode(data: bytes, *, expected_pid: int) -> InputJournal:
             if (pid != expected_pid or not path or b'\0' in path or not identity
                     or any(code.identity == identity for code in codes)
                     or position % 2 or version > 0xffffffff or version >> 24 != 3
-                    or (version >> 16 & 255) < 12 or descriptor_version != 1
+                    or (version >> 16 & 255) < 12 or descriptor_version not in (1, 2)
                     or not length or length != len(payload) - CODE.size or reserved_code):
                 raise ValueError('native Python code metadata or identity differs')
             codes.append(CodeInput(path, payload[CODE.size:], identity, position, version, descriptor_version))

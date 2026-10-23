@@ -20,6 +20,7 @@ from otelc.file_inputs import identity
 from otelc import prepared_python as prepared
 from otelc import python as frontend
 from otelc import python_input_journal as inputs
+from otelc import python_code_index as code_index
 from otelc import python_launch_files as files
 from otelc import python_recipe as recipe
 from otelc.python_sdk_process import SdkProcess
@@ -145,6 +146,8 @@ class Owner:
                     {'id': code.identity, 'path_hex': code.path.hex(), 'sha256': code.sha256,
                      'offset': code.offset, 'python_version': code.python_version,
                      'descriptor_version': code.descriptor_version} for code in journal.codes]}
+            for code in journal.codes:
+                code_index.decode(code)
             if self.original['module'] is None:
                 source = journal.sources[0] if len(journal.sources) == 1 else None
                 if (not journal.complete or source is None

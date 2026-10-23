@@ -38,7 +38,7 @@ class PythonBenchmarkTests(unittest.TestCase):
     def test_native_five_modes_share_one_instrumented_pid_and_separate_sdk_costs(self) -> None:
         output = self.root / 'comparison'
         report = python_benchmark.run(self.policy, output, comparison_id='shared-example')
-        self.assertEqual(report['launch_profile'], 'prepared-native-codes-v3')
+        self.assertEqual(report['launch_profile'], 'prepared-native-codes-v4')
         for lane in ('plain', 'instrumented'):
             receipt = json.loads((output / lane / 'python-execution.json').read_text())
             self.assertEqual(receipt['phase'], 'closed')

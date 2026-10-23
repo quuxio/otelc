@@ -155,7 +155,7 @@ class PythonInputJournalTests(unittest.TestCase):
         lost = source() + code(2, 2) + final(count=2, size=15, sequence=3, failures=1)
         self.assertFalse(journal.decode(lost, expected_pid=12).complete)
         for changes in ({'pid': 13}, {'identity': 0}, {'offset': 1}, {'version': 0x030b00f0},
-                        {'version': 0x04000000}, {'version': 2**32}, {'descriptor_version': 2},
+                        {'version': 0x04000000}, {'version': 2**32}, {'descriptor_version': 3},
                         {'length': 0}, {'length': 5}, {'reserved': 1}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 journal.decode(source() + code(1, 2, **changes)
