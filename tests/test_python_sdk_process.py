@@ -255,8 +255,9 @@ assert channel.seal({'function_completions':1,'active_functions':0,'runtime_loss
         self.assertGreater(report['span_accounting']['queue_dropped'], 0)
 
     def test_disabled_language_existing_directory_and_partial_pipe_failure_preserve_state(self) -> None:
+        disabled = Policy.parse({'schema_version': 3, 'languages': ['java']})
         with self.assertRaises(ValueError):
-            SdkProcess.start(Policy.parse({'schema_version': 3, 'languages': ['java']}), self.root / 'disabled')
+            SdkProcess.start(disabled, self.root / 'disabled')
         self.assertFalse((self.root / 'disabled').exists())
         existing = self.root / 'existing'
         existing.mkdir()

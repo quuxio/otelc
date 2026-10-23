@@ -28,6 +28,9 @@ from otelc import python_sdk_protocol as wire
 from otelc.python_sdk_reader import AccountedMetricReader
 
 
+NOT_RUNNING = 'Python SDK pipeline is not running'
+
+
 def span_context(value: dict[str, Any] | None) -> trace.SpanContext | None:
     """Reconstitute the source's identity; do not invent a replacement span."""
     if value is None:
@@ -235,7 +238,7 @@ class SdkPipeline:
         """Record an application-side primitive into the owned SDK meter."""
         with self._lock:
             if self._phase != 'running':
-                raise RuntimeError('Python SDK pipeline is not running')
+                raise RuntimeError(NOT_RUNNING)
         wire.metric(value)
         registration = {key: value.get(key) for key in (
             'scope', 'version', 'schema_url', 'scope_attributes',
@@ -270,7 +273,7 @@ class SdkPipeline:
         span = WireSpan(value, self._resource)
         with self._lock:
             if self._phase != 'running':
-                raise RuntimeError('Python SDK pipeline is not running')
+                raise RuntimeError(NOT_RUNNING)
             self._received_spans += 1
         self._processor.on_end(span)
 
@@ -278,7 +281,7 @@ class SdkPipeline:
         """Check real outcomes after the SDK barriers, without requiring global idle."""
         with self._operation_lock:
             if self._phase != 'running':
-                raise RuntimeError('Python SDK pipeline is not running')
+                raise RuntimeError(NOT_RUNNING)
             before = self.snapshot()
             try:
                 if self._metrics.force_flush(timeout_millis=self._timeout_ms) is not True:

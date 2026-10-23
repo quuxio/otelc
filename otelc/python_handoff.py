@@ -132,16 +132,20 @@ class HandoffWriter:
                     raise OSError('partial atomic SDK handoff write')
                 return
             except BlockingIOError:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError('SDK handoff deadline elapsed') from None
-                try:
-                    select.select([], [self._descriptor], [], remaining)
-                except InterruptedError:
-                    continue
+                self._wait_writable(deadline)
             except InterruptedError:
                 if time.monotonic() >= deadline:
                     raise TimeoutError('SDK handoff deadline elapsed') from None
+
+    def _wait_writable(self, deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('SDK handoff deadline elapsed') from None
+        try:
+            select.select([], [self._descriptor], [], remaining)
+        except InterruptedError:
+            # Resume the write loop with the original deadline.
+            return
 
     def snapshot(self) -> dict[str, int | float]:
         """Count full accepted records separately from attempts and losses."""
