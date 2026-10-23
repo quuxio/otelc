@@ -2,6 +2,8 @@
 
 <!-- markdownlint-disable MD013 -->
 
+The same CLI also supports the [Python application/SDK health view](python-health.md), using an explicit version-two report. This page describes Java's unchanged version-one evidence contract.
+
 Instrumented Java launches retain a versioned `health.json` in their private runtime directory. The report observes the pinned official SDK pipeline independently of metric collection and emission. It is SDK evidence: exporter API success does not prove Collector acceptance, storage, or complete invocation attribution.
 
 ```sh

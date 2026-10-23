@@ -21,9 +21,11 @@ from otelc import prepared_python as prepared
 from otelc import python as frontend
 from otelc import python_input_journal as inputs
 from otelc import python_code_index as code_index
+from otelc import python_health
+from otelc.health import MAX_REPORT
 from otelc import python_launch_files as files
 from otelc import python_recipe as recipe
-from otelc.python_sdk_process import SdkProcess
+from otelc.python_sdk_process import SdkProcess, policy_digest
 
 EXPECTED_FAILURES = (ValueError, OSError, RuntimeError, subprocess.SubprocessError)
 
@@ -193,6 +195,8 @@ class Owner:
 
     def publish_final(self) -> None:
         """Closed describes this lifecycle; full source and downstream health stay open."""
+        if not self.original['plain']:
+            self.publish_health()
         result = {**self.start_record(), 'kind': 'otelc.python.execution',
             'phase': 'failed' if self.failures else 'closed',
             'application': None if self.application is None else {
@@ -211,6 +215,27 @@ class Owner:
                     'message': 'Python launch completion or drain remains unverified'})
             except EXPECTED_FAILURES:
                 pass
+
+    def publish_health(self) -> None:
+        """Retain actual final process/SDK evidence independently of app outputs."""
+        try:
+            sdk_identity = self.sdk_identity()
+            producer = self.sdk_report.get('producer') if self.sdk_report is not None else None
+            sampled = producer.get('span_observation') if producer is not None and self.policy.data['traces']['enabled'] else None
+            value = python_health.present(
+                pid=self.application.pid if self.application is not None else None,
+                sdk_pid=sdk_identity['pid'] if sdk_identity is not None else None,
+                launch_id=sdk_identity['launch_id'] if sdk_identity is not None else None,
+                policy_sha256=policy_digest(self.policy), phase='final',
+                sdk=self.sdk_report, application=producer, sampled=sampled,
+                application_exit=self.application.returncode if self.application is not None else None,
+                sdk_exit=sdk_identity['returncode'] if sdk_identity is not None else None,
+                failures=self.failures)
+            if len(recipe.encoded(value).encode()) > MAX_REPORT:
+                raise ValueError('Python health report exceeds its bound')
+            files.write(self.directory / 'health.json', value)
+        except EXPECTED_FAILURES:
+            self.failures['health'] = 'unavailable'
 
     def sdk_identity(self) -> dict[str, Any] | None:
         """Retain actual failed-start PIDs/exits; unavailable is never a zero PID."""
