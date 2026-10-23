@@ -19,6 +19,13 @@ from otelc import node_provenance, node_recipe
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def protocols() -> dict[str, Any]:
+    """Describe producer protocols without launching Node or reading app inputs."""
+    return {'schema_version': 1, 'kind': 'otelc.node.protocols',
+            'source': node_provenance.SOURCE_EVIDENCE_SCHEMA,
+            'execution': 1, 'request': 1, 'preload': 1, 'sdk': 1}
+
+
 def executable() -> str:
     """Select a supported installed Node runtime without relying on an older login PATH."""
     homebrew = Path('/opt/homebrew/opt/node@24/bin/node')

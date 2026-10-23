@@ -6,6 +6,28 @@ import { instrumentLifetime, TYPE_IDENTITY } from './lifetime-transform.mjs';
 import { fileURLToPath } from 'node:url';
 
 const probes = fileURLToPath(new URL('./probes.cjs', import.meta.url));
+const moduleRecorder = fileURLToPath(new URL('../source-inputs.ts', import.meta.url));
+
+function entryStatements(path, loadId, format) {
+  const recorder = path.scope.generateUidIdentifier('otelc_module');
+  const binding = format === 'module'
+    ? t.importDeclaration([t.importSpecifier(recorder, t.identifier('moduleEntered'))], t.stringLiteral(moduleRecorder))
+    : t.variableDeclaration('const', [t.variableDeclarator(recorder,
+      t.memberExpression(t.callExpression(t.identifier('require'), [t.stringLiteral(moduleRecorder)]), t.identifier('moduleEntered')))]);
+  return [binding, t.expressionStatement(t.callExpression(t.cloneNode(recorder), [t.numericLiteral(loadId), t.stringLiteral(format)]))];
+}
+
+/** Observe plain compiler module entry without adding function/metric probes. */
+export function observeModuleEntry(source, filename, map, format, loadId) {
+  const result = transformSync(source, { filename, configFile: false, babelrc: false,
+    sourceType: format === 'module' ? 'module' : 'script', sourceMaps: true, inputSourceMap: map,
+    sourceFileName: filename, parserOpts: { allowReturnOutsideFunction: true },
+    plugins: [() => ({ visitor: { Program(path) {
+      if (format === 'commonjs' && path.scope.hasOwnBinding('require')) throw path.buildCodeFrameError('CommonJS top-level require shadowing is unsupported');
+      path.unshiftContainer('body', entryStatements(path, loadId, format));
+    } } })] });
+  return { code: result.code, map: result.map };
+}
 
 let nextAsyncSite = 1;
 export const MARKER = '@quux.otelc.generated';
@@ -168,9 +190,9 @@ function instrumentFunction(path, helper, name, plan, asyncSites) {
   path.node.body.directives = body.directives;
   path.node.expression = false;
 }
-function inputSourceType(prepared) {
-  if (prepared?.format === 'module') return 'module';
-  if (prepared?.format === 'commonjs') return 'script';
+function inputSourceType(prepared, hint) {
+  if ((prepared?.format ?? hint) === 'module') return 'module';
+  if ((prepared?.format ?? hint) === 'commonjs') return 'script';
   return 'unambiguous';
 }
 function asyncSite(node, ast, helper, asyncSites, filename) {
@@ -185,7 +207,7 @@ function asyncSite(node, ast, helper, asyncSites, filename) {
   if (!origin) throw new Error('Cannot identify the generated async Promise origin');
   return { id, name: asyncSites.get(id), filename, start: [node.body.loc.start.line, node.body.loc.start.column + 1], end: [node.body.loc.end.line, node.body.loc.end.column + 1], origin: [origin.line, origin.column + 1] };
 }
-export function transform(source, filename, sourceName, plan, runtime, prepared = null) {
+export function transform(source, filename, sourceName, plan, runtime, prepared = null, formatHint = undefined, loadId = undefined) {
   if (source.includes(MARKER)) throw new Error('source is already instrumented');
   const selection = new Selection(plan.function_matchers);
   const inventory = [];
@@ -195,12 +217,17 @@ export function transform(source, filename, sourceName, plan, runtime, prepared 
   let instrumented = false;
   const asyncSites = new Map();
   const result = transformSync(source, {
-    filename, configFile: false, babelrc: false, sourceType: inputSourceType(prepared), sourceMaps: true,
+    filename, configFile: false, babelrc: false, sourceType: inputSourceType(prepared, formatHint), sourceMaps: true,
     sourceFileName: filename, inputSourceMap: prepared?.map, parserOpts: { allowReturnOutsideFunction: true },
     plugins: [() => ({ visitor: { Program: { enter(path, state) {
       state.file.metadata.otelcFormat = path.node.sourceType === 'module' ? 'module' : 'commonjs';
       helper = path.scope.generateUidIdentifier('otelc_probes');
     }, exit(path) {
+      if (loadId !== undefined) {
+        const format = path.node.sourceType === 'module' ? 'module' : 'commonjs';
+        if (format === 'commonjs' && path.scope.hasOwnBinding('require')) throw path.buildCodeFrameError('CommonJS top-level require shadowing is unsupported');
+        path.unshiftContainer('body', entryStatements(path, loadId, format));
+      }
       if (!instrumented) return;
       if (path.node.sourceType === 'module') path.unshiftContainer('body', t.importDeclaration([t.importDefaultSpecifier(helper)], t.stringLiteral(probes)));
       else {
