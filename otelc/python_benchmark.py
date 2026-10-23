@@ -74,11 +74,16 @@ def application(policy: Policy, runtime: Path, *, plain: bool
                 ) -> Iterator[tuple[launch.Application, int | None]]:
     """Validate the actual public launch and its independent final SDK drain."""
     manager = stock.application(policy, runtime) if plain else launch.application(policy, runtime, plain=False)
-    with manager as process:
-        yield process, process.sdk_pid
-    if not plain:
-        validate_drain(process.sdk_report, process.pid, process.sdk_pid,
-                       lifetimes=policy.data['lifetimes']['enabled'])
+    process = None
+    try:
+        with manager as process:
+            yield process, process.sdk_pid
+    finally:
+        # The owned manager publishes its final SDK report during exit. Body
+        # failures must not skip validation of that independent drain evidence.
+        if not plain and process is not None:
+            validate_drain(process.sdk_report, process.pid, process.sdk_pid,
+                           lifetimes=policy.data['lifetimes']['enabled'])
 
 
 def measure_process(policy: Policy, output: Path, lane: str,
