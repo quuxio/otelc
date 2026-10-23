@@ -4,7 +4,7 @@
 #include <Python.h>
 
 int otelc_py_code_safe(PyObject *code);
-int otelc_py_encoder_ready(const wchar_t *encoding, const wchar_t *errors);
+int otelc_py_encoder_ready(void);
 PyObject *otelc_py_native_encode(PyObject *code);
 
 #endif
