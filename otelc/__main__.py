@@ -84,15 +84,15 @@ def main() -> int:
             return 0
         policy = Policy.load(args.config)
         if args.command == "python":
-            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            arguments = application_arguments(args.arguments)
             return python_adapter.run(policy, args.runtime, root=args.root, entry=args.entry,
                                       module=args.module, plain=args.plain, arguments=tuple(arguments))
         if args.command == "node":
-            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            arguments = application_arguments(args.arguments)
             return node.run(policy, args.runtime, args.language, root=args.root, entry=args.entry,
                             backend=args.backend, plain=args.plain, arguments=tuple(arguments))
         if args.command == "java":
-            arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
+            arguments = application_arguments(args.arguments)
             return prepared_java.run(args.manifest, policy, args.runtime, plain=args.plain,
                                      prepare_only=args.prepare_only, arguments=tuple(arguments),
                                      diagnostic_profile=args.diagnostic_profile)
@@ -108,6 +108,13 @@ def main() -> int:
         return run_example(policy, args.language, plain=args.plain)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f"quux-otelc: {error}\n")
+
+
+def application_arguments(arguments: list[str]) -> tuple[str, ...]:
+    """Remove only the CLI separator, retaining literal application arguments."""
+    if arguments[:1] == ['--']:
+        return tuple(arguments[1:])
+    return tuple(arguments)
 
 
 def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
