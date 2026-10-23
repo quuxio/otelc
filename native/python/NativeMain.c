@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
     checked(PyConfig_SetBytesString(&config, &config.base_executable, OTELC_PY_BASE_EXECUTABLE), &config);
     checked(Py_InitializeFromConfig(&config), &config);
     if (origins && otelc_py_origin_pins_ready()) otelc_py_journal_capture_failed();
-    if (origins && otelc_py_encoder_ready(config.filesystem_encoding, config.filesystem_errors)) {
+    if (origins && otelc_py_encoder_ready()) {
         PyConfig_Clear(&config);
         PyErr_Clear();
         Py_FinalizeEx();

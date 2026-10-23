@@ -23,11 +23,16 @@ static PyObject *regular_input(PyObject *path) {
 }
 
 int main(int argc, char **argv) {
-    CHECK(argc == 3);
+    CHECK(argc == 4);
     int fd = open(argv[2], O_WRONLY | O_CREAT | O_EXCL, 0600);
     CHECK(fd >= 0 && otelc_py_journal_open(fd) == 0);
     CHECK(otelc_py_imports_install() == 0);
-    Py_Initialize();
+    PyConfig config;
+    PyConfig_InitPythonConfig(&config);
+    PyStatus status = PyConfig_SetBytesString(&config, &config.program_name, argv[3]);
+    if (!PyStatus_Exception(status)) status = Py_InitializeFromConfig(&config);
+    PyConfig_Clear(&config);
+    CHECK(!PyStatus_Exception(status));
     CHECK(otelc_py_imports_ready() == 0);
     PyObject *path = PyUnicode_DecodeFSDefault(argv[1]);
     CHECK(path != NULL);

@@ -246,11 +246,29 @@ print("fork refused")
         self.assertEqual((status, out, err), (0, b'fork refused\n', b''))
 
     def test_dependency_origin_configuration_and_allocation_failures_are_closed(self) -> None:
-        for mode in ('missing', 'symbol', 'origin', 'configuration', 'allocation', 'repeat', 'interpreter'):
+        for mode in ('missing', 'symbol', 'origin', 'configuration', 'allocation', 'repeat', 'interpreter', 'filesystem'):
             with self.subTest(mode=mode):
                 result = subprocess.run([str(self.encoder_fixture), mode, sys.executable],
                                         capture_output=True, timeout=10)
                 self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b'', b''))
+
+    def test_filesystem_metadata_does_not_call_application_sys_replacements(self) -> None:
+        (self.root / 'sitecustomize.py').write_text('''import sys, builtins
+builtins.expected_filesystem = (sys.getfilesystemencoding(), sys.getfilesystemencodeerrors())
+def trap(): raise AssertionError("application filesystem callback")
+sys.getfilesystemencoding = sys.getfilesystemencodeerrors = trap
+''')
+        entry = self.application('''import _otelc_inputs as native
+import builtins
+def workload(): return 42
+payload = native.encode(workload.__code__)
+for name, value in zip(("encoding", "errors"), builtins.expected_filesystem):
+    assert ('"' + name + '":"' + value + '"').encode() in payload
+print("runtime configuration")
+''')
+        status, out, err, _, _ = self.launch(['-B', str(entry)], origin_observer=True,
+                                            environment={**os.environ, 'PYTHONPATH': str(self.root)})
+        self.assertEqual((status, out, err), (0, b'runtime configuration\n', b''))
 
     def test_missing_pinned_dependency_refuses_before_application_execution(self) -> None:
         generate = native_encoder.generate

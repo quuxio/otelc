@@ -80,6 +80,10 @@ def toolchain() -> tuple[dict, list[str]]:
     flags = shlex.split(subprocess.check_output([str(config), '--embed', '--cflags', '--ldflags'], text=True))
     library_root = sysconfig.get_config_var('PYTHONFRAMEWORKPREFIX') or sysconfig.get_config_var('LIBDIR')
     python_library = Path(library_root) / sysconfig.get_config_var('LDLIBRARY')
+    # Relocatable distributions can omit -L from python-config even though
+    # libpython is outside the compiler's default search path. Select the
+    # same owned library that the build identity pins below.
+    flags.insert(0, '-L' + str(python_library.parent))
     identity = {'interpreter': digest(Path(sys.executable)), 'version': sys.version,
                 'initial_configuration': initial_configuration(),
                 'cache_tag': sys.implementation.cache_tag, 'config': digest(config),
