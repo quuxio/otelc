@@ -188,6 +188,31 @@ class PythonHttpComponentTests(unittest.TestCase):
         self.assertFalse(span.is_recording())
         self.assertEqual(self.finish()['phase'], 'closed')
 
+    def test_response_close_finishes_when_the_second_attribute_lookup_raises(self) -> None:
+        failure = AttributeError('original second lookup')
+        reads = []
+
+        class Body:
+            def __iter__(self):
+                return iter(())
+
+            @property
+            def close(self):
+                reads.append('close')
+                if len(reads) == 2:
+                    raise failure
+                return None
+
+        span = self.runtime._provider.get_tracer('fixture').start_span('response')
+        response = Response(Body(), span, None)
+        with self.assertRaises(AttributeError) as raised:
+            response.close()
+        self.assertIs(raised.exception, failure)
+        response.close()
+        self.assertEqual(reads, ['close', 'close'])
+        self.assertFalse(span.is_recording())
+        self.assertEqual(self.finish()['phase'], 'closed')
+
     def test_invalid_content_length_keeps_native_body_and_records_observation_loss(self) -> None:
         url, _ = self.server('not-a-number')
         with urllib.request.urlopen(url) as response:

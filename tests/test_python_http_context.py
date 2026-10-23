@@ -38,6 +38,74 @@ class PythonHttpContextTests(unittest.TestCase):
     def test_source_exclusion_suppresses_functions_without_disabling_http_context(self) -> None:
         self.exercise(inbound=True, excluded=True)
 
+    def test_native_wsgi_close_keeps_getter_side_effects_and_the_second_lookup_callable(self) -> None:
+        source = '''import json,sys,threading,urllib.request
+from wsgiref.simple_server import make_server,WSGIRequestHandler
+class Body:
+    lookups=0
+    calls=[]
+    def __iter__(self): return iter([b'ok'])
+    def __getattribute__(self,name):
+        if name=='close':
+            Body.lookups+=1
+            if sys.argv[1]=='changing':
+                which=Body.lookups
+                return lambda: Body.calls.append(which)
+        return object.__getattribute__(self,name)
+    def close(self): Body.calls.append('closed')
+class Quiet(WSGIRequestHandler):
+    def log_message(self,*arguments): pass
+def app(environ,start_response):
+    start_response('200 OK',[('Content-Length','2')])
+    return Body()
+server=make_server('127.0.0.1',0,app,handler_class=Quiet)
+worker=threading.Thread(target=server.handle_request)
+worker.start()
+with urllib.request.urlopen('http://127.0.0.1:'+str(server.server_port)+'/') as response:
+    body=response.read()
+worker.join(5)
+assert not worker.is_alive()
+server.server_close()
+print(json.dumps({'lookups':Body.lookups,'calls':Body.calls,'body':body.hex()}))
+'''
+        with tempfile.TemporaryDirectory(dir='/tmp') as temporary:
+            root = Path(temporary).resolve()
+            entry = root / 'entry.py'
+            entry.write_text(source)
+            policy = root / 'otelc.toml'
+            policy.write_text('''schema_version=3
+languages=['python']
+[sources]
+include=['*.py']
+[functions]
+include=['*never_selected*']
+[metrics]
+collection=false
+emission=false
+[traces]
+enabled=false
+[context]
+http=true
+''')
+            for mode in ('ordinary', 'changing'):
+                with self.subTest(mode=mode):
+                    native = subprocess.run([sys.executable, str(entry), mode], cwd=root,
+                        capture_output=True, timeout=20)
+                    runtime = root / mode
+                    observed = subprocess.run([sys.executable, '-B', '-m', 'otelc',
+                        '--config', str(policy), 'python', '--root', str(root),
+                        '--entry', 'entry.py', '--runtime', str(runtime), '--', mode],
+                        cwd=ROOT, capture_output=True, timeout=30)
+                    self.assertEqual((native.returncode, native.stderr), (0, b''))
+                    self.assertEqual(json.loads(native.stdout), {'lookups': 2,
+                        'calls': [2] if mode == 'changing' else ['closed'], 'body': '6f6b'})
+                    self.assertEqual((observed.returncode, observed.stdout, observed.stderr),
+                                     (native.returncode, native.stdout, native.stderr))
+                    report = json.loads((runtime / 'sdk/python-sdk-status.json').read_bytes())
+                    self.assertEqual(report['phase'], 'closed')
+                    self.assertFalse(any(report['producer']['runtime_losses'].values()))
+            self.assertEqual(entry.read_text(), source)
+
     def exercise(self, *, inbound=False, tracing=True, ratio=1., http=True, excluded=False) -> None:
         capture = Capture()
         self.addCleanup(capture.close)

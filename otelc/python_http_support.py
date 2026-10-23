@@ -120,9 +120,10 @@ class Response:
         self._closed = True
         try:
             with use_span(self._span):
-                close = getattr(self._iterable, 'close', None)
-                if close is not None:
-                    close()
+                # Match wsgiref's two lookups: descriptors can return a
+                # different callable on the second access.
+                if hasattr(self._iterable, 'close'):
+                    self._iterable.close()
         finally:
             try:
                 self._span.end()
