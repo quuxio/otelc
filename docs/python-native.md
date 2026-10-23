@@ -82,7 +82,7 @@ Module entry is also native: replace `--entry ...` with `--module package.module
 
 ## What is observed
 
-Sources use the common root-relative glob selectors. Function identity is the dotted relative filename, without `.py`, followed by the code object's qualified name. Exclusions take precedence. The tool does not replace functions, code objects, signatures, arguments, return values or exceptions. Native `sys.monitoring` distinguishes completion, unwinding, suspension and resume. Suspended/censored work is never reported as a finished span.
+Sources use the common root-relative glob selectors. Function identity is the dotted relative filename, without `.py`, followed by the code object's qualified name. Exclusions take precedence. The tool does not replace functions, code objects, signatures, arguments, return values or exceptions. Native `sys.monitoring` distinguishes completion, unwinding, suspension and resume. Suspended/censored work is never reported as a finished span. The prepared native profile also attaches a process-local `otelc.python.code_id` to selected function spans and metrics, bound to the actual monitored code descriptor in the [native input journal](python-input-journal.md#selected-code-descriptors). Selection caches use weak code references so code constants can be released normally.
 
 The app-side official tracer has a public OS-entropy ID generator and a primitive span processor. It does not run the OTLP exporter or metric aggregator. The [owned SDK process](python-sdk-process.md) handles aggregation, batching, retries and export without consuming app pseudo-random state. Tracing uses parent-based ratio sampling.
 

@@ -154,6 +154,57 @@ timeout_ms=1000
                              {(value.path.hex(), value.sha256) for value in matching})
             self.assertEqual((helper.read_bytes(), self.entry.read_bytes()), (content, source))
 
+    def test_public_function_spans_and_metrics_bind_native_code_records(self) -> None:
+        import copy
+        data = copy.deepcopy(self.policy.data)
+        data['metrics'].update(collection=True, emission=True)
+        self.policy = Policy.parse(data)
+        original = self.entry.read_bytes()
+        directory, _ = self.prepare()
+        owner = Owner(directory)
+        self.assertEqual(owner.execute(), 0)
+        receipt, _ = files.read(directory / 'python-execution.json')
+        evidence = inputs.read(directory / 'python-inputs.journal',
+                               expected_pid=receipt['application']['pid'])
+        self.assertTrue(evidence.complete)
+        self.assertEqual(len(evidence.codes), 1)
+        code = evidence.codes[0]
+        self.assertEqual(receipt['entry_evidence']['codes'][0]['sha256'], code.sha256)
+        self.assertEqual(receipt['entry_evidence']['codes'][0]['id'], code.identity)
+        spans = [span for message in self.capture.traces for resource in message.resource_spans
+                 for scope in resource.scope_spans for span in scope.spans
+                 if span.name == 'entry.workload']
+        self.assertEqual(len(spans), 1)
+        attributes = {item.key: item.value for item in spans[0].attributes}
+        self.assertEqual(attributes['otelc.python.code_id'].int_value, code.identity)
+        points = [point for message in self.capture.metrics for resource in message.resource_metrics
+                  for scope in resource.scope_metrics for metric in scope.metrics
+                  if metric.name == 'otelc.function.calls' for point in metric.sum.data_points]
+        self.assertEqual(len(points), 1)
+        attributes = {item.key: item.value for item in points[0].attributes}
+        self.assertEqual(attributes['otelc.python.code_id'].int_value, code.identity)
+        self.assertFalse(receipt['source_complete'])
+        self.assertEqual(self.entry.read_bytes(), original)
+
+    def test_failed_code_capture_preserves_application_and_fails_final_receipt(self) -> None:
+        self.entry.write_text('''class Payload:
+    pass
+payload = Payload()
+def workload(): return 701
+workload.__code__ = workload.__code__.replace(co_consts=tuple(
+    payload if type(value) is int and value == 701 else value for value in workload.__code__.co_consts))
+assert workload() is payload
+''')
+        original = self.entry.read_bytes()
+        directory, _ = self.prepare()
+        owner = Owner(directory)
+        self.assertEqual(owner.execute(), 1)
+        receipt, _ = files.read(directory / 'python-execution.json')
+        self.assertEqual(receipt['application']['returncode'], 0)
+        self.assertEqual(receipt['entry_evidence']['phase'], 'failed')
+        self.assertFalse(receipt['source_complete'])
+        self.assertEqual(self.entry.read_bytes(), original)
+
     def test_altered_prepared_request_plan_or_product_is_refused_before_app_start(self) -> None:
         marker = self.app / 'executed'
         self.entry.write_text('from pathlib import Path\nPath("executed").touch()\n')

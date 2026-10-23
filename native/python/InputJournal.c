@@ -140,6 +140,35 @@ int otelc_py_journal_import(const char *path, const unsigned char *bytes,
     return file_input(3, path, bytes, length, info);
 }
 
+int otelc_py_journal_code(const char *path, const unsigned char *bytes, size_t length,
+                         uint64_t identity, uint64_t offset, uint64_t version,
+                         uint64_t descriptor_version) {
+    size_t path_size = path ? strnlen(path, OTELC_PY_PATH_LIMIT + 1U) : 0;
+    if (!path_size || path_size > OTELC_PY_PATH_LIMIT || !bytes || !length ||
+            length > OTELC_PY_SOURCE_LIMIT || !identity) {
+        otelc_py_journal_capture_failed();
+        return -1;
+    }
+    unsigned char metadata[METADATA_SIZE];
+    integer(metadata, (uint64_t)getpid());
+    integer(metadata + 8, identity);
+    integer(metadata + 16, offset);
+    integer(metadata + 24, version);
+    integer(metadata + 32, descriptor_version);
+    integer(metadata + 40, length);
+    integer(metadata + 48, 0);
+    /* Payload preparation is complete before this raw-C critical section. */
+    pthread_mutex_lock(&journal_lock);
+    int result = record(4, path, path_size, metadata, bytes, length);
+    if (result) ++capture_failures;
+    else {
+        ++sources;
+        source_bytes += length;
+    }
+    pthread_mutex_unlock(&journal_lock);
+    return result;
+}
+
 void otelc_py_journal_capture_failed(void) {
     pthread_mutex_lock(&journal_lock);
     ++capture_failures;

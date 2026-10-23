@@ -141,7 +141,10 @@ class Owner:
                     for source in journal.sources], 'imports': [
                     {'path_hex': source.path.hex(), 'sha256': source.sha256,
                      'device': source.device, 'inode': source.inode, 'mtime_ns': source.mtime_ns}
-                    for source in journal.imports]}
+                    for source in journal.imports], 'codes': [
+                    {'id': code.identity, 'path_hex': code.path.hex(), 'sha256': code.sha256,
+                     'offset': code.offset, 'python_version': code.python_version,
+                     'descriptor_version': code.descriptor_version} for code in journal.codes]}
             if self.original['module'] is None:
                 source = journal.sources[0] if len(journal.sources) == 1 else None
                 if (not journal.complete or source is None

@@ -119,9 +119,9 @@ def run(policy: Policy, output: Path, *, comparison_id: str | None = None,
     if file_identity(source) != before:
         raise ValueError('application source changed')
     identity = benchmark_process.RunIdentity('python', platform.python_implementation() + ' ' + platform.python_version(),
-        'CPython bytecode', ('prepared native entry and import journals', 'no additional application interpreter flags'), before['sha256'])
+        'CPython bytecode', ('prepared native entry/import journals and selected-code descriptors', 'no additional application interpreter flags'), before['sha256'])
     report = benchmark_process.summary(policy, output, records, identity, pids, sdk_pid, comparison_id)
-    report['launch_profile'] = 'prepared-native-imports-v2'
+    report['launch_profile'] = 'prepared-native-codes-v3'
     report['supervisor_pids'] = supervisors
     report['launch_evidence'] = {lane: process.evidence for lane, process in processes.items()}
     report['config_sha256'] = policy_digest(policy)

@@ -28,6 +28,7 @@ class Invocation:
     collect: bool
     span: trace.Span | None
     token: Token[Context] | None = None
+    code_id: int | None = None
 
 
 def exception_type(error: BaseException) -> str:
@@ -71,15 +72,18 @@ class PythonRuntime:
                 self._detach(call)
                 self.reject('incomplete')
 
-    def enter(self, key: int, name: str) -> None:
+    def enter(self, key: int, name: str, *, code_id: int | None = None) -> None:
         with self._lock:
             if self.closed:
                 return
             if key in self.pending or len(self.pending) >= MAX_ACTIVE:
                 self.reject('active_capacity')
                 return
-            span = self._tracer.start_span(name, attributes={'code.function.name': name}) if self._tracer else None
-            call = Invocation(name, time.perf_counter_ns(), self.collection, span)
+            attributes: dict[str, str | int] = {'code.function.name': name}
+            if code_id is not None:
+                attributes['otelc.python.code_id'] = code_id
+            span = self._tracer.start_span(name, attributes=attributes) if self._tracer else None
+            call = Invocation(name, time.perf_counter_ns(), self.collection, span, code_id=code_id)
             self.pending[key] = call
             self._attach(call)
 
@@ -127,7 +131,9 @@ class PythonRuntime:
                     call.span.add_event('exception', {'exception.type': kind})
                 call.span.end()
             if call.collect and self.collection:
-                attributes = {'function': call.name}
+                attributes: dict[str, str | int] = {'function': call.name}
+                if call.code_id is not None:
+                    attributes['otelc.python.code_id'] = call.code_id
                 observed = python_tracing.encoded_context(call.span.get_span_context()) if call.span else None
                 self._metric('counter', 'otelc.function.calls', 1, attributes,
                              span_context=observed)
