@@ -10,15 +10,17 @@ Use a new runtime directory for each attempt:
 
 ```sh
 runtime="$(mktemp -d /tmp/otelc-python.XXXXXX)/runtime"
-.venv/bin/python -m otelc --config examples/otelc.toml python \
+bin/quux-otelc --config examples/otelc.toml python \
   --root "$PWD" --entry examples/python/BenchmarkApp.py --runtime "$runtime"
 ```
 
 Add `--prepare-only` to create the request, resolved plan and verified tool manifest and print their fixed command as JSON. This prepares the native tool without starting an app or SDK. String script paths retain their spelling, including `./`; script paths resolve from `--root`. Module entries use `--module package.module`. App arguments follow `--`.
 
-Tooling callers can use `otelc.prepared_python.prepare`, `command` and `run`. `invocation(runtime)` derives the fixed supervisor command for an existing preparation. The supervisor rechecks that preparation before any SDK/app work. `run` also owns a separate session and cleans it up if the supervisor is interrupted or killed. A consumer using only `command` or `invocation` must retain equivalent process-group ownership through completion.
+Tooling callers can use `otelc.prepared_python.prepare`, `command` and `run`. `invocation(runtime)` derives the fixed supervisor command for an existing preparation. The supervisor rechecks that preparation before any SDK/app work. `run` also owns a separate session and cleans it up if the supervisor is interrupted or killed. A consumer using only `command` or `invocation` must retain equivalent process-group ownership through completion. On macOS, a denied group signal is treated as an absent group only after a bounded OS process-table query confirms no members remain. A live group, unavailable membership or a failed query still causes cleanup to fail.
 
-The supervisor itself uses isolated/no-site startup, so it cannot run installed application startup hooks a second time. The actual native app retains its ordinary startup hooks and default interpreter flags.
+The public `bin/quux-otelc` host, fixed supervisor and SDK worker use isolated/no-site startup. The CLI and SDK worker add only explicit installed wheel directories; they do not process `.pth` files, `sitecustomize`, user sites or application `PYTHONPATH`. This keeps command JSON and application byte channels free from tooling-host startup output. The actual native app retains its ordinary startup hooks and default interpreter flags. Editable SDK installs or SDK dependencies made available only through `.pth` files are outside this profile; install the locked wheels with `make setup`.
+
+The wrapper defaults to this checkout's `.venv/bin/python`. To select another SDK environment, set `OTELC_PYTHON=/absolute/path/to/venv/bin/python` before the command. The previous `python -m otelc` CLI is refused because Python has already run site hooks before the module is entered. Tooling callers using the Python API must themselves start in a controlled interpreter when they require clean command/application output.
 
 The native component requires the matching shared/framework GIL CPython 3.12+ toolchain and Clang described in [native entry inputs](python-input-journal.md). Normal and isolated interpreter startups can spell a Homebrew header directory differently; the build identity binds its canonical header tree, while retaining the actual compiler configuration and flags.
 

@@ -77,7 +77,7 @@ class NodeProvenanceTests(unittest.TestCase):
                     f'endpoint = "http://127.0.0.1:{capture.server.server_port}"\n')
                 for plain in (True, False):
                     runtime = directory / ('plain' if plain else 'instrumented')
-                    result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
+                    result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy), 'node',
                         '--language', language, '--backend', backend, '--root', str(application),
                         '--entry', str(entry), '--runtime', str(runtime), *(['--plain'] if plain else [])],
                         cwd=ROOT, capture_output=True, text=True, timeout=30)

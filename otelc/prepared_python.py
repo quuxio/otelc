@@ -41,7 +41,7 @@ def native_tool() -> Path:
 def manifest(original: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     """Derive maintained tooling/entry identities without executing app code."""
     driver = native_tool()
-    maintained = [*sorted((ROOT / 'otelc').glob('*.py')),
+    maintained = [ROOT / 'bin/quux-otelc', *sorted((ROOT / 'otelc').glob('*.py')),
                   ROOT / 'ci/build_python_inputs.py', ROOT / 'requirements.txt',
                   ROOT / 'requirements-dev.txt']
     entry = original['paths'].get('entry')
@@ -134,22 +134,39 @@ def run(policy: Policy, runtime: Path | str, *, root: Path | str,
 
 def stop_group(process: subprocess.Popen[bytes]) -> None:
     """Stop only this explicitly owned session if the caller is interrupted."""
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    if not _signal_group(process.pid, signal.SIGTERM):
         process.wait(timeout=3)
         return
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
         process.poll()  # Reap a completed group leader while children finish.
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
+        if not _signal_group(process.pid, 0):
             break
         time.sleep(.01)
     else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        _signal_group(process.pid, signal.SIGKILL)
     process.wait(timeout=3)
+
+
+def _signal_group(group: int, number: int) -> bool:
+    """Distinguish a vanished macOS group from a denied live-group signal.
+
+    A real killed-supervisor reproduction returned EPERM for signal zero, then
+    an OS query showed no group members. Never forgive EPERM without evidence
+    of absence, or signal any process outside the explicitly owned group.
+    """
+    try:
+        os.killpg(group, number)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        if sys.platform != 'darwin':
+            raise
+        groups = subprocess.check_output(
+            ['/bin/ps', '-A', '-o', 'pgid='], text=True, timeout=1).split()
+        if not groups or any(not value.isascii() or not value.isdecimal() for value in groups):
+            raise ValueError('owned process-group membership is unavailable')
+        if group in map(int, groups):
+            raise
+        return False

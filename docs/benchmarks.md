@@ -17,16 +17,16 @@ Use a fresh comparison ID to group the language reports in Grafana. Apply the sa
 
 ```sh
 comparison=$(date +%Y%m%d-%H%M%S)
-.venv/bin/python -m otelc --config examples/otelc.toml benchmark \
+bin/quux-otelc --config examples/otelc.toml benchmark \
   --language java --comparison-id "$comparison" \
   --output "build/benchmarks/$comparison-java"
-.venv/bin/python -m otelc --config examples/otelc.toml benchmark \
+bin/quux-otelc --config examples/otelc.toml benchmark \
   --language javascript --comparison-id "$comparison" \
   --output "build/benchmarks/$comparison-javascript"
-.venv/bin/python -m otelc --config examples/otelc.toml benchmark \
+bin/quux-otelc --config examples/otelc.toml benchmark \
   --language typescript --backend native --comparison-id "$comparison" \
   --output "build/benchmarks/$comparison-typescript"
-.venv/bin/python -m otelc --config examples/otelc.toml benchmark \
+bin/quux-otelc --config examples/otelc.toml benchmark \
   --language python --comparison-id "$comparison" \
   --output "build/benchmarks/$comparison-python"
 ```

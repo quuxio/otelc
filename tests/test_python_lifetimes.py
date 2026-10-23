@@ -51,7 +51,7 @@ interval_ms=100000
         baseline = subprocess.run([sys.executable, 'entry.py'], cwd=self.application,
                                   capture_output=True, text=True, timeout=10)
         runtime = self.root / 'runtime'
-        result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(self.config),
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(self.config),
             'python', '--root', str(self.application), '--entry', 'entry.py',
             '--runtime', str(runtime)], cwd=ROOT, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.stdout, baseline.stdout)
@@ -260,7 +260,7 @@ gc.collect();print('original')
             cwd=self.application, capture_output=True, text=True, timeout=10)
         expected = json.loads(plain.stdout)
         runtime = self.root / 'runtime'
-        process = subprocess.Popen([sys.executable, '-m', 'otelc', '--config', str(self.config),
+        process = subprocess.Popen([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(self.config),
             'python', '--root', str(self.application), '--entry', 'entry.py',
             '--runtime', str(runtime)], cwd=ROOT, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

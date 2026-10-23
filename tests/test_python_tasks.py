@@ -35,7 +35,7 @@ class PythonTaskTests(unittest.TestCase):
             text = (SOURCE.parents[1] / 'tasks.toml').read_text()
             text = text.replace('http://127.0.0.1:4320', f'http://127.0.0.1:{capture.server.server_port}')
             policy.write_text(text)
-            result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy),
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy),
                 'python', '--root', str(SOURCE.parents[2]), '--entry', str(SOURCE),
                 '--runtime', str(root / 'runtime')], cwd=ROOT, capture_output=True, text=True, timeout=20)
             self.assertEqual((result.returncode, result.stderr), (0, ''))
@@ -85,7 +85,7 @@ endpoint="http://127.0.0.1:{capture.server.server_port}"
 interval_ms=100000
 ''')
                     runtime = root / ('on' if tasks else 'off')
-                    result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy),
+                    result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy),
                         'python', '--root', str(application), '--entry', str(source),
                         '--runtime', str(runtime)], cwd=ROOT, capture_output=True, text=True, timeout=20)
                     self.assertEqual((result.returncode, result.stdout, result.stderr),

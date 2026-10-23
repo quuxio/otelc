@@ -36,7 +36,7 @@ static int parent(int value) throws Exception {
 Launch it with the common [context policy](../examples/context.toml):
 
 ```sh
-.venv/bin/python -m otelc --config examples/context.toml java \
+bin/quux-otelc --config examples/context.toml java \
   --manifest build/examples/context/java/TaskApp.json \
   --runtime /tmp/otelc-tasks-$$
 ```
@@ -46,7 +46,7 @@ Enter `run`, `outside`, `cancel`, `reject`, `error`, then `quit`. The first four
 The [HTTP application](../examples/java/HttpContextApp.java) uses JDK `HttpClient` and `HttpServer`. In one terminal:
 
 ```sh
-.venv/bin/python -m otelc --config examples/context.toml java \
+bin/quux-otelc --config examples/context.toml java \
   --manifest build/examples/context/java/HttpContextApp.json \
   --runtime /tmp/otelc-http-server-$$ -- server /tmp/otelc-http-requests-$$.txt
 ```
@@ -54,7 +54,7 @@ The [HTTP application](../examples/java/HttpContextApp.java) uses JDK `HttpClien
 It prints `ready:PORT`. In a second terminal, replace `PORT` with that number:
 
 ```sh
-.venv/bin/python -m otelc --config examples/context.toml java \
+bin/quux-otelc --config examples/context.toml java \
   --manifest build/examples/context/java/HttpContextApp.json \
   --runtime /tmp/otelc-http-client-$$ -- client http://127.0.0.1:PORT
 ```

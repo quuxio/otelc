@@ -61,14 +61,14 @@ manifest = {"schema_version": 1, "main_class": "examples.BenchmarkApp",
             "classpath": ["classes"], "bindings": bindings}
 (classes.parent / "application.json").write_text(json.dumps(manifest, indent=2))
 PY
-.venv/bin/python -m otelc --config examples/otelc.toml java \
+bin/quux-otelc --config examples/otelc.toml java \
   --manifest build/prepared/application.json --runtime /tmp/otelc-java-$$ \
   --diagnostic-profile
 ```
 
 The CLI creates a new owned 0700 runtime directory. Its path must be short and contain no `:`, `,`, `=` or `%`. Enter `10`, `gc`, `lifecycle`, `throw` or `quit`, as for the built-in example. Use a new runtime path and `--plain` for a baseline run. Arguments after `--` go unchanged to the main method. The same policy applies; no agent-specific settings belong in it.
 
-From another terminal, use `python -m otelc metrics --socket /tmp/otelc-java-SHELL_PID/control.sock status`, then `off`, `collection on` or `emission on`. Replace `SHELL_PID` with the shell PID used in the launch path. `process.json` records the actual Java PID. The in-flight-export barrier is unchanged. Use `make stack-up` and the [Grafana dashboards](http://localhost:3001/d/otelc-lifetimes) to view telemetry.
+From another terminal, use `bin/quux-otelc metrics --socket /tmp/otelc-java-SHELL_PID/control.sock status`, then `off`, `collection on` or `emission on`. Replace `SHELL_PID` with the shell PID used in the launch path. `process.json` records the actual Java PID. The in-flight-export barrier is unchanged. Use `make stack-up` and the [Grafana dashboards](http://localhost:3001/d/otelc-lifetimes) to view telemetry.
 
 ## Consumer API and evidence
 

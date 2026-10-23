@@ -92,7 +92,7 @@ http=true
                     native = subprocess.run([sys.executable, str(entry), mode], cwd=root,
                         capture_output=True, timeout=20)
                     runtime = root / mode
-                    observed = subprocess.run([sys.executable, '-B', '-m', 'otelc',
+                    observed = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'),
                         '--config', str(policy), 'python', '--root', str(root),
                         '--entry', 'entry.py', '--runtime', str(runtime), '--', mode],
                         cwd=ROOT, capture_output=True, timeout=30)
@@ -131,7 +131,7 @@ http=true
                 with ExitStack() as stack:
                     def launch(role, argument):
                         runtime = lane / role
-                        command = [sys.executable, '-B', '-m', 'otelc', '--config', str(policy),
+                        command = [sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy),
                             'python', '--root', str(ROOT), '--entry', str(SOURCE), '--runtime', str(runtime),
                             *(['--plain'] if plain else []), '--', role, argument,
                             f'http://127.0.0.1:{downstream.server.server_port}']

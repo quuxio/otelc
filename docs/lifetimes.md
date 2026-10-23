@@ -32,7 +32,7 @@ GC notification has no exact destruction-time guarantee. A long observed interva
 
 ```sh
 make setup java-build stack-up
-.venv/bin/python -m otelc example java
+bin/quux-otelc example java
 ```
 
 Enter `10`, then `gc`. The first command allocates and closes ten ordinary `WorkItem` objects. The fixture's `gc` command requests GC for demonstration; production instrumentation does not force it. Enter `lifecycle`, then `gc`, to exercise a failed constructor, a failed close followed by retry, duplicate close and an abandoned object. Enter `quit` to exit.
