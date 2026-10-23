@@ -12,6 +12,8 @@ The [development notes](docs/node-development.md) describe compiler/runtime chec
 
 The merged [Node SDK/control foundation](docs/node-sdk-controls.md) supplies official SDK/exporters, independent live metric gates and the shared control client. Source probes and application launching belong to the separate Node candidate.
 
+The [Python SDK metric gates](docs/python-sdk-controls.md) are the next building block in development. Component tests cover public SDK instruments and exporter outcomes; the source-free Python launcher, process bridge and language qualification remain work. Python is still reported as remaining by `plan`.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
