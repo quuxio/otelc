@@ -13,6 +13,10 @@ from otelc import python_sdk_io as io
 MAX_METADATA = 64 * 1024 * 1024
 
 
+class PublicationPending(FileNotFoundError):
+    """A generated metadata publication has not finished its link cleanup."""
+
+
 def private_directory(path: Path) -> Path:
     """Require the selected owned private leaf without changing existing data."""
     info = path.lstat()
@@ -23,17 +27,28 @@ def private_directory(path: Path) -> Path:
 
 
 def read_bytes(path: Path) -> bytes:
-    """Read one fixed private regular file, refusing partial or changing input."""
+    """Start a strict snapshot only after the generated file has one final link.
+
+    Two links mean publication is pending: read no bytes and let a polling
+    caller retry. A later fresh snapshot does not authenticate in-progress
+    contents or establish which writer produced them.
+    """
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         before = os.fstat(descriptor)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
                 or stat.S_IMODE(before.st_mode) != 0o600 or before.st_size > MAX_METADATA):
             raise ValueError('invalid private Python launch metadata')
+        if before.st_nlink == 2:
+            raise PublicationPending('Python launch metadata publication is pending')
+        if before.st_nlink != 1:
+            raise ValueError('Python launch metadata must have one final link')
         with os.fdopen(descriptor, 'rb', closefd=False) as source:
             data = source.read(MAX_METADATA + 1)
         after = os.fstat(descriptor)
-        stable = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        stable = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                               info.st_ctime_ns, info.st_mode, info.st_uid,
+                               info.st_gid, info.st_nlink)
         if len(data) != before.st_size or stable(before) != stable(after):
             raise ValueError('Python launch metadata changed while reading')
         return data
