@@ -53,6 +53,8 @@ Filename bytes are checked with the codec/error mode recorded in the application
 
 ## Validation scope
 
+The [post-run comparison component](python-code-comparison.md) can compile or decode retained inputs in isolated workers and compare nested code roots with selected descriptors. It keeps ambiguous, unmatched and incomplete outcomes explicit. This diagnostic API is not yet automatic supervisor publication, source-origin proof or whole-program closure; `source_complete=false` stays unchanged.
+
 Native tests compare raw stdout/stderr, exits, encodings, BOM/CRLF, error printing, main-frame identity, relative/Unicode/symlink spelling, flags and entry metadata. They retain actual consumed bytes even when the running app later rewrites its own file. Other cases cover size/count bounds, invalid launch descriptors/options, actual failed I/O, FD reuse and abrupt exit. The C writer fixture tests protocol/status boundaries. A separate native fault fixture checks read errors with context-manager cleanup errors, invalid metadata/path encoding and wrapper allocation failure. Its synthetic/error records are component tests, not application provenance.
 
 The native gate profiles real driver/library execution and requires at least 80% LLVM line coverage in each maintained native `.c` file. It retains function and branch counts separately in `build/python-native-coverage.json`. This gate is separate from Sonar's Python/Java/Node reports. The Python decoder, builder and gate also have focused tests. Coverage percentages alone do not qualify the complete language or untested allocation/platform failure paths.
