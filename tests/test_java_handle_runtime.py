@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
-from otelc import witness
+from otelc import java, witness
 import test_witness as direct
 
 
@@ -31,7 +34,49 @@ def source(receiver: bool) -> str:
     return text
 
 
+def wide_source(receiver: bool) -> str:
+    """Exercise both category-two arguments through the actual verifier and probe."""
+    text = source(receiver).replace('int seed)', 'long seed,double fraction)')
+    text = text.replace('MethodType.methodType(int.class,int.class)',
+                        'MethodType.methodType(int.class,long.class,double.class)')
+    text = text.replace('HANDLE.invokeExact(receiver,seed)', 'HANDLE.invokeExact(receiver,seed,fraction)')
+    text = text.replace('HANDLE.invokeExact(seed)', 'HANDLE.invokeExact(seed,fraction)')
+    text = text.replace('return wrapper(receiver, seed);', 'return wrapper(receiver, seed,fraction);')
+    text = text.replace('return wrapper(seed);', 'return wrapper(seed,fraction);')
+    text = text.replace('envelope(receiver, Integer.parseInt(line))',
+                        'envelope(receiver, Long.parseLong(line),Double.parseDouble(line)+0.25)')
+    text = text.replace('envelope(Integer.parseInt(line))',
+                        'envelope(Long.parseLong(line),Double.parseDouble(line)+0.25)')
+    text = text.replace('return seed + offset;', 'return Math.toIntExact(seed + offset);')
+    text = text.replace('return seed + 1;', 'return Math.toIntExact(seed + 1);')
+    text = text.replace('if (seed < 0) throw FAILURE;',
+        'if(Double.doubleToRawLongBits(fraction)!=Double.doubleToRawLongBits((double)seed+0.25))'
+        'throw new AssertionError("wide argument changed"); if (seed < 0) throw FAILURE;')
+    return text
+
+
 class JavaHandleRuntimeTests(unittest.TestCase):
+    def test_wide_fixture_refuses_a_changed_double_even_when_integer_result_would_match(self) -> None:
+        text = wide_source(False).replace('Double.parseDouble(line)+0.25', 'Double.parseDouble(line)+0.5')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            entry = root / 'Harness.java'
+            entry.write_text(text)
+            subprocess.run([java.executable('javac'), '-d', str(root), str(entry)],
+                           capture_output=True, check=True, timeout=20)
+            result = subprocess.run([java.executable('java'), '-cp', str(root), 'Harness'],
+                                    input=b'7\ngo\nquit\n', capture_output=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'wide argument changed', result.stderr)
+
+    def test_actual_static_long_double_arguments_preserve_values_and_receipt(self) -> None:
+        direct.WitnessIntegrationTests.exercise(self, wide_source(False), profile=witness.HANDLE_PROFILE,
+                                               argument_descriptor='JD')
+
+    def test_actual_instance_long_double_arguments_preserve_values_live_metrics_and_receipt(self) -> None:
+        direct.WitnessIntegrationTests.exercise(self, wide_source(True), receiver=True,
+            profile=witness.HANDLE_PROFILE, live_metrics=True, argument_descriptor='JD')
+
     def test_private_static_handle_preserves_scopes_errors_and_actual_receipt(self) -> None:
         direct.WitnessIntegrationTests.exercise(self, source(False), profile=witness.HANDLE_PROFILE)
 

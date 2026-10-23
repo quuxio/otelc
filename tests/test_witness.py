@@ -220,7 +220,8 @@ final class Work {
                  helper_collision: bool = False, extra_unscoped: int = 0,
                  live_metrics: bool = False, archive: str | None = None,
                  profile: str = witness.PROFILE, expected_refusal: str = "target_not_entered",
-                 substituted_value: int = 9, recursive_entries: int = 1) -> None:
+                 substituted_value: int = 9, recursive_entries: int = 1,
+                 argument_descriptor: str = "I") -> None:
         def exchange(path, operation, *arguments):
             return witness.request(path, operation, *arguments, profile=profile)
 
@@ -267,7 +268,8 @@ final class Work {
             application = prepared_java.PreparedApplication.load(manifest)
             declarations = {role: {"owner": "Work" if role == "target" else "Harness", "name": role,
                                   "descriptor": "()V" if role == "rendezvous" else
-                                      "(LWork;I)I" if receiver and role in ("envelope", "wrapper") else "(I)I"}
+                                      f"(LWork;{argument_descriptor})I" if receiver and role in ("envelope", "wrapper")
+                                      else f"({argument_descriptor})I"}
                             for role in witness.ROLES}
             frozen = root / "bindings.json"
             compiler_result = witness.compile_bindings(application, declarations, frozen, profile=profile)

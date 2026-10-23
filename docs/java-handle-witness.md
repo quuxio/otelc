@@ -41,6 +41,8 @@ The initial instance profile requires the actual target receiver's exact Class. 
 
 Real-agent tests cover private static/instance and public/final instance targets, original output/state/error identity, all live metric states, wrong direct handles with the same output, adapted/bound handles restored to the same type, target initialiser noise, helper collisions, exact receiver refusal and direct recursion. They independently decode span IDs, parentage, nine typed identity attributes and zero reported attribute/event/link drops. Wrong thread, route digest and stale runtime arms do not consume readiness. Cancellation and delayed/failed export remain explicit incomplete outcomes. These tests do not establish generated consumer or shipping admission.
 
+Maintained static and instance controls pass `long` and `double` arguments through the actual agent and injected operand probe. The fixture checks the double's exact bits as well as the integer result, so a changed wide argument cannot hide behind an unchanged return value. The instance control also exercises live metric states. A separate stock-JVM negative control requires the fixture to reject a changed double.
+
 ## Use the explicit diagnostic API
 
 ```python
