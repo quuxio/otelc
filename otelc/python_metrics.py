@@ -77,6 +77,10 @@ class _SynchronousGate:
     def __init__(self, delegate: Any, controls: MetricControls) -> None:
         self.delegate = delegate
         self.controls = controls
+        self.name = delegate.name
+        self.unit = delegate.unit
+        self.description = delegate.description
+        self.instrumentation_scope = delegate.instrumentation_scope
 
 
 class _AddGate(_SynchronousGate):

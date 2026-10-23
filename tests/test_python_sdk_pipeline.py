@@ -144,6 +144,45 @@ class PythonSdkPipelineTests(unittest.TestCase):
         self.assertEqual(self.sdk.snapshot()['span_accounting']['queue_evidence'], 'unavailable')
         self.assertIsNone(self.sdk.snapshot()['span_accounting']['queue_dropped'])
 
+    def test_link_attribute_drop_count_survives_actual_otlp_encoding(self) -> None:
+        from opentelemetry import trace
+        from opentelemetry.attributes import BoundedAttributes
+        from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import ReadableSpan
+        from otelc import python_sdk_protocol as wire
+        from otelc.python_sdk_pipeline import WireSpan
+
+        link = trace.Link(span_context(context(trace_id='4'.zfill(32))),
+                          BoundedAttributes(maxlen=1, attributes={'a': 1, 'b': 2}))
+        original = ReadableSpan('fixture', context=span_context(context()),
+            resource=Resource({}), start_time=1000, end_time=2000, links=[link])
+        value = span(links=[{'context': context(trace_id='4'.zfill(32)),
+                            'attributes': dict(link.attributes),
+                            'dropped_attributes': link.dropped_attributes}])
+        wire.span(value)
+        rebuilt = WireSpan(value, Resource({}))
+        def encoded_link(item):
+            return encode_spans([item]).resource_spans[0].scope_spans[0].spans[0].links[0]
+        expected, actual = encoded_link(original), encoded_link(rebuilt)
+        self.assertEqual(expected.dropped_attributes_count, 1)
+        self.assertEqual(actual, expected)
+        # Older records retain their explicit default of zero.
+        del value['links'][0]['dropped_attributes']
+        self.assertEqual(encoded_link(WireSpan(value, Resource({}))).dropped_attributes_count, 0)
+
+    def test_event_attribute_drop_count_is_retained_on_actual_export(self) -> None:
+        from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+        from otelc import python_sdk_protocol as wire
+
+        value = span(events=[{'name': 'event', 'timestamp': 1500,
+                             'attributes': {'b': 2}, 'dropped_attributes': 1}])
+        wire.span(value)
+        self.sdk.span(value)
+        self.sdk.flush()
+        raw = encode_spans(self.span_exporter.spans).resource_spans[0].scope_spans[0].spans[0]
+        self.assertEqual(raw.events[0].dropped_attributes_count, 1)
+
     def test_periodic_failures_are_recorded_and_later_collection_can_recover(self) -> None:
         self.sdk.shutdown()
         self.metric_exporter = RecordingExporter()

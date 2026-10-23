@@ -40,7 +40,11 @@ for index,(collection,emission) in enumerate(((False,False),(True,False),(False,
              'trace_flags':1,'remote':False},
   'start_time':started,'end_time':started+1000,
   'attributes':{'state':index,'unicode':'α😀'},
-  'events':[{'name':'event','timestamp':started+1,'attributes':{'count':1}}],
+  'events':[{'name':'event','timestamp':started+1,'attributes':{'count':1},
+             'dropped_attributes':2}],
+  'links':[{'context':{'trace_id':'4'.zfill(32),'span_id':'5'.zfill(16),
+             'trace_flags':1,'remote':False},'attributes':{'count':1},
+             'dropped_attributes':3}],
   'dropped_attributes':2,'dropped_events':3,'dropped_links':4}})
  channel.request('flush')
 assert channel.seal({'function_completions':4,'active_functions':0,'runtime_losses':{},
@@ -106,6 +110,8 @@ class PythonSdkProcessTests(unittest.TestCase):
             self.assertEqual(span.trace_id.hex(), f'{index + 1:032x}')
             self.assertEqual(span.span_id.hex(), f'{index + 1:016x}')
             self.assertEqual(span.events[0].name, 'event')
+            self.assertEqual(span.events[0].dropped_attributes_count, 2)
+            self.assertEqual(span.links[0].dropped_attributes_count, 3)
             self.assertEqual((span.dropped_attributes_count, span.dropped_events_count,
                               span.dropped_links_count), (2, 3, 4))
         pids = {attribute.value.int_value for request in self.capture.traces
