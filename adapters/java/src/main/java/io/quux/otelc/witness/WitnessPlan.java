@@ -1,13 +1,23 @@
 package io.quux.otelc.witness;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.io.InputStreamReader;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Objects;
 import java.util.Set;
 
 /** Private generated plan, separate from the common user policy and closed launch/health APIs. */
@@ -17,6 +27,7 @@ public record WitnessPlan(Path socket, Map<String, WitnessBindings.Binding> bind
   public static final List<String> ROLES = List.of("envelope", "rendezvous", "wrapper", "target");
   private static final Set<String> FIELDS = Set.of("owner", "name", "descriptor", "class_sha256",
       "method_sha256", "probe_id", "origin");
+  private static final int MAX_BYTES = 32768;
 
   public WitnessPlan {
     bindings = Map.copyOf(bindings);
@@ -30,8 +41,10 @@ public record WitnessPlan(Path socket, Map<String, WitnessBindings.Binding> bind
         return super.put(key, value);
       }
     };
-    if (Files.size(file) > 32768) throw new IllegalArgumentException("witness plan exceeds its bound");
-    try (var reader = Files.newBufferedReader(file)) { values.load(reader); }
+    byte[] content = planBytes(file);
+    try (var reader = new InputStreamReader(new ByteArrayInputStream(content), StandardCharsets.UTF_8.newDecoder())) {
+      values.load(reader);
+    }
     validateShape(values);
     Map<String, WitnessBindings.Binding> bindings = new HashMap<>();
     Map<String, String> origins = new HashMap<>();
@@ -58,6 +71,40 @@ public record WitnessPlan(Path socket, Map<String, WitnessBindings.Binding> bind
     return new WitnessPlan(Path.of(values.getProperty("socket")), bindings, origins,
         hash(values.getProperty("build")), hash(values.getProperty("selection")),
         hash(values.getProperty("policy")), hash(values.getProperty("tooling")));
+  }
+
+  private static byte[] planBytes(Path file) throws IOException {
+    // The producer consumes a generated file in its owned private runtime,
+    // before application code starts. Arbitrary concurrent writers are outside
+    // this transport; observed replacement or growth must still fail closed.
+    BasicFileAttributes before = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+    if (!before.isRegularFile() || before.size() > MAX_BYTES) {
+      throw new IllegalArgumentException("witness plan must be a bounded regular file");
+    }
+    try (var input = Files.newByteChannel(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+      byte[] content = boundedBytes(input, before.size());
+      BasicFileAttributes after = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+      if (!after.isRegularFile() || before.fileKey() == null || !Objects.equals(before.fileKey(), after.fileKey())
+          || before.size() != after.size() || !before.lastModifiedTime().equals(after.lastModifiedTime())
+          || input.size() != before.size()) {
+        throw new IOException("witness plan changed while reading");
+      }
+      return content;
+    }
+  }
+
+  static byte[] boundedBytes(SeekableByteChannel input, long expected) throws IOException {
+    ByteBuffer bytes = ByteBuffer.allocate(MAX_BYTES + 1);
+    while (bytes.hasRemaining()) {
+      int count = input.read(bytes);
+      if (count < 0) break;
+      if (count == 0) throw new IOException("witness plan read made no progress");
+    }
+    if (bytes.position() > MAX_BYTES) throw new IllegalArgumentException("witness plan exceeds its bound");
+    if (bytes.position() != expected || input.size() != expected) {
+      throw new IOException("witness plan changed while reading");
+    }
+    return Arrays.copyOf(bytes.array(), bytes.position());
   }
 
   private static void validateShape(Properties values) {

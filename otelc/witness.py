@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from otelc import java, java_helpers
+from otelc import file_inputs, java, java_helpers
 
 if TYPE_CHECKING:
     from otelc.config import Policy
@@ -256,9 +256,8 @@ def load_bindings(path: Path, application: PreparedApplication) -> dict[str, Any
     """Read frozen offline bindings and match every role to original application inputs."""
     from otelc.prepared_java import unique_object
 
-    if path.stat().st_size > 32768:
-        raise ValueError("witness bindings exceed their size bound")
-    document = json.loads(path.read_text(), object_pairs_hook=unique_object)
+    _, content = file_inputs.checked_file(path, include_content=True, max_bytes=32768)
+    document = json.loads(content.decode('utf-8'), object_pairs_hook=unique_object)
     if (not isinstance(document, dict)
             or set(document) != {"schema_version", "kind", "profile", "bindings"}
             or type(document["schema_version"]) is not int

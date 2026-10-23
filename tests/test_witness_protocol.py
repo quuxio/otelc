@@ -5,6 +5,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,6 +37,20 @@ def reply() -> dict:
 
 
 class WitnessProtocolTests(unittest.TestCase):
+    def test_fifo_bindings_are_refused_without_waiting_for_a_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'bindings.json'
+            os.mkfifo(path, 0o600)
+            code = ('from pathlib import Path\nfrom types import SimpleNamespace\n'
+                    'from otelc import witness\n'
+                    'try: witness.load_bindings(Path(' + repr(str(path)) + '), SimpleNamespace(bindings={}))\n'
+                    'except ValueError as error: print(type(error).__name__, str(error))\n'
+                    'else: raise AssertionError("FIFO bindings were accepted")\n')
+            result = subprocess.run([sys.executable, '-c', code], capture_output=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b'not a regular file', result.stdout)
+            self.assertEqual(result.stderr, b'')
+
     def test_only_explicit_full_tracing_can_request_the_profile(self) -> None:
         application = SimpleNamespace()
         unused = Path("unused")
