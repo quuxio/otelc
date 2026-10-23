@@ -152,7 +152,7 @@ def _validate_paths(original: dict[str, Any]) -> None:
     if 'entry' in paths:
         entry = paths['entry']
         resolved = Path(entry['resolved'])
-        if (entry['requested'].startswith('-') or resolved.suffix != '.py'
+        if (resolved.suffix != '.py'
                 or not resolved.is_relative_to(Path(paths['root']['resolved']))):
             raise ValueError('native Python entry must be a source .py inside the app root')
 
@@ -160,8 +160,13 @@ def _validate_paths(original: dict[str, Any]) -> None:
 def resolve_plan(original: dict[str, Any]) -> dict[str, Any]:
     """Derive common settings and native argv without trusting a recorded command."""
     policy = _validate(original)
-    target = ([original['paths']['entry']['requested']] if original['module'] is None
-              else ['-m', original['module']])
+    if original['module'] is None:
+        spelling = original['paths']['entry']['requested']
+        # Preserve caller intent in the request; protect only the concrete
+        # interpreter argument, as the public frontend does for the same file.
+        target = ['./' + spelling if spelling.startswith('-') else spelling]
+    else:
+        target = ['-m', original['module']]
     return {'schema_version': 1, 'profile': original['profile'],
             'policy': copy.deepcopy(policy.data), 'plain': original['plain'],
             'cwd': original['paths']['root']['resolved'],
