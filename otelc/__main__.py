@@ -114,7 +114,7 @@ def main() -> int:
                                      diagnostic_profile=args.diagnostic_profile)
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"],
-                              "candidates": ["typescript", "javascript"],
+                              "candidates": ["typescript", "javascript", "python"],
                               "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":

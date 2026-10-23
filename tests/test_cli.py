@@ -21,13 +21,19 @@ class CliTests(unittest.TestCase):
     def test_inspection_reports_current_and_future_adapters(self) -> None:
         result = json.loads(self.invoke(["plan"]))
         self.assertEqual(result["implemented"], ["java"])
-        self.assertEqual(result["candidates"], ["typescript", "javascript"])
+        self.assertEqual(result["candidates"], ["typescript", "javascript", "python"])
         self.assertIn("rust", result["remaining"])
 
     def test_not_implemented_is_an_execution_error(self) -> None:
         with patch("sys.argv", ["quux-otelc", "example", "rust"]), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             main()
         self.assertEqual(error.exception.code, 1)
+
+    def test_python_candidacy_does_not_advertise_implementation(self) -> None:
+        result = json.loads(self.invoke(["plan"]))
+        self.assertIn("python", result["candidates"])
+        self.assertIn("python", result["remaining"])
+        self.assertNotIn("python", result["implemented"])
 
     def test_dispatches_the_actual_selected_operation(self) -> None:
         state = {"schema_version": 1, "pid": 123, "collection": False, "emission": False}
