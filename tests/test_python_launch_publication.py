@@ -62,63 +62,87 @@ class LaunchPublicationTests(unittest.TestCase):
             self.assertFalse(path.with_name(path.name + '.staging').exists())
 
 
-    def test_reader_accepts_completed_publication_link_cleanup_but_refuses_changed_bytes(self) -> None:
-        for changed in (False, True):
-            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
-                path = Path(temporary) / 'ready.json'
-                available = threading.Event()
-                release = threading.Event()
-                finished = threading.Event()
-                failures = []
-                real_link, real_stat = os.link, os.fstat
-                consumer = threading.get_ident()
-                reads = 0
+    def test_in_progress_publication_reads_no_bytes_and_a_fresh_poll_reads_after_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'ready.json'
+            available = threading.Event()
+            release = threading.Event()
+            failures = []
+            real_link = os.link
 
-                def link(*args, **kwargs):
-                    real_link(*args, **kwargs)
-                    available.set()
-                    if not release.wait(3):
-                        raise TimeoutError('consumer did not open publication')
+            def link(*args, **kwargs):
+                real_link(*args, **kwargs)
+                available.set()
+                if not release.wait(3):
+                    raise TimeoutError('consumer did not observe publication')
 
-                def publish():
-                    try:
-                        files.write(path, {'value': 'original'})
-                    except BaseException as error:
-                        failures.append(error)
-                    finally:
-                        finished.set()
+            def publish():
+                try:
+                    files.write(path, {'value': 'original'})
+                except BaseException as error:
+                    failures.append(error)
 
-                def metadata(descriptor):
-                    nonlocal reads
-                    info = real_stat(descriptor)
-                    if threading.get_ident() == consumer:
-                        reads += 1
-                        if reads == 1:
-                            self.assertEqual(info.st_nlink, 2)
-                            release.set()
-                            self.assertTrue(finished.wait(3))
-                        elif reads == 2 and changed:
-                            path.write_bytes(recipe.encoded({'value': 'replaced'}).encode())
-                            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
-                            info = real_stat(descriptor)
-                    return info
+            with patch.object(io.os, 'link', side_effect=link):
+                publisher = threading.Thread(target=publish)
+                publisher.start()
+                try:
+                    self.assertTrue(available.wait(3))
+                    with patch.object(files.os, 'fdopen') as read:
+                        with self.assertRaises(files.PublicationPending):
+                            files.read(path)
+                    read.assert_not_called()
+                finally:
+                    release.set()
+                    publisher.join(timeout=3)
+            self.assertFalse(publisher.is_alive())
+            self.assertEqual(failures, [])
+            self.assertEqual(path.stat().st_nlink, 1)
+            self.assertEqual(files.read(path)[0], {'value': 'original'})
 
-                with patch.object(io.os, 'link', side_effect=link), \
-                     patch.object(files.os, 'fstat', side_effect=metadata):
-                    publisher = threading.Thread(target=publish)
-                    publisher.start()
-                    try:
-                        self.assertTrue(available.wait(3))
-                        if changed:
-                            with self.assertRaisesRegex(ValueError, 'changed while reading'):
-                                files.read(path)
-                        else:
-                            self.assertEqual(files.read(path)[0], {'value': 'original'})
-                    finally:
-                        release.set()
-                        publisher.join(timeout=3)
-                self.assertFalse(publisher.is_alive())
-                self.assertEqual(failures, [])
+    def test_final_publication_still_refuses_rewrite_after_initial_stat_before_data_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'ready.json'
+            files.write(path, {'value': 'original'})
+            real_stat = os.fstat
+            reads = 0
+
+            def metadata(descriptor):
+                nonlocal reads
+                info = real_stat(descriptor)
+                reads += 1
+                if reads == 1:
+                    path.write_bytes(recipe.encoded({'value': 'replaced'}).encode())
+                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+                return info
+
+            with patch.object(files.os, 'fstat', side_effect=metadata):
+                with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                    files.read(path)
+
+    def test_rewrite_before_first_data_read_during_publication_is_not_a_completed_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'ready.json'
+            staged = path.with_name(path.name + '.staging')
+            staged.write_bytes(recipe.encoded({'value': 'original'}).encode())
+            staged.chmod(0o600)
+            os.link(staged, path)
+            real_stat = os.fstat
+            reads = 0
+
+            def metadata(descriptor):
+                nonlocal reads
+                info = real_stat(descriptor)
+                reads += 1
+                if reads == 1:
+                    self.assertEqual(info.st_nlink, 2)
+                    path.write_bytes(recipe.encoded({'value': 'replaced'}).encode())
+                    os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    staged.unlink()
+                return info
+
+            with patch.object(files.os, 'fstat', side_effect=metadata):
+                with self.assertRaises(FileNotFoundError):
+                    files.read(path)
 
     def test_ctime_change_without_publication_link_cleanup_still_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -137,3 +161,15 @@ class LaunchPublicationTests(unittest.TestCase):
             with patch.object(files.os, 'fstat', side_effect=metadata):
                 with self.assertRaisesRegex(ValueError, 'changed while reading'):
                     files.read(path)
+
+
+    def test_other_link_counts_are_invalid_without_reading_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'ready.json'
+            files.write(path, {'value': 'original'})
+            os.link(path, path.with_name('other-1'))
+            os.link(path, path.with_name('other-2'))
+            with patch.object(files.os, 'fdopen') as read:
+                with self.assertRaisesRegex(ValueError, 'one final link'):
+                    files.read(path)
+            read.assert_not_called()

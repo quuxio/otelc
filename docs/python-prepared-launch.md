@@ -40,6 +40,8 @@ Normal exceptions and app failures preserve native output and exit codes. The re
 
 Ordinary monitoring errors preserve application results. If an application audit hook refuses frame access, the probes respect that refusal and record `monitor_frame` loss. They do not retry with another introspection mechanism. Returns, original exception objects and generator/coroutine results remain native; missing observations make the final SDK evidence fail. A call whose completion cannot be observed remains incomplete rather than acquiring a fabricated completion.
 
+Generated metadata becomes readable after the publisher removes its staging hard link. A two-link file raises `python_launch_files.PublicationPending` (a `FileNotFoundError` subclass) without reading any bytes; startup polling retries. A final single-link file then uses the strict owned-file snapshot, including inode, size, permissions, ownership, modification/change times and link-count stability. Other link counts are refused. A fresh read after publication does not authenticate earlier in-progress bytes or their writer; consumers still require the expected request, ownership and final-field checks.
+
 `phase=closed` describes this owned execution and SDK drain, not full source provenance or collector delivery. Every prepared/final response still has `source_complete=false`. A module may complete its lifecycle while its complete entry/code provenance remains explicitly unavailable. `null` identities/exits identify unavailable evidence; they are not healthy zero counters.
 
 ## Current boundary
