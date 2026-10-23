@@ -432,6 +432,11 @@ class Lifetimes:
     def status(self) -> dict[str, Any]:
         with self.runtime._lock:
             self.drain()
+            return self.snapshot()
+
+    def snapshot(self) -> dict[str, Any]:
+        """Read counters without publishing queued GC observations."""
+        with self.runtime._lock:
             return {'admitted': self.admitted, 'gc_completed': self.gc_completed,
                 'resource_completed': self.resource_completed,
                 'current_live': self.censored if self.closed else len(self.instances),
@@ -439,6 +444,11 @@ class Lifetimes:
                 'tracked_constructors': len(self.types), 'failed_initialisations': self.failed_initialisations,
                 'failed_releases': self.failed_releases, 'censored': self.censored,
                 'lost': sum(self.losses.values()), 'losses': dict(self.losses)}
+
+    def pending_events(self) -> int:
+        """Expose an undrained observation queue without changing its contents."""
+        with self._pending_lock:
+            return len(self._pending)
 
     def close(self) -> None:
         with self.runtime._lock:

@@ -2,7 +2,9 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This candidate adds selected function metrics/spans, weak object/resource lifetime observations, configured thread propagation and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling, threading instrumentor and metric/OTLP pipeline. The public `plan` still reports Python as remaining: HTTP/library integration, complete source evidence, benchmarks, independent review and oteleq qualification are delivery work.
+This candidate adds selected function metrics/spans, weak object/resource lifetime observations, configured thread propagation and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling, threading instrumentor and metric/OTLP pipeline. The public `plan` still reports Python as remaining: broader library integration, complete source evidence, independent review and oteleq qualification are delivery work.
+
+Script entries are validated source files inside the selected root. A relative filename beginning with `-` is passed with a `./` prefix so CPython treats it as a file. Application arguments, including option-shaped strings, remain literal arguments after the entry. Other entry spelling and module-name validation are unchanged.
 
 ## An unchanged application
 
@@ -60,7 +62,7 @@ Save it as `/tmp/otelc-functions.toml`. From a prepared checkout, start the [loc
 make stack-up
 runtime="$(mktemp -d /tmp/otelc-python.XXXXXX)/runtime"
 echo "$runtime"
-.venv/bin/python -m otelc --config /tmp/otelc-functions.toml python \
+bin/quux-otelc --config /tmp/otelc-functions.toml python \
   --root "$PWD" --entry examples/python/BenchmarkApp.py --runtime "$runtime"
 ```
 
@@ -69,20 +71,20 @@ Enter `10` for a batch of ten calls. Enter `throw` for a caught exception, or `q
 In another terminal, use the printed runtime path from the first terminal:
 
 ```sh
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json status
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json collection on
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json emission on
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json flush
-python -m otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json off
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json status
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json collection on
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json emission on
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json flush
+bin/quux-otelc metrics --socket /tmp/otelc-python.XXXXXX/runtime/control.json off
 ```
 
-Use `.venv/bin/python` if `python` is not available. The endpoint is private authenticated loopback; the shared client reads its token without printing it. Collection and emission switch in the existing app/SDK pair, including from initially off. Disabling metrics leaves traces enabled. An admitted export remains pending until its actual outcome; disabling emission does not cancel it. New controls do not hold the application's observation lock while waiting for an SDK acknowledgement.
+Use `bin/quux-otelc` after `make setup`; `OTELC_PYTHON` can select another SDK virtual environment. The endpoint is private authenticated loopback; the shared client reads its token without printing it. Collection and emission switch in the existing app/SDK pair, including from initially off. Disabling metrics leaves traces enabled. An admitted export remains pending until its actual outcome; disabling emission does not cancel it. New controls do not hold the application's observation lock while waiting for an SDK acknowledgement.
 
-Module entry is also native: replace `--entry ...` with `--module package.module`. Place app arguments after `--`. `--plain` starts the same native source without instrumentation or SDK runtime files.
+Module entry is also native: replace `--entry ...` with `--module package.module`. Place app arguments after `--`. `--plain` starts the same native source without instrumentation or an SDK, retaining preparation, native entry journal and execution files. Add `--prepare-only` to print the fixed launch recipe without starting an app/SDK; see [prepared native launch](python-prepared-launch.md).
 
 ## What is observed
 
-Sources use the common root-relative glob selectors. Function identity is the dotted relative filename, without `.py`, followed by the code object's qualified name. Exclusions take precedence. The tool does not replace functions, code objects, signatures, arguments, return values or exceptions. Native `sys.monitoring` distinguishes completion, unwinding, suspension and resume. Suspended/censored work is never reported as a finished span.
+Sources use the common root-relative glob selectors. Function identity is the dotted relative filename, without `.py`, followed by the code object's qualified name. Exclusions take precedence. The tool does not replace functions, code objects, signatures, arguments, return values or exceptions. Native `sys.monitoring` distinguishes completion, unwinding, suspension and resume. Suspended/censored work is never reported as a finished span. The prepared native profile also attaches a process-local `otelc.python.code_id` to selected function spans and metrics, bound to the actual monitored code descriptor in the [native input journal](python-input-journal.md#selected-code-descriptors). Selection caches use weak code references so code constants can be released normally.
 
 The app-side official tracer has a public OS-entropy ID generator and a primitive span processor. It does not run the OTLP exporter or metric aggregator. The [owned SDK process](python-sdk-process.md) handles aggregation, batching, retries and export without consuming app pseudo-random state. Tracing uses parent-based ratio sampling.
 
@@ -102,11 +104,11 @@ The ordinary [TaskApp.py](../examples/python/TaskApp.py) reuses one executor, st
 
 ```sh
 runtime="$(mktemp -d /tmp/otelc-python-tasks.XXXXXX)/runtime"
-.venv/bin/python -m otelc --config examples/tasks.toml python \
+bin/quux-otelc --config examples/tasks.toml python \
   --root "$PWD" --entry examples/python/TaskApp.py --runtime "$runtime"
 ```
 
-It prints `{"results": [70, 98], "failure": "negative seed"}`. The policy uses common function-name globs; qualified nested functions that match them are also selected. The test suite checks both policy states with a real receiver, plus baggage and context isolation on reused workers. Thread subclasses which replace `run`, custom executors, process pools, forks and arbitrary scheduler implementations are not qualified. HTTP remains explicitly refused until its separate integration is implemented.
+It prints `{"results": [70, 98], "failure": "negative seed"}`. The policy uses common function-name globs; qualified nested functions that match them are also selected. The test suite checks both policy states with a real receiver, plus baggage and context isolation on reused workers. Thread subclasses which replace `run`, custom executors, process pools, forks and arbitrary scheduler implementations are not qualified. The separate [HTTP candidate](python-http.md) covers ordinary urllib/WSGI clients and servers.
 
 ## Object and resource lifetimes
 
@@ -138,7 +140,7 @@ To run the unchanged example with the full shared policy:
 
 ```sh
 runtime="$(mktemp -d /tmp/otelc-python-lifetimes.XXXXXX)/runtime"
-.venv/bin/python -m otelc --config examples/otelc.toml python \
+bin/quux-otelc --config examples/otelc.toml python \
   --root "$PWD" --entry examples/python/BenchmarkApp.py --runtime "$runtime"
 ```
 
@@ -146,9 +148,11 @@ Enter `10` for ordinary work, `lifecycle` for constructor failure/release retry,
 
 ## Evidence and current limits
 
+The internal [native entry input component](python-input-journal.md) retains consumed script bytes without a Python runner frame. Its [fixed request/argv layer](python-launch-recipe.md) keeps original caller intent separate from resolved policy and preserves the installed launcher's native argv0. The [prepared native supervisor](python-prepared-launch.md) now connects these components and retains actual process ownership and post-drain input checks. Complete import/code provenance and frozen-provider admission remain outstanding.
+
 Local integration tests use CPython 3.12 and the locked SDK. They compare original script/module metadata, arguments, source hashes, seeded random values, signatures, output, tracebacks and exit codes against native baselines. Real receivers decode the four-state example's metric counts and spans, bound to the actual application PID rather than the CLI/SDK PID. Separate tests cover recursion/context boundaries, async suspension/cancellation, occupied monitoring IDs, controlled startup/probe failures, queue/transport evidence and open control connections. These are tested profiles, not a claim about arbitrary applications.
 
-The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. Enabled HTTP-context policy currently causes a pre-launch refusal. Benchmark/Grafana comparisons for Python remain outstanding; function/lifetime telemetry uses the configured Collector endpoint, but no Python performance result is claimed by these tests.
+The launcher currently uses otelc's interpreter/environment; install app dependencies there. Arbitrary interpreter/virtualenv selection, isolated/no-site modes, interactive/zip/bytecode entry, fork/process observation, arbitrary context manipulation, annotation reading, complete source provenance and common `health` presentation are not yet qualified. The [HTTP candidate](python-http.md) now accepts the common HTTP switch for its declared urllib/WSGI profile. The [paired benchmark workflow](benchmarks.md) runs the ordinary Python example in plain and four same-PID metric states and publishes driver measurements to the configured Collector. Raw samples and separate app/SDK CPU/RSS windows remain available locally. These functional checks do not establish stable performance estimates.
 
 Run the focused tests from a prepared checkout:
 
@@ -161,3 +165,5 @@ make check
 ```
 
 CPython suppresses trace events while running monitoring callbacks. Coverage therefore combines real VM integration with direct internal component tests; the latter are test fixtures, not required developer code changes. Required main-target checks, independent review and immutable-provider oteleq acceptance still apply before Python can be promoted to implemented.
+
+Function selection caches excluded code by weak identity, up to 4096 entries, to avoid repeating filename resolution for SDK and other unselected functions. The cache does not retain code or its constants, frames or application objects. It checks reference identity before a hit. Cache writes, GC removal and shutdown cleanup never wait for a contended cache lock. Contention uses ordinary uncached selection; a skipped removal can leave a bounded dead weak-reference slot until its identity is reused or uncontended shutdown clears it. No application code/object is retained by that slot. At capacity, selection still runs normally for uncached code; capacity does not suppress telemetry. This uses the launch's fixed selection policy and does not disable lifetime monitoring callbacks. The focused regression counts filesystem resolutions, rather than asserting a host-dependent latency target. Global monitoring, tracing and lifetime bookkeeping still add cost when metric collection/emission are off; use separately labelled trace/lifetime policies to isolate those costs in the benchmark workflow.

@@ -28,6 +28,7 @@ class Invocation:
     collect: bool
     span: trace.Span | None
     token: Token[Context] | None = None
+    code_id: int | None = None
 
 
 def exception_type(error: BaseException) -> str:
@@ -71,15 +72,18 @@ class PythonRuntime:
                 self._detach(call)
                 self.reject('incomplete')
 
-    def enter(self, key: int, name: str) -> None:
+    def enter(self, key: int, name: str, *, code_id: int | None = None) -> None:
         with self._lock:
             if self.closed:
                 return
             if key in self.pending or len(self.pending) >= MAX_ACTIVE:
                 self.reject('active_capacity')
                 return
-            span = self._tracer.start_span(name, attributes={'code.function.name': name}) if self._tracer else None
-            call = Invocation(name, time.perf_counter_ns(), self.collection, span)
+            attributes: dict[str, str | int] = {'code.function.name': name}
+            if code_id is not None:
+                attributes['otelc.python.code_id'] = code_id
+            span = self._tracer.start_span(name, attributes=attributes) if self._tracer else None
+            call = Invocation(name, time.perf_counter_ns(), self.collection, span, code_id=code_id)
             self.pending[key] = call
             self._attach(call)
 
@@ -127,7 +131,9 @@ class PythonRuntime:
                     call.span.add_event('exception', {'exception.type': kind})
                 call.span.end()
             if call.collect and self.collection:
-                attributes = {'function': call.name}
+                attributes: dict[str, str | int] = {'function': call.name}
+                if call.code_id is not None:
+                    attributes['otelc.python.code_id'] = call.code_id
                 observed = python_tracing.encoded_context(call.span.get_span_context()) if call.span else None
                 self._metric('counter', 'otelc.function.calls', 1, attributes,
                              span_context=observed)
@@ -137,14 +143,15 @@ class PythonRuntime:
                     self._metric('counter', 'otelc.function.exceptions', 1, attributes,
                                  span_context=observed)
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, observe_lifetimes: bool = True) -> dict[str, Any]:
         with self._lock:
             state = {'schema_version': 1, 'pid': os.getpid(), 'sdk_pid': self.channel.sdk_pid,
                     'collection': self.collection, 'emission': self.emission,
                     'function_completions': self.completed, 'active_functions': len(self.pending),
                     'runtime_losses': dict(self.losses)}
             if self.lifetimes is not None:
-                state['lifetimes'] = self.lifetimes.status()
+                state['lifetimes'] = (self.lifetimes.status() if observe_lifetimes
+                                      else self.lifetimes.snapshot())
             return state
 
     def controls(self, collection: bool, emission: bool) -> dict[str, Any]:
@@ -172,7 +179,8 @@ class PythonRuntime:
             if (state['collection'], state['emission']) != (collection, emission):
                 self.reject('control_acknowledgement')
                 raise ValueError('Python control acknowledgement differs')
-            return {**self.status(), 'effective_emission_off': state['effective_emission_off']}
+            return {**self.status(), 'effective_emission_off': state['effective_emission_off'],
+                    'in_flight_exports': state['in_flight_exports']}
         finally:
             self._control_lock.release()
 
