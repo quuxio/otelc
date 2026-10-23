@@ -143,14 +143,15 @@ class PythonRuntime:
                     self._metric('counter', 'otelc.function.exceptions', 1, attributes,
                                  span_context=observed)
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, observe_lifetimes: bool = True) -> dict[str, Any]:
         with self._lock:
             state = {'schema_version': 1, 'pid': os.getpid(), 'sdk_pid': self.channel.sdk_pid,
                     'collection': self.collection, 'emission': self.emission,
                     'function_completions': self.completed, 'active_functions': len(self.pending),
                     'runtime_losses': dict(self.losses)}
             if self.lifetimes is not None:
-                state['lifetimes'] = self.lifetimes.status()
+                state['lifetimes'] = (self.lifetimes.status() if observe_lifetimes
+                                      else self.lifetimes.snapshot())
             return state
 
     def controls(self, collection: bool, emission: bool) -> dict[str, Any]:

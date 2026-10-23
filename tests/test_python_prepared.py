@@ -21,7 +21,9 @@ from otelc.config import Policy
 from otelc import prepared_python as prepared
 from otelc import python_launch_files as files
 from otelc import python_input_journal as inputs
+from otelc import health, control
 from otelc.python_supervisor import Owner
+from otelc.python_sdk_process import SdkProcess
 from test_java_integration import Capture
 
 
@@ -108,15 +110,74 @@ timeout_ms=1000
                         self.assertEqual(receipt['entry_evidence']['phase'],
                                          'complete' if module is None else 'unavailable')
                         if plain:
+                            self.assertFalse((directory / 'health.json').exists())
                             self.assertIsNone(receipt['sdk'])
                             self.assertIsNone(receipt['bootstrap_recheck'])
                         else:
+                            observed = health.read(directory / 'health.json')
+                            self.assertEqual(observed['pid'], receipt['application']['pid'])
+                            self.assertEqual(observed['sdk_pid'], receipt['sdk']['pid'])
+                            self.assertEqual(observed['application_exit'], native.returncode)
+                            self.assertEqual(observed['lifecycle']['shutdown'], 'succeeded')
+                            self.assertFalse(observed['source_complete'])
                             self.assertEqual(receipt['sdk']['phase'], 'closed')
                             self.assertEqual(receipt['sdk']['returncode'], 0)
                             self.assertTrue(receipt['bootstrap_recheck'])
                             self.assertNotIn(receipt['sdk']['pid'],
                                              (receipt['application']['pid'], receipt['supervisor_pid']))
                         self.assertEqual(self.entry.read_text(), source)
+
+    def test_public_health_cli_reads_live_and_final_actual_process_pair(self) -> None:
+        self.entry.write_text('import sys\ndef workload(): return 42\n'
+            'for command in sys.stdin:\n'
+            '    if command.strip() == "stop": break\n'
+            '    print(workload(), flush=True)\n')
+        directory, value = self.prepare()
+        process = subprocess.Popen(value['command'], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 15
+            while True:
+                try:
+                    application, _ = files.read(directory / 'python-application-start.json')
+                    control.wait_ready(directory / 'control.json', application['application_pid'], timeout=1)
+                    break
+                except (FileNotFoundError, OSError):
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError('application health endpoint unavailable')
+                    time.sleep(.01)
+            environment = {**os.environ, 'OTELC_PYTHON': sys.executable}
+            command = [str(prepared.ROOT / 'bin/quux-otelc'), 'health']
+            live = subprocess.run([*command, '--socket', str(directory / 'control.json')],
+                capture_output=True, env=environment, timeout=5, check=True)
+            observed = health.validate(json.loads(live.stdout))
+            self.assertEqual(observed['pid'], application['application_pid'])
+            self.assertEqual(observed['sdk_pid'], application['sdk_pid'])
+            self.assertEqual(observed['metric_exports']['batches_started'], '0')
+            self.assertEqual(observed['phase'], 'running')
+            out, err = process.communicate(b'run\nstop\n', timeout=15)
+            self.assertEqual((process.returncode, out, err), (0, b'42\n', b''))
+            final = subprocess.run([*command, '--report', str(directory / 'health.json')],
+                capture_output=True, env=environment, timeout=5, check=True)
+            report = health.validate(json.loads(final.stdout))
+            self.assertEqual(report['phase'], 'final')
+            self.assertEqual(report['pid'], observed['pid'])
+            self.assertEqual(report['trace_exports']['units_succeeded'], '1')
+            self.assertEqual(report['application_exit'], 0)
+        finally:
+            if process.poll() is None:
+                SdkProcess._stop_process(process)
+                process.communicate(timeout=5)
+
+    def test_failed_health_publication_preserves_original_app_and_existing_file(self) -> None:
+        directory, value = self.prepare()
+        path = directory / 'health.json'; path.write_bytes(b'original'); path.chmod(0o600)
+        result = subprocess.run(value['command'], capture_output=True, timeout=20)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (1, b'', b''))
+        self.assertEqual(path.read_bytes(), b'original')
+        receipt, _ = files.read(directory / 'python-execution.json')
+        self.assertEqual(receipt['application']['returncode'], 0)
+        self.assertEqual(receipt['failures']['health'], 'unavailable')
 
     def test_direct_owner_drain_keeps_real_pids_and_source_untouched(self) -> None:
         directory, _ = self.prepare()

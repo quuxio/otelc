@@ -135,8 +135,9 @@ class PythonFrontendComponentTests(unittest.TestCase):
         self.runtime.leave(1, None)
         control.request(descriptor, 'flush')
         self.assertEqual(control.request(descriptor, 'status')['function_completions'], 1)
+        self.assertEqual(control.request(descriptor, 'health')['language'], 'python')
         with self.assertRaises(ValueError):
-            control.request(descriptor, 'health')
+            control.request(descriptor, 'invalid')
         requests = (b'{}\n', b'not-json\n', b'{' + b'x' * 5000 + b'\n',
                     json.dumps({'token': 'wrong', 'command': 'on'}).encode() + b'\n')
         for request in requests:
