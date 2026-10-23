@@ -21,6 +21,7 @@ from otelc import python_sdk_io as io
 from otelc import python_sdk_protocol as wire
 
 ROOT = Path(__file__).resolve().parent.parent
+REQUEST_PENDING = 'Python SDK request is still pending'
 
 
 def policy_digest(policy: Policy) -> str:
@@ -77,7 +78,7 @@ class SdkChannel:
         """Initialise the SDK with this native application's actual identity."""
         deadline = self._deadline(timeout)
         if not self._rpc_lock.acquire(timeout=timeout):
-            raise TimeoutError('Python SDK request is still pending')
+            raise TimeoutError(REQUEST_PENDING)
         try:
             if self.application_pid is not None:
                 raise RuntimeError('Python SDK channel is already bound')
@@ -101,7 +102,7 @@ class SdkChannel:
             raise RuntimeError('Python SDK channel is not bound')
         deadline = self._deadline(timeout)
         if not self._rpc_lock.acquire(timeout=timeout):
-            raise TimeoutError('Python SDK request is still pending')
+            raise TimeoutError(REQUEST_PENDING)
         try:
             record = {'kind': 'controls', 'collection': wire.flag(collection),
                       'emission': wire.flag(emission)}
@@ -123,7 +124,7 @@ class SdkChannel:
     def _exchange(self, record: dict[str, Any], timeout: float) -> dict[str, Any]:
         deadline = self._deadline(timeout)
         if not self._rpc_lock.acquire(timeout=timeout):
-            raise TimeoutError('Python SDK request is still pending')
+            raise TimeoutError(REQUEST_PENDING)
         try:
             if self._next > MAX_ID:
                 raise RuntimeError('Python SDK request identity exhausted')
