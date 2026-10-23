@@ -205,7 +205,7 @@ class PythonMonitorTests(unittest.TestCase):
     def test_source_exclusions_producer_protection_and_code_identity(self) -> None:
         code = self.namespace['workload'].__code__
         self.assertEqual(self.monitor.selected(code), 'fixture.workload')
-        self.assertIs(self.monitor._names[id(code)][0], code)
+        self.assertIs(self.monitor._names[id(code)][0](), code)
         self.assertIsNone(self.monitor.selected(compile('42', str(self.source), 'eval')))
         self.assertIsNone(self.monitor.selected(code.replace(co_filename='relative.py')))
         self.assertIsNone(self.monitor.selected(PythonMonitor.close.__code__))

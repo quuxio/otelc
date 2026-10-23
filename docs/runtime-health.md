@@ -2,14 +2,16 @@
 
 <!-- markdownlint-disable MD013 -->
 
+The same CLI also supports the [Python application/SDK health view](python-health.md), using an explicit version-two report. This page describes Java's unchanged version-one evidence contract.
+
 Instrumented Java launches retain a versioned `health.json` in their private runtime directory. The report observes the pinned official SDK pipeline independently of metric collection and emission. It is SDK evidence: exporter API success does not prove Collector acceptance, storage, or complete invocation attribution.
 
 ```sh
 # Inspect the running process, without changing metric states.
-.venv/bin/python -m otelc health --socket /tmp/otelc-RUNTIME/control.sock
+bin/quux-otelc health --socket /tmp/otelc-RUNTIME/control.sock
 
 # Inspect the retained checkpoint after the process exits normally.
-.venv/bin/python -m otelc health --report /tmp/otelc-RUNTIME/health.json
+bin/quux-otelc health --report /tmp/otelc-RUNTIME/health.json
 ```
 
 For prepared applications, `launch.identity["health_report"]` gives the report path. `launch.identity["policy_sha256"]` and `launch.identity["selection_sha256"]` bind the normalised policy and resolved selection. `selection.json` contains the resolved method, lifetime-type and resource-type selection; its file identity is retained with generated tooling. Plain launches have no health report or resolved-selection digest.

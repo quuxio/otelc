@@ -51,12 +51,14 @@ interval_ms=100000
         baseline = subprocess.run([sys.executable, 'entry.py'], cwd=self.application,
                                   capture_output=True, text=True, timeout=10)
         runtime = self.root / 'runtime'
-        result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(self.config),
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(self.config),
             'python', '--root', str(self.application), '--entry', 'entry.py',
             '--runtime', str(runtime)], cwd=ROOT, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.stdout, baseline.stdout)
-        expected_stderr = ('Python SDK drain failed or remains unverified\n' if loss else '')
-        self.assertEqual(result.stderr, baseline.stderr + expected_stderr)
+        self.assertEqual(result.stderr, baseline.stderr)
+        if loss:
+            diagnostic = json.loads((runtime / 'python-supervisor-error.json').read_text())
+            self.assertIn('unverified', diagnostic['message'])
         self.assertEqual(self.entry.read_bytes(), before)
         report = json.loads((runtime / 'sdk/python-sdk-status.json').read_text())
         return result, report
@@ -258,7 +260,7 @@ gc.collect();print('original')
             cwd=self.application, capture_output=True, text=True, timeout=10)
         expected = json.loads(plain.stdout)
         runtime = self.root / 'runtime'
-        process = subprocess.Popen([sys.executable, '-m', 'otelc', '--config', str(self.config),
+        process = subprocess.Popen([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(self.config),
             'python', '--root', str(self.application), '--entry', 'entry.py',
             '--runtime', str(runtime)], cwd=ROOT, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

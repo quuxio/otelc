@@ -65,7 +65,7 @@ class PythonMonitorCacheTests(unittest.TestCase):
             self.assertIsNone(self.monitor.selected(codes[-1]))
             selected = self.code('workload')
             self.assertEqual(self.monitor.selected(selected), 'entry.workload')
-            self.assertIs(self.monitor._names[id(selected)][0], selected)
+            self.assertIs(self.monitor._names[id(selected)][0](), selected)
         self.runtime.reject.assert_not_called()
 
     def test_stale_identity_entry_cannot_hide_a_different_selected_code(self) -> None:
@@ -120,3 +120,33 @@ class PythonMonitorCacheTests(unittest.TestCase):
         self.monitor.close()
         self.assertFalse(self.monitor._rejected)
         self.runtime.reject.assert_not_called()
+
+    def test_selected_cache_does_not_extend_code_or_constant_lifetime(self) -> None:
+        class Payload:
+            pass
+
+        value = Payload()
+        code = self.code('workload').replace(co_consts=(None, value))
+        code_ref, value_ref = weakref.ref(code), weakref.ref(value)
+        self.assertEqual(self.monitor.selected(code), 'entry.workload')
+        del code, value
+        self.assertIsNone(code_ref())
+        self.assertIsNone(value_ref())
+
+    def test_dead_selected_slots_are_reclaimed_at_capacity(self) -> None:
+        with mock.patch('otelc.python_monitor.MAX_FUNCTIONS', 1):
+            first = self.code('workload')
+            self.assertEqual(self.monitor.selected(first), 'entry.workload')
+            reference = weakref.ref(first)
+            del first
+            self.assertIsNone(reference())
+            second = self.code('workload')
+            self.assertEqual(self.monitor.selected(second), 'entry.workload')
+            self.assertEqual(len(self.monitor._names), 1)
+        self.runtime.reject.assert_not_called()
+
+    def test_stale_selected_identity_cannot_select_a_different_code(self) -> None:
+        old = self.code('workload')
+        excluded = self.code('unselected')
+        self.monitor._names[id(excluded)] = (weakref.ref(old), 'entry.workload')
+        self.assertIsNone(self.monitor.selected(excluded))

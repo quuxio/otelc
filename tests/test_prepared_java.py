@@ -294,7 +294,7 @@ public final class Driver {
             self.assertEqual(len(functions), 12)
             self.assertTrue(all("Driver" in name for name in functions))
             runtime = root / "cli"
-            result = subprocess.run([sys.executable, "-m", "otelc", "java",
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', str(Path(__file__).resolve().parents[1] / 'otelc/cli_bootstrap.py'), "java",
                                      "--manifest", str(manifest), "--runtime", str(runtime),
                                      "--plain", "--", "argument with spaces"],
                                     input="2\nquit\n", capture_output=True, text=True, check=True)
@@ -302,7 +302,7 @@ public final class Driver {
             self.assertEqual(result.stderr, APPLICATION_STDERR)
             self.assertGreater(json.loads((runtime / "process.json").read_text())["pid"], 0)
             runtime = root / "prepared-json"
-            result = subprocess.run([sys.executable, "-m", "otelc", "java", "--manifest", str(manifest),
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', str(Path(__file__).resolve().parents[1] / 'otelc/cli_bootstrap.py'), "java", "--manifest", str(manifest),
                                      "--runtime", str(runtime), "--prepare-only"],
                                     capture_output=True, text=True, check=True)
             identity = json.loads(result.stdout)

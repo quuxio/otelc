@@ -116,8 +116,9 @@ class PythonSdkPipelineTests(unittest.TestCase):
         self.assertEqual(observed.resource.attributes['process.pid'], 123)
         self.assertEqual(observed.instrumentation_scope.attributes, {'role': 'source'})
         self.assertIsNone(span_context(None))
+        invalid = context(trace_state='invalid')
         with self.assertRaises(ValueError):
-            span_context(context(trace_state='invalid'))
+            span_context(invalid)
 
     def test_export_failure_is_not_a_flush_success_and_recovery_keeps_history(self) -> None:
         self.sdk.controls.update(collection=True, emission=True)
@@ -254,9 +255,11 @@ class PythonSdkPipelineTests(unittest.TestCase):
         self.assertEqual(self.metric_exporter.shutdown_calls, 1)
 
     def test_tracing_disabled_or_unsampled_span_is_not_queued(self) -> None:
+        unsampled = span(context=context(trace_flags=0))
         with self.assertRaises(ValueError):
-            self.sdk.span(span(context=context(trace_flags=0)))
+            self.sdk.span(unsampled)
         self.sdk._traces_enabled = False
+        value = span()
         with self.assertRaises(ValueError):
-            self.sdk.span(span())
+            self.sdk.span(value)
         self.assertEqual(self.sdk.snapshot()['span_accounting']['received'], 0)

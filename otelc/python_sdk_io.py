@@ -48,6 +48,11 @@ def create_file(path: Path) -> int:
 def write_json(descriptor: int, value: dict[str, Any]) -> None:
     """Complete an owned regular-file write without accepting a short result."""
     data = json.dumps(value, allow_nan=False, separators=(',', ':')).encode() + b'\n'
+    write_bytes(descriptor, data)
+
+
+def write_bytes(descriptor: int, data: bytes) -> None:
+    """Finish an already encoded owned-file payload, including short writes."""
     offset = 0
     while offset < len(data):
         written = os.write(descriptor, data[offset:])
@@ -58,11 +63,17 @@ def write_json(descriptor: int, value: dict[str, Any]) -> None:
 
 def publish(path: Path, value: dict[str, Any]) -> None:
     """Publish new metadata only after its complete private write."""
+    data = json.dumps(value, allow_nan=False, separators=(',', ':')).encode() + b'\n'
+    publish_bytes(path, data)
+
+
+def publish_bytes(path: Path, data: bytes) -> None:
+    """Atomically publish caller-encoded metadata without replacing any file."""
     staged = path.with_name(path.name + '.staging')
     descriptor = create_file(staged)
     expected = os.fstat(descriptor)
     try:
-        write_json(descriptor, value)
+        write_bytes(descriptor, data)
         os.link(staged, path, follow_symlinks=False)
     finally:
         os.close(descriptor)

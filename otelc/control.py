@@ -63,7 +63,7 @@ def _read_endpoint(directory: int, expected: os.stat_result) -> bytes:
         os.close(descriptor)
 
 
-def exchange(client: socket.socket, payload: str) -> Any:
+def exchange(client: socket.socket, payload: str, *, maximum: int = 4096) -> Any:
     """Keep both transports on the same bounded framing and response deadline."""
     client.settimeout(3)
     client.sendall(payload.encode("ascii") + b"\n")
@@ -75,7 +75,7 @@ def exchange(client: socket.socket, payload: str) -> Any:
             raise TimeoutError("control response deadline exceeded")
         client.settimeout(remaining)
         piece = client.recv(1024)
-        if not piece or len(data) + len(piece) > 4096:
+        if not piece or len(data) + len(piece) > maximum:
             raise ValueError("incomplete or oversized control response")
         data.extend(piece)
     return json.loads(data)
@@ -105,15 +105,16 @@ def request(path: Path, command: str) -> dict[str, Any]:
     if command not in ("status", "on", "off", "collection on", "collection off", "emission on", "emission off", "flush", "health"):
         raise ValueError("unsupported control command")
     endpoint = endpoint_descriptor(path, metadata) if stat.S_ISREG(metadata.st_mode) else None
+    maximum = health.MAX_REPORT if command == 'health' else 4096
     if endpoint:
         # Never use a user-derived hostname, including after descriptor validation.
         with socket.create_connection(("127.0.0.1", endpoint["port"]), timeout=3) as client:
-            value = exchange(client, json.dumps({"token": endpoint["token"], "command": command}))
+            value = exchange(client, json.dumps({"token": endpoint["token"], "command": command}), maximum=maximum)
     else:
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(3)
             client.connect(str(path))
-            value = exchange(client, command)
+            value = exchange(client, command, maximum=maximum)
     return validate_response(value, command, endpoint["pid"] if endpoint else None)
 
 
