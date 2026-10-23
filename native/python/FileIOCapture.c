@@ -17,6 +17,7 @@ static pid_t owner_pid;
 static PyObject *file_type, *get_data_code, *read_method, *fileno_method;
 static initproc original_init;
 static getattrofunc original_getattro;
+static vectorcallfunc original_read_call;
 static _Thread_local PyFrameObject *suppressed_frame;
 static uint64_t next_generation;
 
@@ -136,10 +137,12 @@ static int same_snapshot(const struct stat *left, const struct stat *right) {
 #endif
 }
 
-static PyObject *file_read(PyObject *file, PyTypeObject *defining_class,
-                           PyObject *const *arguments, Py_ssize_t count, PyObject *keywords) {
-    (void)defining_class;
-    FileSlot *entry = owning_loader() ? slot(file, 0) : NULL;
+static PyObject *file_read(PyObject *method, PyObject *const *arguments,
+                           size_t count, PyObject *keywords) {
+    PyObject *file = PyCFunction_GetSelf(method);
+    int loader = owning_loader() && (PyObject *)Py_TYPE(file) == file_type;
+    FileSlot *entry = loader ? slot(file, 0) : NULL;
+    if (loader && !entry) otelc_py_journal_capture_failed();
     PyObject *path = entry ? Py_NewRef(entry->path) : NULL;
     uint64_t generation = entry ? entry->generation : 0;
     struct stat info;
@@ -154,11 +157,9 @@ static PyObject *file_read(PyObject *file, PyTypeObject *defining_class,
         }
         PyErr_Clear();
     }
-    /* Call the original bound C method, with the original literal arguments.
-       No Python lookup or application formatting occurs in the writer lock. */
-    PyObject *method = bound_method(read_method, file);
-    PyObject *payload = method ? PyObject_Vectorcall(method, arguments, (size_t)count, keywords) : NULL;
-    Py_XDECREF(method);
+    /* The actual bound method keeps its original definition and function.
+       Forward its literal vectorcall arguments, including the offset flag. */
+    PyObject *payload = original_read_call(method, arguments, count, keywords);
     if (capture && payload) {
         struct stat after;
         int current_descriptor;
@@ -185,29 +186,26 @@ static PyObject *file_read(PyObject *file, PyTypeObject *defining_class,
     return payload;
 }
 
-static PyMethodDef read_definition = {"read", _PyCFunction_CAST(file_read),
-    METH_METHOD | METH_FASTCALL | METH_KEYWORDS, NULL};
-
 static PyObject *file_getattro(PyObject *file, PyObject *name) {
     PyObject *result = original_getattro(file, name);
     if (!result || (PyObject *)Py_TYPE(file) != file_type || !PyUnicode_CheckExact(name) ||
             PyUnicode_CompareWithASCIIString(name, "read") || !owning_loader()) return result;
-    if (!slot(file, 0)) {
+    if (!slot(file, 0) || !PyCFunction_Check(result) || PyCFunction_GetSelf(result) != file ||
+            ((PyCFunctionObject *)result)->m_ml != ((PyMethodDescrObject *)read_method)->d_method) {
         otelc_py_journal_capture_failed();
         return result;
     }
-    /* Keep application replacements and their errors. Only the original C
-       read method on an actually tracked private loader file is observed. */
-    if (!PyCFunction_Check(result) || PyCFunction_GetSelf(result) != file ||
-            PyCFunction_GetFunction(result) != ((PyMethodDescrObject *)read_method)->d_method->ml_meth) return result;
-    PyObject *observed = PyCMethod_New(&read_definition, file, NULL, (PyTypeObject *)file_type);
-    if (!observed) {
+    vectorcallfunc call = ((PyCFunctionObject *)result)->vectorcall;
+    if (call == file_read) return result;
+    if (!call || (original_read_call && call != original_read_call)) {
         otelc_py_journal_capture_failed();
-        PyErr_Clear();
         return result;
     }
-    Py_DECREF(result);
-    return observed;
+    original_read_call = call;
+    /* No substitute callable or shared method-definition mutation. In
+       particular, existing method keys keep their equality and stable hash. */
+    ((PyCFunctionObject *)result)->vectorcall = file_read;
+    return result;
 }
 
 static PyObject *named_method(PyObject *dictionary, const char *name) {
@@ -229,7 +227,8 @@ int otelc_py_fileio_install(PyObject *type, PyObject *loader_code) {
     PyObject *initialiser = named_method(file->tp_dict, "__init__");
     if (!read || !fileno || !initialiser || !Py_IS_TYPE(read, &PyMethodDescr_Type) ||
             !Py_IS_TYPE(fileno, &PyMethodDescr_Type) || !Py_IS_TYPE(initialiser, &PyWrapperDescr_Type) ||
-            ((PyMethodDescrObject *)read)->d_method->ml_flags != read_definition.ml_flags) return -1;
+            ((PyMethodDescrObject *)read)->d_method->ml_flags !=
+                (METH_METHOD | METH_FASTCALL | METH_KEYWORDS)) return -1;
     initproc described;
     _Static_assert(sizeof(described) == sizeof(((PyWrapperDescrObject *)initialiser)->d_wrapped),
                    "unsupported CPython slot-wrapper ABI");
@@ -249,7 +248,6 @@ int otelc_py_fileio_install(PyObject *type, PyObject *loader_code) {
        same descriptor. Keep its identity while observing reinitialisation. */
     initproc observed_init = file_init;
     memcpy(&((PyWrapperDescrObject *)initialiser)->d_wrapped, &observed_init, sizeof(observed_init));
-    read_definition.ml_doc = ((PyMethodDescrObject *)read)->d_method->ml_doc;
     PyType_Modified(file);
     return 0;
 }

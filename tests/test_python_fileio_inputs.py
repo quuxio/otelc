@@ -81,6 +81,36 @@ print("original frames and file lifetime")
 ''')
         self.assertTrue(evidence.complete)
 
+    def test_profile_read_method_equality_hash_and_cached_descriptor_are_preserved(self) -> None:
+        (self.root / 'data.bin').write_bytes(b'abc')
+        evidence = self.run_pair('''import _io, sys
+from importlib._bootstrap_external import FileLoader
+descriptor = _io.FileIO.read
+events = []
+def profile(frame, event, function):
+    if event == "c_call" and getattr(function, "__name__", None) == "read":
+        file = getattr(function, "__self__", None)
+        if type(file) is _io.FileIO:
+            expected = descriptor.__get__(file, _io.FileIO)
+            events.append((function == expected, hash(function) == hash(expected)))
+sys.setprofile(profile)
+for _ in range(32):
+    assert FileLoader("data", "data.bin").get_data("data.bin") == b"abc"
+sys.setprofile(None)
+assert events == [(True, True)] * 32, events
+assert _io.FileIO.read is descriptor
+with _io.FileIO("data.bin", "r") as file:
+    method = file.read
+    assert method == descriptor.__get__(file, _io.FileIO)
+    assert method(1) == b"a" and descriptor(file, 1) == b"b"
+    try: method(size=1)
+    except TypeError as error: print(type(error).__name__, error.args)
+    else: raise AssertionError("positional-only read argument became a keyword")
+print("original descriptor, bound equality/hash and literal read arguments")
+''')
+        self.assertTrue(evidence.complete)
+        self.assertEqual([item.content for item in evidence.imports if item.path == b'data.bin'], [b'abc'] * 32)
+
     def test_original_closed_file_exception_and_cleanup_are_preserved(self) -> None:
         (self.root / 'data.bin').write_bytes(b'abc')
         evidence = self.run_pair('''import _io, sys
