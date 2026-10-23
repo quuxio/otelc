@@ -32,7 +32,7 @@ node-native-coverage: node-observer
 	OTELC_NODE="$(NODE)" $(PYTHON) ci/check_node_native_coverage.py
 
 python-inputs:
-	$(PYTHON) ci/build_python_inputs.py
+	$(PYTHON) -m ci.build_python_inputs
 
 python-inputs-check:
 	$(PYTHON) -m ci.check_python_inputs_coverage
@@ -64,6 +64,7 @@ test: java-build node-observer node-http
 	mkdir -p build
 	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
 	$(PYTHON) -m coverage report --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/native_encoder.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 
 check: lint java-check node-check python-inputs-check test

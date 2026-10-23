@@ -16,6 +16,8 @@ The [Python frontend candidate](docs/python-native.md) launches original CPython
 
 `plan` lists Python as a candidate and keeps it in `remaining`; it is not reported as implemented. Tooling consumers can inspect `otelc.prepared_python.protocols()` before launch to negotiate Python formats. These discovery responses do not establish source origin or provider qualification; see the [prepared launcher guide](docs/python-prepared-launch.md#negotiate-formats-without-launching).
 
+The [native input component](docs/python-input-journal.md#validation-scope) includes an SDK-independent descriptor encoder for source-origin work. It does not yet bind source reads to selected code or enable a new provider capability.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.

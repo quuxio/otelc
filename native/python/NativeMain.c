@@ -2,10 +2,12 @@
 #define _POSIX_C_SOURCE 200809L
 #include <Python.h>
 #include "InputJournal.h"
+#include "NativeEncoder.h"
 
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void process_exit(void) {
     /* Py_AtExit records successful finalization first. Early/native _exit
@@ -21,6 +23,8 @@ static void checked(PyStatus status, PyConfig *config) {
 }
 
 int main(int argc, char **argv) {
+    int origins = argc > 1 && !strcmp(argv[1], "--origin-observer");
+    if (origins) { --argc; ++argv; }
     /* driver inherited-journal-fd selected-python original-argv0 [native args] */
     if (argc < 5) return 64;
     char *end;
@@ -48,6 +52,12 @@ int main(int argc, char **argv) {
     }
     checked(PyConfig_SetBytesString(&config, &config.executable, argv[2]), &config);
     checked(Py_InitializeFromConfig(&config), &config);
+    if (origins && otelc_py_encoder_ready(config.filesystem_encoding, config.filesystem_errors)) {
+        PyConfig_Clear(&config);
+        PyErr_Clear();
+        Py_FinalizeEx();
+        return 78;
+    }
     if (otelc_py_imports_ready()) {
         otelc_py_journal_capture_failed();
         PyErr_Clear();

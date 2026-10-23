@@ -12,7 +12,7 @@ from pathlib import Path
 from ci import build_python_inputs as tooling
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c')
+NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c', 'NativeEncoder.c')
 
 
 def summaries(data: dict) -> dict:
@@ -42,7 +42,7 @@ def check() -> dict:
                        'OTELC_NATIVE_COVERAGE': '1',
                        'LLVM_PROFILE_FILE': str(directory / 'inputs-%p-%m.profraw')}
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
-                        'test_python_import_inputs', 'test_python_code_inputs', '-v'],
+                        'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:
@@ -52,9 +52,10 @@ def check() -> dict:
                         '-o', str(profile)], check=True)
         fixture = ROOT / 'build/native' / ('python-input-fixture-' + sys.implementation.cache_tag)
         imports = ROOT / 'build/native' / ('python-import-fixture-' + sys.implementation.cache_tag)
+        encoder = ROOT / 'build/native' / ('python-encoder-fixture-' + sys.implementation.cache_tag)
         output = subprocess.check_output([str(llvm / 'llvm-cov'), 'export', str(binary),
             '-object', str(binary.parent / manifest['library']), '-object', str(fixture),
-            '-object', str(imports),
+            '-object', str(imports), '-object', str(encoder),
             '-instr-profile=' + str(profile)], text=True)
         (ROOT / 'build/python-native-coverage.raw.json').write_text(output)
         result = {'interpreter': manifest['inputs']['interpreter'],
