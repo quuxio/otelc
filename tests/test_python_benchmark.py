@@ -38,15 +38,21 @@ class PythonBenchmarkTests(unittest.TestCase):
     def test_native_five_modes_share_one_instrumented_pid_and_separate_sdk_costs(self) -> None:
         output = self.root / 'comparison'
         report = python_benchmark.run(self.policy, output, comparison_id='shared-example')
-        self.assertEqual(report['launch_profile'], 'prepared-native-codes-v4')
+        self.assertEqual(report['launch_profile'], 'stock-plain-prepared-codes-v5')
+        self.assertFalse((output / 'plain/python-inputs.journal').exists(),
+                         'stock plain must not load the native input observer')
         for lane in ('plain', 'instrumented'):
             receipt = json.loads((output / lane / 'python-execution.json').read_text())
             self.assertEqual(receipt['phase'], 'closed')
             self.assertEqual(receipt['application']['pid'], report['pids'][lane])
             self.assertEqual(receipt['supervisor_pid'], report['supervisor_pids'][lane])
             self.assertNotEqual(receipt['supervisor_pid'], receipt['application']['pid'])
+            if lane == 'plain':
+                self.assertIsNone(receipt['supervisor_pid'])
+                self.assertEqual(receipt['entry_evidence']['phase'], 'unavailable')
+            else:
+                self.assertEqual(receipt['entry_evidence']['phase'], 'complete')
             self.assertTrue(receipt['input_recheck'])
-            self.assertEqual(receipt['entry_evidence']['phase'], 'complete')
             self.assertFalse(receipt['source_complete'])
         self.assertEqual((report['language'], report['comparison_id'], report['expected_checksum']),
                          ('python', 'shared-example', 41284864))
@@ -60,7 +66,7 @@ class PythonBenchmarkTests(unittest.TestCase):
         self.assertEqual((len(raw), len(responses)), (10, 10))
         for row in raw:
             self.assertEqual(row['checksum'], report['expected_checksum'])
-            self.assertEqual(set(row['process_usage']), {'application', 'supervisor'} if row['mode'] == 'plain' else {'application', 'supervisor', 'sdk'})
+            self.assertEqual(set(row['process_usage']), {'application'} if row['mode'] == 'plain' else {'application', 'supervisor', 'sdk'})
             for role, usage in row['process_usage'].items():
                 self.assertGreaterEqual(usage['cpu_ns'], 0)
                 self.assertGreater(usage['rss_bytes'], 0)
@@ -70,21 +76,30 @@ class PythonBenchmarkTests(unittest.TestCase):
                 self.assertEqual((usage['before']['pid'], usage['after']['pid']), (expected, expected))
         status = json.loads((output / 'instrumented/sdk/python-sdk-status.json').read_text())
         self.assertEqual(status['phase'], 'closed')
-        self.assertEqual(status['producer']['function_completions'], 90)
-        self.assertEqual(status['producer']['lifetimes']['resource_completed'], 90)
+        self.assertEqual(status['producer']['function_completions'], 91)
+        self.assertEqual(status['producer']['lifetimes']['resource_completed'], 91)
         self.assertEqual(self.capture.calls(), 40)
         execution = json.loads((output / 'instrumented/python-execution.json').read_text())
         self.assertEqual((execution['application']['returncode'], execution['sdk']['returncode']), (0, 0))
         for lane, evidence in report['launch_evidence'].items():
-            self.assertEqual(len(evidence), 6 if lane == 'plain' else 7)
+            self.assertEqual(len(evidence), 4 if lane == 'plain' else 8)
             for name, recorded in evidence.items():
                 self.assertEqual(launch.identity(output / lane / name), recorded)
         self.assertFalse((output / 'plain/sdk').exists())
+        self.assertIsNone(report['supervisor_pids']['plain'])
+        for lane in ('plain', 'instrumented'):
+            startup = report['launch_to_first_response'][lane]
+            self.assertGreater(startup['elapsed_ns'], 0)
+            self.assertEqual(startup['response']['checksum'], benchmark.checksum(1))
+            self.assertEqual(startup['calls'], 1)
         points = self.capture.points('otelc.benchmark.operation.duration')
         self.assertEqual(len(points), 5)
         self.assertTrue(all(point.count == 2 for point in points))
         self.assertTrue(self.capture.points('otelc.benchmark.process.cpu.duration'))
         self.assertTrue(self.capture.points('otelc.benchmark.process.rss'))
+        startup_points = self.capture.points('otelc.benchmark.launch_to_first_response')
+        self.assertEqual(len(startup_points), 2)
+        self.assertTrue(all(point.count == 1 for point in startup_points))
         for changes in ((('phase',), 'failed'), (('producer_checkpoint_available',), False),
                         (('protocol_errors',), 1), (('reply_lost',), None),
                         (('span_accounting', 'queue_pending'), 1),
@@ -160,8 +175,17 @@ class PythonBenchmarkTests(unittest.TestCase):
     def test_changed_source_identity_refuses_the_report_after_retaining_measurements(self) -> None:
         output = self.root / 'changed'
         actual = python_benchmark.file_identity(ROOT / 'examples/python/BenchmarkApp.py')
-        with mock.patch('otelc.python_benchmark.file_identity',
-                        side_effect=[actual, actual | {'sha256': '0' * 64}]):
+        original_identity = python_benchmark.file_identity
+        source_reads = 0
+
+        def selected_identity(path):
+            nonlocal source_reads
+            if path == ROOT / 'examples/python/BenchmarkApp.py':
+                source_reads += 1
+                return actual if source_reads == 1 else actual | {'sha256': '0' * 64}
+            return original_identity(path)
+
+        with mock.patch('otelc.python_benchmark.file_identity', side_effect=selected_identity):
             with self.assertRaisesRegex(ValueError, 'source changed'):
                 python_benchmark.run(self.policy, output)
         self.assertEqual(len((output / 'raw.jsonl').read_text().splitlines()), 10)

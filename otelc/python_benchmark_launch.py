@@ -30,10 +30,13 @@ class Application:
     start: dict[str, Any]
     sdk_report: dict[str, Any] | None = None
     evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
+    stock: bool = False
+    created_at_monotonic_ns: int | None = None
+    first_response: dict[str, Any] | None = None
 
     @property
-    def supervisor_pid(self) -> int:
-        return self.owner.pid
+    def supervisor_pid(self) -> int | None:
+        return None if self.stock else self.owner.pid
 
     @property
     def stdin(self) -> TextIO | None:
@@ -184,12 +187,14 @@ def application(policy: Policy, runtime: Path, *, plain: bool) -> Iterator[Appli
     command = prepared.command(policy, runtime, root=prepared.ROOT,
         entry=prepared.ROOT / 'examples/python/BenchmarkApp.py', plain=plain)
     with (runtime.parent / ('plain.stderr' if plain else 'instrumented.stderr')).open('w') as errors:
+        created = time.monotonic_ns()
         owner = subprocess.Popen(command, cwd=prepared.ROOT, start_new_session=True,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
         process = None
         failure = None
         try:
             process = start(owner, runtime, plain=plain)
+            process.created_at_monotonic_ns = created
             files.write(runtime / 'process.json', {'driver_pid': os.getpid(),
                 'supervisor_pid': owner.pid, 'application_pid': process.pid,
                 'sdk_pid': process.sdk_pid, 'supervisor_command': command})
