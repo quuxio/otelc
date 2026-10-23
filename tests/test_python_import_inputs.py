@@ -22,10 +22,10 @@ class PythonImportInputTests(NativeInputCase):
         cls.faults = root / 'build/native' / ('python-import-fixture-' + sys.implementation.cache_tag)
         _, flags = tooling.toolchain()
         coverage = ['-fprofile-instr-generate', '-fcoverage-mapping'] if os.environ.get('OTELC_NATIVE_COVERAGE') else []
-        subprocess.run([tooling.compiler(), *flags, '-std=c11', '-Wall', '-Wextra', '-Werror',
+        subprocess.run([tooling.compiler(), '-std=c11', '-Wall', '-Wextra', '-Werror',
             *coverage, '-I' + str(root / 'native/python'),
             str(root / 'native/python/InputJournal.c'),
-            str(root / 'tests/fixtures/python_import_capture.c'), '-o', str(cls.faults)], check=True)
+            str(root / 'tests/fixtures/python_import_capture.c'), '-o', str(cls.faults), *flags], check=True)
 
     def observed(self, filename: Path, evidence: journal.InputJournal) -> list[bytes]:
         return [value.content for value in getattr(evidence, 'imports', ())
