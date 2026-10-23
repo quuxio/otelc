@@ -21,6 +21,7 @@ from otelc import python_sdk_io as io
 from otelc import python_sdk_protocol as wire
 
 ROOT = Path(__file__).resolve().parent.parent
+REQUEST_PENDING = 'Python SDK request is still pending'
 
 
 def policy_digest(policy: Policy) -> str:
@@ -77,7 +78,7 @@ class SdkChannel:
         """Initialise the SDK with this native application's actual identity."""
         deadline = self._deadline(timeout)
         if not self._rpc_lock.acquire(timeout=timeout):
-            raise TimeoutError('Python SDK request is still pending')
+            raise TimeoutError(REQUEST_PENDING)
         try:
             if self.application_pid is not None:
                 raise RuntimeError('Python SDK channel is already bound')
@@ -101,7 +102,7 @@ class SdkChannel:
             raise RuntimeError('Python SDK channel is not bound')
         deadline = self._deadline(timeout)
         if not self._rpc_lock.acquire(timeout=timeout):
-            raise TimeoutError('Python SDK request is still pending')
+            raise TimeoutError(REQUEST_PENDING)
         try:
             record = {'kind': 'controls', 'collection': wire.flag(collection),
                       'emission': wire.flag(emission)}
@@ -123,7 +124,7 @@ class SdkChannel:
     def _exchange(self, record: dict[str, Any], timeout: float) -> dict[str, Any]:
         deadline = self._deadline(timeout)
         if not self._rpc_lock.acquire(timeout=timeout):
-            raise TimeoutError('Python SDK request is still pending')
+            raise TimeoutError(REQUEST_PENDING)
         try:
             if self._next > MAX_ID:
                 raise RuntimeError('Python SDK request identity exhausted')
@@ -248,12 +249,15 @@ class SdkProcess:
                            if not key.startswith(('PYTHON', 'OTEL_', 'OTELC_',
                                                   'GH_', 'GITHUB_', 'SONAR_'))}
             process = subprocess.Popen([
-                sys.executable, '-I', '-B', str(ROOT / 'otelc/python_sdk_child.py'),
+                sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/python_sdk_child.py'),
                 '--plan-fd', str(plan), '--events-fd', str(events),
                 '--replies-fd', str(output),
             ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=diagnostic, cwd=ROOT, env=environment,
                 pass_fds=(plan, events, output))
+            io.publish(directory / 'python-sdk-spawned.json', {
+                'schema_version': 1, 'pid': process.pid, 'parent_pid': os.getpid(),
+                'launch_id': launch_id})
             for descriptor in (events, output, plan, diagnostic):
                 os.close(descriptor)
                 owned.remove(descriptor)
@@ -272,6 +276,14 @@ class SdkProcess:
                 channel.close()
             if process is not None:
                 cls._stop_process(process)
+                try:
+                    io.publish(directory / 'python-sdk-startup-failed.json', {
+                        'schema_version': 1, 'pid': process.pid, 'parent_pid': os.getpid(),
+                        'returncode': process.returncode, 'launch_id': launch_id})
+                except OSError:
+                    # Failed evidence writes remain unavailable. Preserve the
+                    # original startup failure and never overwrite an output.
+                    pass
             raise
         finally:
             for descriptor in owned:

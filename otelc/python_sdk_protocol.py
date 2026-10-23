@@ -57,7 +57,7 @@ def attribute_value(value: Any) -> Any:
     """Keep attributes on the ordinary scalar/homogeneous-array API profile."""
     if type(value) is str:
         return text(value, empty=True)
-    if type(value) in (bool, int, float):
+    if any(type(value) is kind for kind in (bool, int, float)):
         return value if type(value) is bool else number(value)
     if type(value) is list and len(value) <= 128:
         if any(type(item) is list or type(item) is not type(value[0])
@@ -94,7 +94,7 @@ def metric(record: dict[str, Any]) -> dict[str, Any]:
     """Keep one metric registration and measurement explicit on the wire."""
     fields(record, {'kind', 'scope', 'instrument', 'name', 'value'},
            {'version', 'schema_url', 'unit', 'description', 'attributes',
-            'scope_attributes', 'context'})
+            'scope_attributes', 'context', 'boundaries'})
     text(record['scope'], limit=1024)
     if record['instrument'] not in COUNTERS:
         raise ValueError('unsupported Python SDK instrument')
@@ -112,6 +112,13 @@ def metric(record: dict[str, Any]) -> dict[str, Any]:
     attributes(record.get('attributes', {}))
     attributes(record.get('scope_attributes', {}))
     context(record.get('context'))
+    if 'boundaries' in record:
+        boundaries = record['boundaries']
+        if (record['instrument'] != 'histogram' or type(boundaries) is not list
+                or len(boundaries) > 160
+                or any(number(item) < 0 for item in boundaries)
+                or any(left >= right for left, right in zip(boundaries, boundaries[1:]))):
+            raise ValueError('invalid Python SDK histogram boundaries')
     return record
 
 

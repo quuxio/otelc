@@ -19,8 +19,8 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "query": "query_result(sort_desc(max by(comparison_id)(otelc_benchmark_run_timestamp_seconds)))",
-        "refresh": 1,
+        "query": "query_result(sort_desc(max by(comparison_id) (last_over_time(otelc_benchmark_run_timestamp_seconds[$__range]))))",
+        "refresh": 2,
         "includeAll": false,
         "multi": false,
         "current": {},
@@ -68,7 +68,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum by(language, mode) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})) * 1e9",
+          "expr": "(sum by(language, mode) (last_over_time(otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}[$__range])) / sum by(language, mode) (last_over_time(otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"}[$__range]))) * 1e9",
           "legendFormat": "{{language}} {{mode}}",
           "instant": true
         }
@@ -108,7 +108,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "((sum by(language, mode) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})) / on(language) group_left() (sum by(language) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\",mode=\"plain\"}) / sum by(language) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\",mode=\"plain\"})) - 1) * 100",
+          "expr": "((sum by(language, mode) (last_over_time(otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}[$__range])) / sum by(language, mode) (last_over_time(otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"}[$__range]))) / on(language) group_left() (sum by(language) (last_over_time(otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\",mode=\"plain\"}[$__range])) / sum by(language) (last_over_time(otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\",mode=\"plain\"}[$__range]))) - 1) * 100",
           "legendFormat": "{{language}} {{mode}}",
           "instant": true
         }
@@ -148,7 +148,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "1 / (sum by(language, mode) (otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"}))",
+          "expr": "1 / (sum by(language, mode) (last_over_time(otelc_benchmark_operation_duration_seconds_sum{comparison_id=~\"$comparison_id\"}[$__range])) / sum by(language, mode) (last_over_time(otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"}[$__range])))",
           "legendFormat": "{{language}} {{mode}}",
           "instant": true
         }
@@ -188,7 +188,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(language,mode) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})",
+          "expr": "sum by(language,mode) (last_over_time(otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"}[$__range]))",
           "legendFormat": "{{language}} {{mode}}",
           "instant": true
         }
@@ -228,7 +228,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "count by(language,runtime,build,workload,mode,comparison_id) (otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"})",
+          "expr": "count by(language,runtime,build,workload,mode,comparison_id) (last_over_time(otelc_benchmark_operation_duration_seconds_count{comparison_id=~\"$comparison_id\"}[$__range]))",
           "legendFormat": "{{language}} {{mode}}",
           "format": "table",
           "instant": true
@@ -242,7 +242,17 @@
         "tooltip": {
           "mode": "multi"
         }
-      }
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            }
+          }
+        }
+      ]
     },
     {
       "id": 7,
@@ -268,7 +278,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum by(language, mode, role) (otelc_benchmark_process_cpu_duration_seconds_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode, role) (otelc_benchmark_process_cpu_duration_seconds_count{comparison_id=~\"$comparison_id\"})) * 1e9",
+          "expr": "(sum by(language, mode, role) (last_over_time(otelc_benchmark_process_cpu_duration_seconds_sum{comparison_id=~\"$comparison_id\"}[$__range])) / sum by(language, mode, role) (last_over_time(otelc_benchmark_process_cpu_duration_seconds_count{comparison_id=~\"$comparison_id\"}[$__range]))) * 1e9",
           "legendFormat": "{{language}} {{mode}} {{role}}",
           "instant": true
         }
@@ -309,7 +319,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(language, mode, role) (otelc_benchmark_process_rss_bytes_sum{comparison_id=~\"$comparison_id\"}) / sum by(language, mode, role) (otelc_benchmark_process_rss_bytes_count{comparison_id=~\"$comparison_id\"})",
+          "expr": "sum by(language, mode, role) (last_over_time(otelc_benchmark_process_rss_bytes_sum{comparison_id=~\"$comparison_id\"}[$__range])) / sum by(language, mode, role) (last_over_time(otelc_benchmark_process_rss_bytes_count{comparison_id=~\"$comparison_id\"}[$__range]))",
           "legendFormat": "{{language}} {{mode}} {{role}}",
           "instant": true
         }
@@ -325,6 +335,47 @@
         },
         "showUnfilled": true
       }
+    },
+    {
+      "id": 9,
+      "title": "Python launch to first workload response; includes readiness, controls and IPC",
+      "type": "bargauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by(language, mode) (last_over_time(otelc_benchmark_launch_to_first_response_seconds_sum{comparison_id=~\"$comparison_id\"}[$__range])) / sum by(language, mode) (last_over_time(otelc_benchmark_launch_to_first_response_seconds_count{comparison_id=~\"$comparison_id\"}[$__range]))",
+          "legendFormat": "{{language}} {{mode}}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "description": "One observation per lane. Starts immediately before stock app / prepared supervisor creation; includes verification, application/SDK readiness, metric-off control, IPC and the first one-call workload. Excludes preparation/build time. This is not pure interpreter startup or a statistically qualified latency estimate."
     }
   ]
 }

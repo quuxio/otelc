@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import contextlib
-import io
 import os
 import random
 import socket
@@ -20,6 +18,7 @@ from unittest import mock
 from opentelemetry import trace
 
 from otelc import control, python as adapter
+from otelc import prepared_python as prepared_adapter
 from otelc.config import Policy
 from otelc.python_control import ControlServer
 from otelc.python_monitor import PythonMonitor
@@ -129,13 +128,15 @@ class PythonFrontendComponentTests(unittest.TestCase):
                 ('collection off', (False, False)), ('emission on', (False, True)),
                 ('off', (False, False)), ('on', (True, True))):
             response = control.request(descriptor, command)
-            self.assertEqual((response['collection'], response['emission']), expected)
+            actual = response['collection'], response['emission']
+            self.assertEqual(actual, expected)
         self.runtime.enter(1, 'fixture.workload')
         self.runtime.leave(1, None)
         control.request(descriptor, 'flush')
         self.assertEqual(control.request(descriptor, 'status')['function_completions'], 1)
+        self.assertEqual(control.request(descriptor, 'health')['language'], 'python')
         with self.assertRaises(ValueError):
-            control.request(descriptor, 'health')
+            control.request(descriptor, 'invalid')
         requests = (b'{}\n', b'not-json\n', b'{' + b'x' * 5000 + b'\n',
                     json.dumps({'token': 'wrong', 'command': 'on'}).encode() + b'\n')
         for request in requests:
@@ -271,24 +272,42 @@ class PythonFrontendComponentTests(unittest.TestCase):
         with mock.patch.object(adapter.sys, 'version_info', (3, 11)):
             with self.assertRaisesRegex(ValueError, 'CPython'):
                 adapter.invocation(self.root, entry=entry, module=None, arguments=())
-        self.assertEqual(adapter.run(self.policy, self.root / 'plain', root=self.root,
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'plain', root=self.root,
                                      entry=entry, plain=True), 0)
-        self.assertFalse((self.root / 'plain').exists())
-        self.assertEqual(adapter.run(self.policy, self.root / 'native', root=self.root, entry=entry), 0)
+        self.assertFalse((self.root / 'plain/sdk').exists())
+        self.assertTrue((self.root / 'plain/python-execution.json').is_file())
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'native', root=self.root, entry=entry), 0)
         self.assertEqual(json.loads((self.root / 'native/sdk/python-sdk-status.json').read_text())['phase'], 'closed')
         entry.write_text('raise SystemExit(7)\n')
-        self.assertEqual(adapter.run(self.policy, self.root / 'exit', root=self.root, entry=entry), 7)
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'exit', root=self.root, entry=entry), 7)
         entry.write_text('import os\nos._exit(9)\n')
-        diagnostic = io.StringIO()
-        with contextlib.redirect_stderr(diagnostic):
-            self.assertEqual(adapter.run(self.policy, self.root / 'abrupt', root=self.root, entry=entry), 9)
-        self.assertIn('unverified', diagnostic.getvalue())
-        for changes in ({'languages': ['java']},
-                        {'context': {'http': True}}):
-            with self.assertRaises(ValueError):
-                adapter.run(Policy.parse(self.policy.data | changes), self.root / 'refused',
-                            root=self.root, entry=entry)
+        self.assertEqual(prepared_adapter.run(self.policy, self.root / 'abrupt', root=self.root, entry=entry), 9)
+        diagnostic = json.loads((self.root / 'abrupt/python-supervisor-error.json').read_text())
+        self.assertIn('unverified', diagnostic['message'])
+        entry.write_text('raise SystemExit(7)\n')
+        self.assertEqual(prepared_adapter.run(Policy.parse(self.policy.data | {'context': {'http': True}}),
+            self.root / 'http', root=self.root, entry=entry), 7)
+        self.assertEqual(json.loads((self.root / 'http/sdk/python-sdk-status.json').read_text())['phase'], 'closed')
+        with self.assertRaises(ValueError):
+            prepared_adapter.run(Policy.parse(self.policy.data | {'languages': ['java']}), self.root / 'refused',
+                        root=self.root, entry=entry)
         self.assertFalse((self.root / 'refused').exists())
+        self.assertEqual(self.finish()['phase'], 'closed')
+
+    def test_dash_prefixed_script_is_a_file_in_plain_and_instrumented_launches(self) -> None:
+        name = '-cprint(123).py'
+        source = 'import sys\nfrom pathlib import Path\nPath("ran.txt").write_text(repr(sys.argv[1:]))\n'
+        (self.root / name).write_text(source)
+        arguments = ('-c', '-m', '--', 'literal argument')
+        command = adapter.invocation(self.root, entry=Path(name), module=None, arguments=arguments)
+        self.assertEqual(command[1:], ['./' + name, *arguments])
+        for plain in (True, False):
+            with self.subTest(plain=plain):
+                self.assertEqual(prepared_adapter.run(self.policy, self.root / ('plain-dash' if plain else 'instrumented-dash'),
+                    root=self.root, entry=Path(name), arguments=arguments, plain=plain), 0)
+                self.assertEqual((self.root / 'ran.txt').read_text(), repr(list(arguments)))
+                (self.root / 'ran.txt').unlink()
+                self.assertEqual((self.root / name).read_text(), source)
         self.assertEqual(self.finish()['phase'], 'closed')
 
     def test_source_capacity_and_incomplete_observations_fail_honestly(self) -> None:

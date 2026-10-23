@@ -2,11 +2,11 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This is an internal SDK/adapter building block. The [native Python candidate](python-native.md) uses it for selected original function metrics/spans and live controls. Library-context integration, lifetime observers and complete language qualification remain pending. Python remains in the public plan's `remaining` list. Explicit bridge component fixtures are separate from the unedited developer example.
+This is an internal SDK/adapter building block. The [native Python candidate](python-native.md) uses it for selected original function metrics/spans and live controls. The candidate also has weak lifetime observation, official thread propagation and [urllib/WSGI context](python-http.md). Full source evidence and complete language qualification remain pending. Python remains in the public plan's `remaining` list. Explicit bridge component fixtures are separate from the unedited developer example.
 
 ## Process ownership
 
-The command-line supervisor starts `SdkProcess` from otelc's SDK environment. The worker uses that interpreter with `-I -B`, its exact script, a private inherited plan and inherited pipes. SDK diagnostics go to `python-sdk.log`; its stdout is separate from application stdout. The supervisor can pass only the channel descriptors and launch identity into the application, then close its own descriptor copies.
+The command-line supervisor starts `SdkProcess` from otelc's SDK environment. The worker uses that interpreter with `-I -S -B`, explicit installed SDK wheel paths without processing site hooks, its exact script, a private inherited plan and inherited pipes. SDK diagnostics go to `python-sdk.log`; its stdout is separate from application stdout. The supervisor can pass only the channel descriptors and launch identity into the application, then close its own descriptor copies.
 
 ```mermaid
 flowchart LR

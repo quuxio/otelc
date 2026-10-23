@@ -147,8 +147,9 @@ print(json.dumps({'accepted':accepted,'handler_unchanged':signal.getsignal(signa
                 decoder.finish()
                 decoder.finish()
                 self.assertEqual((decoder.accepted, decoder.lost), (0, 1))
+                data = frame(b'{}', identity=2)
                 with self.assertRaisesRegex(ValueError, 'finished'):
-                    decoder.push(frame(b'{}', identity=2))
+                    decoder.push(data)
 
     def test_malformed_framing_and_sequences_are_refused(self) -> None:
         invalid = (
@@ -165,8 +166,9 @@ print(json.dumps({'accepted':accepted,'handler_unchanged':signal.getsignal(signa
             frame(b'{}') + frame(b'{}'),
         )
         for data in invalid:
+            decoder = HandoffReader()
             with self.subTest(data=data), self.assertRaises(ValueError):
-                HandoffReader().push(data)
+                decoder.push(data)
 
     def test_ambiguous_nonfinite_nonobject_or_invalid_json_is_not_telemetry(self) -> None:
         for value in (b'{"key":1,"key":2}', b'{"v":NaN}',
@@ -174,8 +176,9 @@ print(json.dumps({'accepted':accepted,'handler_unchanged':signal.getsignal(signa
                       b'null', b'{', b'{"v":"\xff"}'):
             with self.subTest(value=value):
                 decoder = HandoffReader()
+                data = frame(value)
                 with self.assertRaises(ValueError):
-                    decoder.push(frame(value))
+                    decoder.push(data)
                 decoder.finish()
                 self.assertEqual((decoder.accepted, decoder.lost), (0, 1))
 
@@ -203,8 +206,9 @@ print(json.dumps({'accepted':accepted,'handler_unchanged':signal.getsignal(signa
 
     def test_only_pipe_owners_and_finite_nonnegative_deadlines_are_supported(self) -> None:
         with tempfile.TemporaryFile() as regular:
+            descriptor = regular.fileno()
             with self.assertRaisesRegex(ValueError, 'requires a pipe'):
-                HandoffWriter(regular.fileno())
+                HandoffWriter(descriptor)
             regular.write(b'caller still owns this file')
         for timeout in (-1, float('inf'), float('nan')):
             reader, descriptor = os.pipe()

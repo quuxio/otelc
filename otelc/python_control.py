@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from otelc import python_sdk_io as io
+from otelc import python_health
 from otelc.python_runtime import PythonRuntime
 
 
@@ -80,6 +81,8 @@ class ControlServer:
 
     def command(self, command: str) -> dict[str, Any]:
         """Serialise control callers; the application continues during SDK waits."""
+        if command == 'health':
+            return python_health.live(self.runtime)
         state = self.runtime.status()
         collection, emission = state['collection'], state['emission']
         if command == 'status':
