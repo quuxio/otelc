@@ -9,6 +9,13 @@ updates:
     schedule:
       interval: weekly
   - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      node-sdk:
+        patterns: ['@opentelemetry/*']
+  - package-ecosystem: npm
     directory: /ci/markdownlint
     schedule:
       interval: weekly

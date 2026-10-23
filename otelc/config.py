@@ -5,10 +5,12 @@ from __future__ import annotations
 import math
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+from otelc.file_inputs import checked_file
 
 LANGUAGES = ("java", "typescript", "javascript", "python", "go", "c", "cpp", "rust")
 SECTIONS = {
@@ -18,6 +20,7 @@ SECTIONS = {
     "functions": {"include", "exclude"},
     "metrics": {"collection", "emission", "histogram_boundaries_seconds"},
     "traces": {"enabled", "sample_ratio"},
+    "context": {"tasks", "http"},
     "lifetimes": {"enabled", "include", "exclude", "max_live", "release_methods"},
     "benchmark": {"iterations", "samples", "warmup"},
 }
@@ -75,7 +78,8 @@ def validate_selectors_and_flags(data: dict[str, Any]) -> None:
             patterns(data[section][key], f"{section}.{key}")
     patterns(data["lifetimes"]["release_methods"], "lifetimes.release_methods")
     flags = (("metrics", "collection"), ("metrics", "emission"),
-             ("traces", "enabled"), ("lifetimes", "enabled"))
+             ("traces", "enabled"), ("lifetimes", "enabled"),
+             ("context", "tasks"), ("context", "http"))
     for section, key in flags:
         if type(data[section][key]) is not bool:
             raise ValueError(f"{section}.{key} must be boolean")
@@ -126,13 +130,15 @@ class Policy:
     """Validated user intent; no language/tool-specific settings are required."""
 
     data: dict[str, Any]
+    source: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def load(cls, path: Path) -> Policy:
         """Read TOML and reject unsupported or misspelt options before launch."""
-        with path.open("rb") as stream:
-            data = tomllib.load(stream)
-        return cls.parse(data)
+        metadata, content = checked_file(path, include_content=True)
+        text = content.decode('utf8')
+        parsed = cls.parse(tomllib.loads(text))
+        return cls(parsed.data, source={**metadata, 'text': text})
 
     @classmethod
     def parse(cls, data: dict[str, Any]) -> Policy:
@@ -151,6 +157,7 @@ class Policy:
             "functions": {"include": [], "exclude": []},
             "metrics": {"collection": True, "emission": True, "histogram_boundaries_seconds": [1e-6, 1e-5, 1e-4, .001, .01, .1, 1.]},
             "traces": {"enabled": False, "sample_ratio": .01},
+            "context": {"tasks": False, "http": False},
             "lifetimes": {"enabled": False, "include": [], "exclude": [], "max_live": 4096, "release_methods": ["close"]},
             "benchmark": {"iterations": 10000, "samples": 15, "warmup": 5},
         }

@@ -14,7 +14,7 @@ Object lifetimes are selected through the common policy. Report construction-to-
 
 1. Java: official OpenTelemetry Java agent, common-policy translation and small extension for direct function metrics, live controls and lifetime observation.
 2. Microsoft TypeScript and JavaScript: official Node SDK/instrumentations, generated loader/bootstrap and precise application probes; qualify both Microsoft compiler paths and CJS/ESM.
-3. Python: official SDK/library instrumentors with CPython monitoring and bounded lifecycle observation.
+3. Python: official SDK/library instrumentors with CPython monitoring and bounded lifecycle observation. The [native frontend candidate](python-native.md) adds selected function metrics/spans, weak object/resource lifetime observations, official thread propagation and live controls through the [SDK gates](python-sdk-controls.md) and [isolated process bridge](python-sdk-process.md). The [HTTP candidate](python-http.md) adds source-free urllib/WSGI context with owned library metric handoff, and [paired benchmarks](benchmarks.md) compare original Python sources with the other candidates. Broader lifetime/framework shapes, full source evidence and language qualification remain pending.
 4. Go: official compile-time rule engine and SDK, generated rules and metric-only live controls.
 5. LLVM: selectively reuse the archive's exception-aware pass and manifest/runtime contract; independent IR fixture.
 6. C: equivalent workload and selected resource acquisition/release observations.
@@ -42,5 +42,9 @@ Collector batches have a hard maximum of 512 items and send at 256 items or afte
 Test stale/invalid policy, unsupported selectors, overloads and exclusions; cached and newly-created instruments; observable callbacks while collection is off; outstanding calls and GC/release around a toggle; SDK export retries and shutdown with an open control connection; module/loader/compiler differences; constructor failure, duplicate close, address/identity reuse and incomplete lifetimes. Preserve source/module hashes, application values and exceptions. Record unsupported boundaries explicitly.
 
 Java's [runtime health boundary](runtime-health.md) records raw exporter API activity and a bounded final SDK checkpoint. Queue/drop counts remain unavailable until a supported clean drain establishes them. This is separate from downstream receipt, lifetime completeness and per-invocation attribution; broader oteleq consumer qualification still needs those checks.
+
+[Java context propagation](java-context.md) qualifies ordinary platform-worker tasks and synchronous JDK HTTP/1.1 with the official agent, common task/HTTP switches and a small request-header preservation guard. Broader executor, async HTTP, custom-request and JDK shapes remain work; this does not complete the cross-language propagation criterion.
+
+The [prepared Java launcher](prepared-java.md) resolves ordinary and multi-release JARs through the selected JDK's actual runtime member view, with exact-byte metadata inspection and schema-2 launch evidence. Compiler reads remain separate. This system-classpath profile does not imply arbitrary build-system, module-path or custom-classloader support.
 
 The [Java action-witness checklist](action-witness.md) tracks exact compiled method bindings, live-context attribution and per-action completion. Its offline binding compiler and explicit synchronous runtime profile are implemented and have decoded scoped-evidence controls. Final protected delivery and the frozen consumer handoff remain outstanding; virtual threads, async/context migration and concurrent actions require separate work.

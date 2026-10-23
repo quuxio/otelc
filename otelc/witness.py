@@ -16,7 +16,7 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from otelc import java, java_helpers
+from otelc import file_inputs, java, java_helpers
 
 if TYPE_CHECKING:
     from otelc.config import Policy
@@ -203,7 +203,7 @@ def compile_bindings(application: PreparedApplication,
                     or declaration["owner"].replace("/", ".") not in application.bindings):
                 raise ValueError("witness roles must refer to declared original application classes")
             owner = declaration["owner"]
-            raw = class_bytes(application, owner)
+            raw = class_bytes(application, owner, identity=before)
             copy = Path(directory) / f"role-{index}.class"
             copy.write_bytes(raw)
             command.extend([str(copy), owner, declaration["name"], declaration["descriptor"]])
@@ -215,19 +215,36 @@ def compile_bindings(application: PreparedApplication,
     return load_bindings(output, application)
 
 
-def class_bytes(application: PreparedApplication, owner: str) -> bytes:
-    """Read one original definition from the already validated explicit classpath."""
+def _class_location(application: PreparedApplication, owner: str,
+                    identity: dict[str, Any]) -> tuple[Path, str]:
+    """Use the selected JDK's effective member, including versioned-only classes."""
     if owner.replace("/", ".") not in application.bindings:
         raise ValueError("witness class requires a source binding")
     name = owner + ".class"
-    for entry in application.classpath:
+    resolution = identity.get("archive_resolution")
+    archives = {item["classpath_index"]: item for item in resolution["archives"]} if resolution else {}
+    for index, entry in enumerate(application.classpath):
         if entry.is_dir() and (entry / name).is_file():
-            return (entry / name).read_bytes()
-        if entry.is_file():
-            with zipfile.ZipFile(entry) as archive:
-                if name in archive.namelist():
-                    return archive.read(name)
+            return entry, name
+        archive = archives.get(index)
+        if archive is not None and owner.replace("/", ".") in archive["classes"]:
+            return entry, archive["classes"][owner.replace("/", ".")]["entry"]
     raise ValueError("witness owner is absent from the explicit classpath")
+
+
+def class_bytes(application: PreparedApplication, owner: str, *,
+                identity: dict[str, Any] | None = None) -> bytes:
+    """Read and check the actual runtime-selected original class definition."""
+    current = application.input_identity() if identity is None else identity
+    entry, member = _class_location(application, owner, current)
+    if entry.is_dir():
+        raw = (entry / member).read_bytes()
+    else:
+        with zipfile.ZipFile(entry) as archive:
+            raw = archive.read(member)
+    if hashlib.sha256(raw).hexdigest() != application.bindings[owner.replace("/", ".")]["class_sha256"]:
+        raise ValueError("witness runtime class digest disagrees with prepared inputs")
+    return raw
 
 
 def digest(value: object) -> str:
@@ -237,11 +254,16 @@ def digest(value: object) -> str:
 
 def load_bindings(path: Path, application: PreparedApplication) -> dict[str, Any]:
     """Read frozen offline bindings and match every role to original application inputs."""
+    return _binding_snapshot(path, application)[0]
+
+
+def _binding_snapshot(path: Path, application: PreparedApplication
+                      ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate bytes and retain their opened-file identity without reopening."""
     from otelc.prepared_java import unique_object
 
-    if path.stat().st_size > 32768:
-        raise ValueError("witness bindings exceed their size bound")
-    document = json.loads(path.read_text(), object_pairs_hook=unique_object)
+    identity, content = file_inputs.checked_file(path, include_content=True, max_bytes=32768, include_stat=True)
+    document = json.loads(content.decode('utf-8'), object_pairs_hook=unique_object)
     if (not isinstance(document, dict)
             or set(document) != {"schema_version", "kind", "profile", "bindings"}
             or type(document["schema_version"]) is not int
@@ -253,7 +275,9 @@ def load_bindings(path: Path, application: PreparedApplication) -> dict[str, Any
         raise ValueError("expected complete Java witness bindings schema 1")
     for role, binding in document["bindings"].items():
         _validate_binding(role, binding, application)
-    return document
+    binding_identity = {"path": str(path), **{name: identity[name] for name in
+                        ("sha256", "size", "inode", "device", "mtime_ns")}}
+    return document, binding_identity
 
 
 def _validate_binding(role: str, binding: object, application: PreparedApplication) -> None:
@@ -275,28 +299,22 @@ def _validate_binding(role: str, binding: object, application: PreparedApplicati
         raise ValueError("witness probe ID disagrees with binding")
 
 
-def origin(application: PreparedApplication, owner: str) -> str:
+def origin(application: PreparedApplication, owner: str, *,
+           identity: dict[str, Any] | None = None) -> str:
     """Use the same real file URL as the system classloader, without URL equality/DNS."""
-    name = owner + ".class"
-    for entry in application.classpath:
-        if entry.is_dir():
-            found = (entry / name).is_file()
-        else:
-            with zipfile.ZipFile(entry) as archive:
-                found = name in archive.namelist()
-        if found:
-            url = entry.resolve(strict=True).as_uri().replace("file:///", "file:/", 1)
-            return url + ("/" if entry.is_dir() and not url.endswith("/") else "")
-    raise ValueError("witness owner is absent from the explicit classpath")
+    current = application.input_identity() if identity is None else identity
+    entry, _ = _class_location(application, owner, current)
+    url = entry.resolve(strict=True).as_uri().replace("file:///", "file:/", 1)
+    return url + ("/" if entry.is_dir() and not url.endswith("/") else "")
 
 
 def configure(application: PreparedApplication, policy: Policy, runtime: Path,
               bindings_file: Path, application_identity: dict[str, Any],
-              tooling: list[dict[str, Any]]) -> list[Path]:
+              tooling: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Generate a private producer plan without compiling or changing application files."""
     if not policy.data["traces"]["enabled"] or policy.data["traces"]["sample_ratio"] < 1.0:
         raise ValueError("the witness profile requires explicit tracing with sample_ratio=1")
-    document = load_bindings(bindings_file, application)
+    document, binding_identity = _binding_snapshot(bindings_file, application)
     selected = json.loads((runtime / "selection.json").read_text())
     target = document["bindings"]["target"]
     if target["name"] not in selected["methods"].get(target["owner"].replace("/", "."), []):
@@ -306,21 +324,21 @@ def configure(application: PreparedApplication, policy: Policy, runtime: Path,
     values = {"schema_version": "1", "profile": PROFILE,
               "socket": str(runtime / "witness.sock"), "build": digest(application_identity),
               "selection": hashlib.sha256((runtime / "selection.json").read_bytes().rstrip(b"\n")).hexdigest(),
-              "policy": digest(policy.data), "tooling": digest([*tooling, file_identity(bindings_file)])}
+              "policy": digest(policy.data), "tooling": digest([*tooling, binding_identity])}
     for role, binding in document["bindings"].items():
         values.update({f"{role}.{key}": value for key, value in binding.items()})
-        values[f"{role}.origin"] = origin(application, binding["owner"])
+        values[f"{role}.origin"] = origin(application, binding["owner"], identity=application_identity)
     plan = runtime / "witness.properties"
     plan.write_text(java.properties(values))
     metadata = {"schema_version": 1, "kind": "otelc.java-witness-launch", "profile": PROFILE,
                 "socket": values["socket"], "final_report": str(runtime / "witness-health.json"), "build_sha256": values["build"],
                 "selection_sha256": values["selection"], "policy_sha256": values["policy"],
                 "tooling_sha256": values["tooling"], "bindings": document["bindings"],
-                "bindings_sha256": hashlib.sha256(bindings_file.read_bytes()).hexdigest(),
+                "bindings_sha256": binding_identity["sha256"],
                 "runtime_confirmation_required": True, "receiver_confirmation_required": True}
     descriptor = runtime / "witness.json"
     descriptor.write_text(json.dumps(metadata, indent=2) + "\n")
-    return [bindings_file, plan, descriptor]
+    return [binding_identity, file_identity(plan), file_identity(descriptor)]
 
 
 def request(path: Path, operation: str, *arguments: str) -> dict[str, Any]:

@@ -80,7 +80,7 @@ emission = false
             self.assertTrue(marker.exists())
             plain.verify_inputs()
             marker.unlink()
-            result = subprocess.run([sys.executable, "-m", "otelc", "--config", str(policy_path), "java",
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', str(Path(__file__).resolve().parents[1] / 'otelc/cli_bootstrap.py'), "--config", str(policy_path), "java",
                 "--manifest", str(manifest), "--runtime", str(root / "instrumented"), "--diagnostic-profile", "--", str(marker)],
                 capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 1)

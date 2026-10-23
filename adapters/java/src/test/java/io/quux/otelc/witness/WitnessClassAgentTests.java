@@ -3,6 +3,7 @@ package io.quux.otelc.witness;
 import static org.junit.jupiter.api.Assertions.*;
 
 import io.opentelemetry.javaagent.bootstrap.InstrumentationHolder;
+import io.quux.otelc.tools.JarInventory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -11,6 +12,7 @@ import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.util.jar.JarFile;
 import javax.tools.ToolProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -56,6 +58,66 @@ class WitnessClassAgentTests {
       } else {
         assertNotNull(actual.report().getProperty("rejected"), mode + ": " + actual.stderr());
         assertNull(actual.report().getProperty("captured_class"), "rejection must not publish valid evidence");
+      }
+    }
+  }
+
+  @Test void runtimeArchiveMembersBindOriginalCaptureAndRejectStaleBaseBindings() throws Exception {
+    Path base = compile();
+    Path current = Files.createDirectory(root.resolve("current"));
+    Path source = root.resolve("App.java");
+    Files.writeString(source, APPLICATION.replace("value + 1", "value + 2"));
+    assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null,
+        "--release", "21", "-d", current.toString(), source.toString()));
+    Path extension = extension();
+    for (String kind : java.util.List.of("active", "inactive", "folded")) {
+      Path archive = root.resolve(kind + ".jar");
+      String flag = switch (kind) {
+        case "active" -> "true\r\n";
+        case "inactive" -> "false\r\n";
+        default -> "tr\r\n ue\r\n";
+      };
+      try (var output = new JarOutputStream(Files.newOutputStream(archive))) {
+        output.putNextEntry(new JarEntry("META-INF/MANIFEST.MF"));
+        output.write(("Manifest-Version: 1.0\r\nMulti-Release: " + flag + "\r\n")
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        output.closeEntry();
+        for (String name : java.util.List.of("witness/App.class", "witness/Work.class")) {
+          output.putNextEntry(new JarEntry(name));
+          Files.copy(base.resolve(name), output); output.closeEntry();
+        }
+        output.putNextEntry(new JarEntry("META-INF/versions/21/witness/Work.class"));
+        Files.copy(current.resolve("witness/Work.class"), output); output.closeEntry();
+      }
+      var inventory = JarInventory.inspect(archive);
+      Path view = Files.createDirectory(root.resolve(kind + "-metadata"));
+      try (var jar = new JarFile(archive.toFile(), true, java.util.zip.ZipFile.OPEN_READ, Runtime.version())) {
+        for (var member : inventory.classes().entrySet()) {
+          String logical = member.getKey().replace('.', '/') + ".class";
+          var entry = jar.getJarEntry(logical);
+          assertEquals(member.getValue().entry(), entry.getRealName());
+          byte[] bytes;
+          try (var input = jar.getInputStream(entry)) { bytes = input.readAllBytes(); }
+          assertEquals(member.getValue().sha256(), WitnessBindings.digest(bytes));
+          Path target = view.resolve(logical);
+          Files.createDirectories(target.getParent()); Files.write(target, bytes);
+        }
+      }
+      Result plain = launch(view, extension, "plain-" + kind, archive);
+      Result actual = launch(view, extension, "mr-" + kind, archive);
+      assertEquals(inventory.multiRelease() ? "9\n" : "8\n", plain.stdout());
+      assertEquals(plain.stdout(), actual.stdout(), actual.stderr());
+      assertNull(actual.report().getProperty("rejected"), actual.report() + "\n" + actual.stderr());
+      assertEquals("false", actual.report().getProperty("initialised_before_main"));
+      assertEquals("true", actual.report().getProperty("loaded_identity"));
+      assertEquals(archive.toRealPath().toUri().toURL().toExternalForm(), actual.report().getProperty("loaded_origin"));
+      assertEquals(inventory.classes().get("witness.App").sha256(), actual.report().getProperty("captured_class"));
+      assertNotEquals(actual.report().getProperty("expected_method"), actual.report().getProperty("downstream_method"));
+      if (inventory.multiRelease()) {
+        Result stale = launch(base, extension, "stale-" + kind, archive);
+        assertNotNull(stale.report().getProperty("rejected"));
+        assertNull(stale.report().getProperty("captured_class"));
+        assertEquals(plain.stdout(), stale.stdout());
       }
     }
   }
@@ -110,22 +172,27 @@ class WitnessClassAgentTests {
   private record Result(String stdout, String stderr, Properties report) {}
 
   private Result launch(Path classes, Path extension, String mode) throws Exception {
+    Path classpath = mode.equals("jar") ? root.resolve("application.jar").toRealPath() : classes;
+    return launch(classes, extension, mode, classpath);
+  }
+
+  private Result launch(Path classes, Path extension, String mode, Path classpath) throws Exception {
     Path directory = Files.createDirectory(root.resolve(mode));
     Path marker = directory.resolve("initialised");
-    Path classpath = mode.equals("jar") ? root.resolve("application.jar").toRealPath() : classes;
+    Path resolvedClasspath = classpath.toRealPath();
     var command = new ArrayList<>(java.util.List.of(Path.of(System.getProperty("java.home"), "bin/java").toString(),
         "-Dotelc.test.marker=" + marker));
-    if (!mode.equals("plain")) {
+    if (!mode.startsWith("plain")) {
       Path agent = Path.of(InstrumentationHolder.class.getProtectionDomain().getCodeSource().getLocation().toURI());
       command.addAll(java.util.List.of("-javaagent:" + agent, "-Dotel.javaagent.extensions=" + extension,
-          "-Dotelc.test.classes=" + classes, "-Dotelc.test.classpath=" + classpath, "-Dotelc.test.mode=" + mode,
+          "-Dotelc.test.classes=" + classes, "-Dotelc.test.classpath=" + resolvedClasspath, "-Dotelc.test.mode=" + mode,
           "-Dotelc.test.report=" + directory.resolve("report.properties"),
           "-Dotel.instrumentation.common.default-enabled=false",
           "-Dotel.instrumentation.methods.enabled=true",
           "-Dotel.instrumentation.methods.include=witness.Work[" + (mode.equals("unselected") ? "absent" : "target") + "]",
           "-Dotel.metrics.exporter=none", "-Dotel.traces.exporter=none", "-Dotel.logs.exporter=none"));
     }
-    command.addAll(java.util.List.of("-cp", classpath.toString(), "witness.App"));
+    command.addAll(java.util.List.of("-cp", resolvedClasspath.toString(), "witness.App"));
     ProcessBuilder builder = new ProcessBuilder(command).redirectOutput(directory.resolve("stdout").toFile())
         .redirectError(directory.resolve("stderr").toFile());
     // Ambient agent/launcher options cannot alter this exact pinned-agent experiment.
@@ -141,7 +208,7 @@ class WitnessClassAgentTests {
       assertEquals(0, process.exitValue(), stderr);
       assertEquals("initialised", Files.readString(marker));
       Properties report = new Properties();
-      if (!mode.equals("plain")) {
+      if (!mode.startsWith("plain")) {
         try (var input = Files.newInputStream(directory.resolve("report.properties"))) { report.load(input); }
       }
       return new Result(Files.readString(directory.resolve("stdout")), stderr, report);

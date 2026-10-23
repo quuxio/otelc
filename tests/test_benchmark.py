@@ -23,7 +23,8 @@ class BenchmarkTests(unittest.TestCase):
         data["export"]["endpoint"] = f"http://127.0.0.1:{capture.server.server_port}"
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             output = Path(directory) / "run"
-            report = benchmark.run(Policy.parse(data), output)
+            report = benchmark.run(Policy.parse(data), output, comparison_id='java-shared-comparison')
+            self.assertEqual(report['comparison_id'], 'java-shared-comparison')
             self.assertEqual(report["expected_checksum"], 41284864)
             self.assertEqual(capture.calls(), 0)
             self.assertFalse(capture.points("otelc.lifetime.admitted"))

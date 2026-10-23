@@ -21,12 +21,19 @@ class CliTests(unittest.TestCase):
     def test_inspection_reports_current_and_future_adapters(self) -> None:
         result = json.loads(self.invoke(["plan"]))
         self.assertEqual(result["implemented"], ["java"])
+        self.assertEqual(result["candidates"], ["typescript", "javascript", "python"])
         self.assertIn("rust", result["remaining"])
 
     def test_not_implemented_is_an_execution_error(self) -> None:
         with patch("sys.argv", ["quux-otelc", "example", "rust"]), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             main()
         self.assertEqual(error.exception.code, 1)
+
+    def test_python_candidacy_does_not_advertise_implementation(self) -> None:
+        result = json.loads(self.invoke(["plan"]))
+        self.assertIn("python", result["candidates"])
+        self.assertIn("python", result["remaining"])
+        self.assertNotIn("python", result["implemented"])
 
     def test_dispatches_the_actual_selected_operation(self) -> None:
         state = {"schema_version": 1, "pid": 123, "collection": False, "emission": False}
@@ -46,8 +53,23 @@ class CliTests(unittest.TestCase):
             self.assertTrue(run.call_args.kwargs["plain"])
             self.assertTrue(run.call_args.kwargs["diagnostic_profile"])
             self.assertEqual(run.call_args.kwargs["arguments"], ("--argument",))
+        with patch("otelc.node.run", return_value=0) as run:
+            self.invoke(["node", "--language", "typescript", "--root", "/project",
+                         "--entry", "/project/app.cts", "--runtime", "/tmp/node-run",
+                         "--backend", "api", "--plain", "--", "--argument"])
+            self.assertEqual(run.call_args.kwargs["arguments"], ("--argument",))
+            self.assertEqual(run.call_args.kwargs["backend"], "api")
+            self.assertTrue(run.call_args.kwargs["plain"])
+            self.invoke(["example", "javascript", "--plain"])
+            self.assertEqual(run.call_args.args[2], "javascript")
         report = {"run_id": "test", "median_ns_per_operation": {"plain": 10}}
         with patch("otelc.benchmark.run", return_value=report) as run:
             result = json.loads(self.invoke(["benchmark", "--output", "/tmp/bench", "--no-publish"]))
             self.assertEqual(result["run_id"], "test")
             self.assertFalse(run.call_args.kwargs["publish"])
+        with patch("otelc.node_benchmark.run", return_value=report) as run:
+            self.invoke(["benchmark", "--output", "/tmp/bench", "--language", "typescript",
+                         "--backend", "api", "--comparison-id", "shared", "--no-publish"])
+            self.assertEqual(run.call_args.kwargs["language"], "typescript")
+            self.assertEqual(run.call_args.kwargs["backend"], "api")
+            self.assertEqual(run.call_args.kwargs["comparison_id"], "shared")
