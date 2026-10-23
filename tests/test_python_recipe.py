@@ -140,9 +140,10 @@ class PythonRecipeTests(unittest.TestCase):
             altered['paths']['entry'].update(change)
             with self.assertRaises(ValueError):
                 recipe.resolve_plan(altered)
-        with self.assertRaises(ValueError):
-            recipe.resolve_plan({**original, 'module': None,
+        prepared_input = ({**original, 'module': None,
                 'paths': {key: value for key, value in original['paths'].items() if key != 'entry'}})
+        with self.assertRaises(ValueError):
+            recipe.resolve_plan(prepared_input)
 
     def test_dash_prefixed_files_keep_intent_and_cannot_become_interpreter_options(self) -> None:
         for name in ('-cprint(123).py', '-m.py', '--.py', '--help.py'):
@@ -159,8 +160,9 @@ class PythonRecipeTests(unittest.TestCase):
                     recipe.verify(original, altered)
         changed = self.requested()
         changed['paths']['entry']['requested'] = '-m.py'
+        prepared_input = recipe.resolve_plan(changed)
         with self.assertRaisesRegex(ValueError, 'path resolution changed'):
-            recipe.verify(changed, recipe.resolve_plan(changed))
+            recipe.verify(changed, prepared_input)
 
     def test_interpreter_metadata_is_strict_and_rechecked_without_editing_the_binary(self) -> None:
         original = self.requested()

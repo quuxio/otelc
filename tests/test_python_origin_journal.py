@@ -93,10 +93,12 @@ class PythonOriginJournalTests(unittest.TestCase):
         self.assertEqual(value.executions[0].edges, (CHILD_INDEX,))
         self.assertEqual(value.sdk_joins, ((1, 30),))
         self.assertEqual(value.imports, ())
+        prepared_input = wire(records)
         with self.assertRaises(ValueError):
-            inputs.decode(wire(records), expected_pid=12)
+            inputs.decode(prepared_input, expected_pid=12)
+        prepared_input = wire(records).replace(journal.MAGIC, inputs.MAGIC)
         with self.assertRaises(ValueError):
-            journal.decode(wire(records).replace(journal.MAGIC, inputs.MAGIC), expected_pid=12)
+            journal.decode(prepared_input, expected_pid=12)
 
     def test_identical_reads_require_distinct_tokens_transactions_and_root_ids(self) -> None:
         records = [read_record(kind=3), root_record(loader=8, route=2),
@@ -107,8 +109,10 @@ class PythonOriginJournalTests(unittest.TestCase):
         for change in ({'identity': 10}, {'transaction': 20}, {'token': 1}):
             options = dict(identity=11, transaction=21, loader=8, token=3, route=2)
             options.update(change)
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                journal.decode(wire([*records[:3], root_record(**options)]), expected_pid=12)
+            with self.subTest(change=change):
+                prepared_input = wire([*records[:3], root_record(**options)])
+                with self.assertRaises(ValueError):
+                    journal.decode(prepared_input, expected_pid=12)
 
     def test_plain_execution_has_no_sdk_and_equal_unbound_code_creates_no_relation(self) -> None:
         value = journal.decode(wire([read_record(), root_record(), execution_record()]), expected_pid=12)
@@ -125,8 +129,10 @@ class PythonOriginJournalTests(unittest.TestCase):
                  [read_record(), root_record(), execution_record(), execution_record(identity=31)],
                  [read_record(), root_record(), execution_record(), execution_record(edges=())])
         for records in cases:
-            with self.subTest(kinds=[r[0] for r in records]), self.assertRaises(ValueError):
-                journal.decode(wire(records), expected_pid=12)
+            with self.subTest(kinds=[r[0] for r in records]):
+                prepared_input = wire(records)
+                with self.assertRaises(ValueError):
+                    journal.decode(prepared_input, expected_pid=12)
 
     def test_root_route_profile_and_graph_cannot_be_forged_by_metadata(self) -> None:
         changes = ({'identity': 0}, {'transaction': 0}, {'token': 0}, {'loader': 9},
@@ -134,11 +140,14 @@ class PythonOriginJournalTests(unittest.TestCase):
                    {'path': b'other.py'}, {'version': 0x030b00f0}, {'descriptor_version': 1},
                    {'content': b'{}'}, {'content': encode(CHILD)})
         for change in changes:
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                journal.decode(wire([read_record(), root_record(**change)]), expected_pid=12)
+            with self.subTest(change=change):
+                prepared_input = wire([read_record(), root_record(**change)])
+                with self.assertRaises(ValueError):
+                    journal.decode(prepared_input, expected_pid=12)
+        prepared_input = (wire([read_record(kind=3, path=b'entry.pyc'),
+                root_record(route=2, loader=8, path=b'entry.pyc')]))
         with self.assertRaises(ValueError):
-            journal.decode(wire([read_record(kind=3, path=b'entry.pyc'),
-                root_record(route=2, loader=8, path=b'entry.pyc')]), expected_pid=12)
+            journal.decode(prepared_input, expected_pid=12)
 
     def test_constant_edges_offsets_paths_versions_and_aliases_are_checked(self) -> None:
         changes = ({'identity': 0}, {'root': 0}, {'offset': 1}, {'offset': 2**32},
@@ -146,41 +155,51 @@ class PythonOriginJournalTests(unittest.TestCase):
                    {'edges': (len(CODE.co_consts) - 1,)}, {'depth': 0},
                    {'depth': 129}, {'reserved': 1}, {'path': b'other.py'})
         for change in changes:
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                journal.decode(wire([read_record(), root_record(), execution_record(**change)]), expected_pid=12)
+            with self.subTest(change=change):
+                prepared_input = wire([read_record(), root_record(), execution_record(**change)])
+                with self.assertRaises(ValueError):
+                    journal.decode(prepared_input, expected_pid=12)
         value = journal.decode(wire([read_record(), root_record(), execution_record(edges=())]), expected_pid=12)
         self.assertEqual(value.executions[0].node, value.roots[0].descriptor.root)
         aliased = CODE.replace(co_consts=CODE.co_consts + (CHILD,))
+        prepared_input = (wire([read_record(), root_record(content=encode(aliased)),
+                execution_record(), execution_record(identity=31, edges=(len(CODE.co_consts),))]))
         with self.assertRaisesRegex(ValueError, 'duplicate execution'):
-            journal.decode(wire([read_record(), root_record(content=encode(aliased)),
-                execution_record(), execution_record(identity=31, edges=(len(CODE.co_consts),))]), expected_pid=12)
+            journal.decode(prepared_input, expected_pid=12)
 
     def test_one_process_cannot_mix_interpreter_or_filesystem_profiles(self) -> None:
-        with self.assertRaisesRegex(ValueError, 'mixed interpreter'):
-            journal.decode(wire([read_record(), root_record(), read_record(kind=3),
+        prepared_input = (wire([read_record(), root_record(), read_record(kind=3),
                 root_record(identity=11, transaction=21, token=3, route=2, loader=8,
-                            version=sys.hexversion + 1)]), expected_pid=12)
+                            version=sys.hexversion + 1)]))
+        with self.assertRaisesRegex(ValueError, 'mixed interpreter'):
+            journal.decode(prepared_input, expected_pid=12)
         content = json.loads(encode(CODE))
         content['filesystem']['errors'] = 'strict'
-        with self.assertRaisesRegex(ValueError, 'mixed interpreter'):
-            journal.decode(wire([read_record(), root_record(), read_record(kind=3),
+        prepared_input = (wire([read_record(), root_record(), read_record(kind=3),
                 root_record(identity=11, transaction=21, token=3, route=2, loader=8,
-                            content=json.dumps(content).encode())]), expected_pid=12)
+                            content=json.dumps(content).encode())]))
+        with self.assertRaisesRegex(ValueError, 'mixed interpreter'):
+            journal.decode(prepared_input, expected_pid=12)
 
     def test_sdk_join_requires_same_code_graph_offset_path_and_unique_identity(self) -> None:
         base = [read_record(), root_record(), execution_record(), sdk_record()]
         for change in ({'sdk': 2}, {'origin': 31}, {'offset': 2}, {'reserved': 1},
                        {'path': b'other.py'}, {'tail': b'junk'}):
-            with self.subTest(change=change), self.assertRaises(ValueError):
-                journal.decode(wire([*base, join_record(**change)]), expected_pid=12)
+            with self.subTest(change=change):
+                prepared_input = wire([*base, join_record(**change)])
+                with self.assertRaises(ValueError):
+                    journal.decode(prepared_input, expected_pid=12)
         for records in ([*base, sdk_record()],
                         [*base[:3], sdk_record(code=compile('pass', 'entry.py', 'exec')), join_record()],
                         [*base[:3], sdk_record(offset=2), join_record()],
                         [*base, join_record(), sdk_record(identity=2), join_record(sdk=2)]):
+            prepared_input = wire(records)
             with self.assertRaises(ValueError):
-                journal.decode(wire(records), expected_pid=12)
-        with mock.patch.object(journal, 'MAX_STEPS', 1), self.assertRaises(ValueError):
-            journal.decode(wire([*base, join_record()]), expected_pid=12)
+                journal.decode(prepared_input, expected_pid=12)
+        with mock.patch.object(journal, 'MAX_STEPS', 1):
+            prepared_input = wire([*base, join_record()])
+            with self.assertRaises(ValueError):
+                journal.decode(prepared_input, expected_pid=12)
 
     def test_losses_cannot_be_presented_as_complete_and_final_counts_cover_every_kind(self) -> None:
         records = [read_record(), root_record(), execution_record(), sdk_record(), join_record()]
@@ -188,10 +207,13 @@ class PythonOriginJournalTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 self.assertFalse(journal.decode(wire(records, **changes), expected_pid=12).capture_complete)
         for changes in ({'count': 1}, {'size': len(SOURCE)}, {'expected': 2}, {'finalized': 2}):
-            with self.subTest(changes=changes), self.assertRaises(ValueError):
-                journal.decode(wire(records, **changes), expected_pid=12)
+            with self.subTest(changes=changes):
+                prepared_input = wire(records, **changes)
+                with self.assertRaises(ValueError):
+                    journal.decode(prepared_input, expected_pid=12)
+        prepared_input = wire([sdk_record(identity=2)])
         with self.assertRaisesRegex(ValueError, 'missing SDK'):
-            journal.decode(wire([sdk_record(identity=2)]), expected_pid=12)
+            journal.decode(prepared_input, expected_pid=12)
         self.assertFalse(journal.decode(wire([sdk_record(identity=2)], lost=1), expected_pid=12).capture_complete)
 
     def test_framing_pid_bounds_unknown_kinds_and_truncation_remain_closed(self) -> None:
@@ -215,8 +237,9 @@ class PythonOriginJournalTests(unittest.TestCase):
         with mock.patch.object(inputs, 'MAX_JOURNAL', 1), self.assertRaises(ValueError):
             journal.decode(good, expected_pid=12)
         bad = inputs.SOURCE.pack(12, 1, 2, 99, 0, 10**9, stat.S_IFDIR)
+        prepared_input = wire([(1, PATH, bad)])
         with self.assertRaisesRegex(ValueError, 'source metadata'):
-            journal.decode(wire([(1, PATH, bad)]), expected_pid=12)
+            journal.decode(prepared_input, expected_pid=12)
         for data in (wire([(4, PATH, b'x' * 56)]),
                      wire([(5, PATH, b'x' * 80)]), wire([(6, PATH, b'x' * 56)])):
             with self.assertRaises(ValueError):

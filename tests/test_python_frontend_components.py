@@ -288,8 +288,9 @@ class PythonFrontendComponentTests(unittest.TestCase):
         self.assertEqual(prepared_adapter.run(Policy.parse(self.policy.data | {'context': {'http': True}}),
             self.root / 'http', root=self.root, entry=entry), 7)
         self.assertEqual(json.loads((self.root / 'http/sdk/python-sdk-status.json').read_text())['phase'], 'closed')
+        prepared_input = Policy.parse(self.policy.data | {'languages': ['java']})
         with self.assertRaises(ValueError):
-            prepared_adapter.run(Policy.parse(self.policy.data | {'languages': ['java']}), self.root / 'refused',
+            prepared_adapter.run(prepared_input, self.root / 'refused',
                         root=self.root, entry=entry)
         self.assertFalse((self.root / 'refused').exists())
         self.assertEqual(self.finish()['phase'], 'closed')

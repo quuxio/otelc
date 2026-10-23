@@ -148,8 +148,9 @@ interval_ms=100000
 
             token = attach(31)
             try:
+                future = pool.submit(fail)
                 with self.assertRaises(ValueError) as raised:
-                    pool.submit(fail).result(timeout=3)
+                    future.result(timeout=3)
                 self.assertIs(raised.exception, error)
             finally:
                 context.detach(token)

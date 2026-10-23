@@ -63,8 +63,9 @@ class PythonCodeCandidateTests(unittest.TestCase):
         self.assertEqual(locate(captured(), [exact, failed]).status, 'incomplete')
         self.assertEqual(locate(captured(), []).status, 'unmatched')
         self.assertEqual(locate(captured(), [exact], budget=1).status, 'incomplete')
+        prepared_input = captured()
         with self.assertRaises(ValueError):
-            locate(captured(), [], budget=True)
+            locate(prepared_input, [], budget=True)
 
     def test_encoding_bom_crlf_future_flags_and_optimisation_are_explicit(self) -> None:
         sources = (b'\xef\xbb\xbf' + SOURCE.replace(b'\n', b'\r\n'),
