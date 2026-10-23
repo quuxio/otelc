@@ -20,6 +20,8 @@ The [native input component](docs/python-input-journal.md#validation-scope) incl
 
 Native launch also retains the selected interpreter's pre-site executable identities, preserving the tested Homebrew alias and copied-venv metadata under ordinary and `-S` startup.
 
+The [native input observer](docs/python-input-journal.md#evidence-and-failure-boundary) also retains ordinary raw `FileIO` loader reads, including older CPython sourceless imports. Its tests compare original output, errors, file lifetimes, nested/concurrent reads and profiling metadata. This remains input evidence; compiler-origin and complete-source qualification are separate work.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
@@ -41,7 +43,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 

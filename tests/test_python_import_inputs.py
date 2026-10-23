@@ -25,6 +25,7 @@ class PythonImportInputTests(NativeInputCase):
         subprocess.run([tooling.compiler(), '-std=c11', '-Wall', '-Wextra', '-Werror',
             *coverage, '-I' + str(root / 'native/python'),
             str(root / 'native/python/InputJournal.c'),
+            str(root / 'native/python/FileIOCapture.c'),
             str(root / 'tests/fixtures/python_import_capture.c'), '-o', str(cls.faults), *flags], check=True)
 
     def observed(self, filename: Path, evidence: journal.InputJournal) -> list[bytes]:
