@@ -13,6 +13,7 @@ from unittest import mock
 
 from otelc import node, node_provenance
 from otelc.config import Policy
+from node_launch_evidence import run_checked
 from test_java_integration import Capture
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -138,10 +139,10 @@ compileFunction(second.marked.code,['require'],{{filename:file}})(createRequire(
             '[functions]\ninclude=["*.workload"]\n[traces]\nenabled=true\nsample_ratio=1.0\n'
             f'[export]\nendpoint="http://127.0.0.1:{capture.server.server_port}"\n')
         runtime = root / ('runtime-plain' if plain else 'runtime')
-        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(config),
+        result = run_checked([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(config),
             'node', '--language', language, '--root', str(root), '--entry', str(entry),
             '--runtime', str(runtime), '--backend', backend, *(['--plain'] if plain else [])],
-            cwd=ROOT, capture_output=True, text=True, timeout=40)
+            cwd=ROOT, runtime=runtime, timeout=40)
         return runtime, result
 
     def check_negative_journals(self, runtime, report):
