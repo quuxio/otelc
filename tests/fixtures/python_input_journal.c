@@ -2,6 +2,7 @@
 #include "InputJournal.h"
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,20 @@
 #include <unistd.h>
 
 #define CHECK(condition) do { if (!(condition)) return __LINE__; } while (0)
+
+typedef struct {
+    struct stat metadata;
+    unsigned char bytes[3];
+    uint64_t event;
+    int result;
+} ThreadInput;
+
+static void *thread_input(void *value) {
+    ThreadInput *input = value;
+    input->result = otelc_py_journal_import_event("module.py", input->bytes, 3,
+                                                 &input->metadata, &input->event);
+    return NULL;
+}
 
 int main(int argc, char **argv) {
     CHECK(argc == 3);
@@ -30,7 +45,10 @@ int main(int argc, char **argv) {
     CHECK(ftruncate(fd, 0) == 0);
     CHECK(otelc_py_journal_open(fd) == -1); /* Empty file, stale offset. */
     CHECK(lseek(fd, 0, SEEK_SET) == 0);
-    CHECK(otelc_py_journal_open(fd) == 0);
+    CHECK(otelc_py_journal_open_version(fd, 0) == -1);
+    CHECK(otelc_py_journal_open_version(fd, 3) == -1);
+    int origins = strcmp(argv[2], "origins") == 0 || strcmp(argv[2], "origin-invalid") == 0;
+    CHECK(otelc_py_journal_open_version(fd, origins ? 2 : 1) == 0);
     int other = dup(fd);
     CHECK(otelc_py_journal_open(other) == -1);
     close(other);
@@ -38,7 +56,43 @@ int main(int argc, char **argv) {
     CHECK(fstat(fd, &metadata) == 0);
     metadata.st_size = 3;
     const unsigned char bytes[] = {0, 255, 10};
-    if (strcmp(argv[2], "invalid") == 0) {
+    if (strcmp(argv[2], "event-threads") == 0) {
+        pthread_t threads[16];
+        ThreadInput items[16];
+        for (unsigned index = 0; index < 16; ++index) {
+            items[index] = (ThreadInput){.metadata = metadata, .bytes = {(unsigned char)index, 255, 10}};
+            CHECK(pthread_create(&threads[index], NULL, thread_input, &items[index]) == 0);
+        }
+        for (unsigned index = 0; index < 16; ++index) {
+            CHECK(pthread_join(threads[index], NULL) == 0);
+            CHECK(items[index].result == 0 && items[index].event >= 1 && items[index].event <= 16);
+            for (unsigned other = 0; other < index; ++other) CHECK(items[index].event != items[other].event);
+        }
+    } else if (origins || strcmp(argv[2], "origin-v1") == 0) {
+        uint64_t event = 99;
+        CHECK(otelc_py_journal_source_event("entry.py", bytes, 3, &metadata, &event) == 0 && event == 1);
+        CHECK(otelc_py_journal_import_event("entry.py", bytes, 3, &metadata, &event) == 0 && event == 2);
+        uint64_t root[] = {10, 20, 0, 1, 1, 0x030c00f0, 2, 0, 0};
+        uint64_t execution[] = {30, 10, 0, 0x030c00f0, 1, 0};
+        uint64_t join[] = {1, 30, 0, 0, 0, 0};
+        unsigned char edge[8] = {0};
+        if (strcmp(argv[2], "origins") == 0) {
+            CHECK(otelc_py_journal_origin(5, "entry.py", (const unsigned char *)"opaque", 6, root, 9) == 0);
+            CHECK(otelc_py_journal_origin(6, "entry.py", edge, sizeof(edge), execution, 6) == 0);
+            CHECK(otelc_py_journal_origin(7, "entry.py", NULL, 0, join, 6) == 0);
+        } else {
+            CHECK(otelc_py_journal_origin(5, "entry.py", NULL, 0, root, 9) == (origins ? 0 : -1));
+            CHECK(otelc_py_journal_origin(4, "entry.py", NULL, 0, root, 9) == -1);
+            CHECK(otelc_py_journal_origin(8, "entry.py", NULL, 0, root, 9) == -1);
+            CHECK(otelc_py_journal_origin(5, "entry.py", NULL, 0, root, 6) == -1);
+            CHECK(otelc_py_journal_origin(6, "entry.py", NULL, 0, execution, 9) == -1);
+            CHECK(otelc_py_journal_origin(5, "entry.py", NULL, 0, NULL, 9) == -1);
+            CHECK(otelc_py_journal_origin(5, NULL, NULL, 0, root, 9) == -1);
+            CHECK(otelc_py_journal_origin(5, "entry.py", NULL, 1, root, 9) == -1);
+            CHECK(otelc_py_journal_origin(5, "entry.py", bytes, OTELC_PY_SOURCE_LIMIT + 1U, root, 9) == -1);
+            CHECK(otelc_py_journal_source_event(NULL, bytes, 3, &metadata, &event) == -1 && event == 0);
+        }
+    } else if (strcmp(argv[2], "invalid") == 0) {
         CHECK(otelc_py_journal_source(NULL, bytes, 3, &metadata) == -1);
         CHECK(otelc_py_journal_source("entry.py", NULL, 3, &metadata) == -1);
         CHECK(otelc_py_journal_source("entry.py", bytes, OTELC_PY_SOURCE_LIMIT + 1U, &metadata) == -1);

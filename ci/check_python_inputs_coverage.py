@@ -42,7 +42,8 @@ def check() -> dict:
                        'OTELC_NATIVE_COVERAGE': '1',
                        'LLVM_PROFILE_FILE': str(directory / 'inputs-%p-%m.profraw')}
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
-                        'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder', '-v'],
+                        'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder',
+                        'test_python_origin_writer', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:
