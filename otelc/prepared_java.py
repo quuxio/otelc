@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from otelc import java, java_archives
+from otelc import file_inputs, java, java_archives
 from otelc.config import Policy
 
 AMBIENT_OPTIONS = ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")
@@ -21,18 +21,10 @@ AMBIENT_OPTIONS = ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")
 
 def file_identity(path: Path) -> dict[str, Any]:
     """Record content and filesystem identity; refuse a changing read."""
-    before = path.stat()
-    if not stat.S_ISREG(before.st_mode):
-        raise ValueError(f"input is not a regular file: {path}")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    after = path.stat()
-    stable = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-    # Reading may update atime; that is not a mutation of the declared input.
-    if stable(before) != stable(after) or not stat.S_ISREG(after.st_mode):
-        raise ValueError(f"input changed or is not a regular file: {path}")
-    return {"path": str(path), "sha256": digest, "size": after.st_size,
-            "inode": after.st_ino, "device": after.st_dev,
-            "mtime_ns": after.st_mtime_ns}
+    identity, _ = file_inputs.checked_file(path, include_stat=True)
+    # Keep the existing closed Java identity shape and caller path spelling.
+    return {"path": str(path), **{name: identity[name] for name in
+            ("sha256", "size", "inode", "device", "mtime_ns")}}
 
 
 def verify_tooling(identities: list[dict[str, Any]]) -> None:
@@ -202,9 +194,9 @@ def _configure_witness(application: PreparedApplication, policy: Policy, runtime
     compiler = java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")
     if not any(item["path"] == str(compiler) for item in tooling):
         tooling.append(file_identity(compiler))
-    files = witness.configure(application, policy, runtime, bindings_file.resolve(strict=True),
-                              application_identity, tooling)
-    tooling.extend(file_identity(path) for path in files)
+    identities = witness.configure(application, policy, runtime, bindings_file.resolve(strict=True),
+                                   application_identity, tooling)
+    tooling.extend(identities)
     argv.insert(1, f"-Dotelc.witness.plan={runtime / 'witness.properties'}")
 
 
