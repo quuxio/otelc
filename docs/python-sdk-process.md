@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This is an internal SDK/adapter building block. The source-free Python launcher, CPython monitoring, application context integration and lifetime observers are still pending. Python remains in the public plan's `remaining` list. Component fixtures use explicit bridge calls; they are not the developer example applications.
+This is an internal SDK/adapter building block. The [native Python candidate](python-native.md) uses it for selected original function metrics/spans and live controls. Library-context integration, lifetime observers and complete language qualification remain pending. Python remains in the public plan's `remaining` list. Explicit bridge component fixtures are separate from the unedited developer example.
 
 ## Process ownership
 
