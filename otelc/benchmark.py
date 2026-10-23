@@ -70,7 +70,9 @@ def batch(process: Application, count: int) -> dict[str, Any]:
     if not ready:
         raise TimeoutError("application batch did not complete")
     value = json.loads(process.stdout.readline())
-    if value.get("calls") != count or type(value.get("elapsed_ns")) is not int or value["elapsed_ns"] <= 0:
+    if (type(value) is not dict or type(value.get("calls")) is not int
+            or value["calls"] != count or type(value.get("checksum")) is not int
+            or type(value.get("elapsed_ns")) is not int or value["elapsed_ns"] <= 0):
         raise ValueError("invalid application timing response")
     return value
 
