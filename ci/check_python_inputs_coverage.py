@@ -12,7 +12,7 @@ from pathlib import Path
 from ci import build_python_inputs as tooling
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c', 'NativeEncoder.c', 'OriginPins.c')
+NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c', 'NativeEncoder.c', 'FileIOCapture.c', 'OriginPins.c')
 
 
 def summaries(data: dict) -> dict:
@@ -43,7 +43,7 @@ def check() -> dict:
                        'LLVM_PROFILE_FILE': str(directory / 'inputs-%p-%m.profraw')}
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
                         'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder',
-                        'test_python_origin_writer', 'test_python_origin_pins', '-v'],
+                        'test_python_origin_writer', 'test_python_fileio_inputs', 'test_python_origin_pins', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:

@@ -20,7 +20,8 @@ from ci import native_encoder
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'InputJournal.h',
-           'NativeMain.c', 'NativeEncoder.c', 'NativeEncoder.h', 'OriginPins.c', 'OriginPins.h')
+           'NativeMain.c', 'NativeEncoder.c', 'NativeEncoder.h',
+           'FileIOCapture.c', 'FileIOCapture.h', 'OriginPins.c', 'OriginPins.h')
 
 
 def digest(path: Path) -> dict[str, str]:
@@ -144,7 +145,8 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
             '-DOTELC_PY_BASE_EXECUTABLE=' + native_encoder.Factory.data(os.fsencode(identity['initial_configuration']['base_executable']['path']) + b'\0')]
         commands = [[selected, *link, str(sources / 'CodeCapture.c'),
                      str(sources / 'EntryCapture.c'), str(sources / 'ImportCapture.c'),
-                     str(sources / 'InputJournal.c'), str(sources / 'NativeEncoder.c'), str(sources / 'OriginPins.c'),
+                     str(sources / 'InputJournal.c'), str(sources / 'NativeEncoder.c'),
+                     str(sources / 'FileIOCapture.c'), str(sources / 'OriginPins.c'),
                      '-I', str(candidate),
                      '-o', str(candidate / library), *options],
                     [selected, str(sources / 'NativeMain.c'), str(candidate / library),

@@ -26,16 +26,46 @@ int main(int argc, char **argv) {
     CHECK(argc == 4);
     int fd = open(argv[2], O_WRONLY | O_CREAT | O_EXCL, 0600);
     CHECK(fd >= 0 && otelc_py_journal_open(fd) == 0);
-    CHECK(otelc_py_imports_install() == 0);
     PyConfig config;
     PyConfig_InitPythonConfig(&config);
     PyStatus status = PyConfig_SetBytesString(&config, &config.program_name, argv[3]);
     if (!PyStatus_Exception(status)) status = Py_InitializeFromConfig(&config);
     PyConfig_Clear(&config);
     CHECK(!PyStatus_Exception(status));
-    CHECK(otelc_py_imports_ready() == 0);
     PyObject *path = PyUnicode_DecodeFSDefault(argv[1]);
     CHECK(path != NULL);
+    PyObject *globals = PyModule_GetDict(PyImport_AddModule("__main__"));
+    CHECK(globals && PyDict_SetItemString(globals, "input_path", path) == 0);
+    /* Existing application method keys must survive observer installation.
+       A shared ml_meth mutation would change their hash after insertion. */
+    CHECK(PyRun_SimpleString(
+        "import _io\n"
+        "early_file = _io.FileIO(input_path, 'r')\n"
+        "early_read = early_file.read\n"
+        "early_hash = hash(early_read)\n"
+        "early_dict = {early_read: 'original'}\n"
+        "early_set = {early_read}\n"
+        "early_frozen = frozenset([early_read])\n") == 0);
+    CHECK(otelc_py_imports_install() == 0);
+    CHECK(otelc_py_imports_ready() == 0);
+    CHECK(PyRun_SimpleString(
+        "assert hash(early_read) == early_hash\n"
+        "assert early_dict[early_read] == 'original'\n"
+        "assert early_read in early_set and early_read in early_frozen\n"
+        "assert early_read == early_file.read\n"
+        "assert early_read() == b'abc'\n"
+        "early_file.close()\n") == 0);
+    PyThreadState *main_thread = PyThreadState_Get();
+    PyThreadState *other = Py_NewInterpreter();
+    CHECK(other != NULL);
+    int foreign_result = PyRun_SimpleString(
+        "import _io\n"
+        "with _io.FileIO('/dev/null', 'r') as file:\n"
+        " assert file.read() == b''\n"
+        " assert file.read == _io.FileIO.read.__get__(file, _io.FileIO)\n");
+    Py_EndInterpreter(other);
+    PyThreadState_Swap(main_thread);
+    CHECK(foreign_result == 0);
 
     PyObject *input = regular_input(path);
     PyObject *unencodable = PyUnicode_FromOrdinal(0xd800);
@@ -70,7 +100,6 @@ int main(int argc, char **argv) {
     PyErr_Clear();
     Py_DECREF(wrapper);
 
-    PyObject *globals = PyModule_GetDict(PyImport_AddModule("__main__"));
     input = regular_input(path);
     CHECK(input != NULL);
     PyObject *number = PyLong_FromLong(PyObject_AsFileDescriptor(input));
