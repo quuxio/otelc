@@ -164,7 +164,7 @@ print(importlib.machinery.SourceFileLoader('empty', '/dev/null').get_data('/dev/
         data = self.root / 'data.py'
         data.write_bytes(b'abc')
         path = self.root / 'faults.journal'
-        with subprocess.Popen([str(self.faults), str(data), str(path)],
+        with subprocess.Popen([str(self.faults), str(data), str(path), sys.executable],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
             out, err = child.communicate(timeout=15)
         self.assertEqual((child.returncode, out, err), (0, b'', b''))
