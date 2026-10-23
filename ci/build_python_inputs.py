@@ -43,6 +43,25 @@ def compiler() -> str:
     return resolved
 
 
+def initial_configuration() -> dict[str, dict[str, str]]:
+    """Pin the frontend's pre-site spelling without running startup hooks.
+
+    A framework launcher can resolve an alias before sitecustomize changes
+    sys.executable again. A venv path must keep its original spelling instead.
+    """
+    value = json.loads(subprocess.check_output([sys.executable, '-I', '-S', '-B', '-c',
+        'import json,sys;print(json.dumps({"executable":sys.executable,"base_executable":sys._base_executable}))'],
+        text=True, timeout=10))
+    if type(value) is not dict or set(value) != {'executable', 'base_executable'}:
+        raise ValueError('native Python initial executable probe is invalid')
+    for name, spelling in value.items():
+        if type(spelling) is not str or not spelling or '\0' in spelling or not Path(spelling).is_absolute():
+            raise ValueError('native Python initial executable probe is invalid')
+        if name == 'executable' and not Path(spelling).samefile(sys.executable):
+            raise ValueError('native Python initial executable differs from the selected interpreter')
+    return {name: digest(Path(spelling)) for name, spelling in value.items()}
+
+
 def toolchain() -> tuple[dict, list[str]]:
     """Refuse mismatched headers and free-threaded/unsupported interpreter profiles."""
     if (sys.implementation.name != 'cpython' or sys.version_info < (3, 12)
@@ -62,6 +81,7 @@ def toolchain() -> tuple[dict, list[str]]:
     library_root = sysconfig.get_config_var('PYTHONFRAMEWORKPREFIX') or sysconfig.get_config_var('LIBDIR')
     python_library = Path(library_root) / sysconfig.get_config_var('LDLIBRARY')
     identity = {'interpreter': digest(Path(sys.executable)), 'version': sys.version,
+                'initial_configuration': initial_configuration(),
                 'cache_tag': sys.implementation.cache_tag, 'config': digest(config),
                 'platform': sysconfig.get_platform(), 'machine': platform.machine(),
                 'builder': digest(Path(__file__)),
@@ -114,12 +134,17 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
                 else ['-shared', '-fPIC', '-Wl,-soname,' + library])
         origin = '@loader_path' if sys.platform == 'darwin' else '$ORIGIN'
         selected = identity['compiler']['path']
+        executable_defines = [
+            '-DOTELC_PY_SELECTED_EXECUTABLE=' + native_encoder.Factory.data(os.fsencode(identity['interpreter']['path']) + b'\0'),
+            '-DOTELC_PY_INITIAL_EXECUTABLE=' + native_encoder.Factory.data(os.fsencode(identity['initial_configuration']['executable']['path']) + b'\0'),
+            '-DOTELC_PY_BASE_EXECUTABLE=' + native_encoder.Factory.data(os.fsencode(identity['initial_configuration']['base_executable']['path']) + b'\0')]
         commands = [[selected, *link, str(sources / 'CodeCapture.c'),
                      str(sources / 'EntryCapture.c'), str(sources / 'ImportCapture.c'),
                      str(sources / 'InputJournal.c'), str(sources / 'NativeEncoder.c'),
                      '-I', str(candidate),
                      '-o', str(candidate / library), *options],
                     [selected, str(sources / 'NativeMain.c'), str(candidate / library),
+                     *executable_defines,
                      '-Wl,-rpath,' + origin, '-Wl,-rpath,' + str(sysconfig.get_config_var('LIBDIR')),
                      '-o', str(candidate / 'otelc-python-inputs'), *options]]
         for command in commands:
