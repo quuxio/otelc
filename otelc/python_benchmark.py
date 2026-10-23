@@ -1,4 +1,4 @@
-"""Paired original-source CPython workloads with a separately owned SDK process."""
+"""Paired prepared CPython workloads with actual application/SDK/owner evidence."""
 
 from __future__ import annotations
 
@@ -6,17 +6,18 @@ import hashlib
 import json
 import os
 import platform
-import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from otelc import benchmark, benchmark_process, control
-from otelc import python as adapter
+from otelc import benchmark, benchmark_process, control, python_benchmark_launch as launch
+from otelc import python as adapter, python_stock_benchmark as stock
+from otelc import python_launch_files as files
 from otelc.config import Policy
 from otelc.file_inputs import identity as file_identity
-from otelc.python_sdk_process import SdkProcess, policy_digest
+from otelc.python_sdk_process import policy_digest
 
 
 def counts(value: Any, names: set[str]) -> dict[str, int]:
@@ -70,78 +71,47 @@ def validate_drain(report: dict[str, Any], pid: int, sdk_pid: int, *, lifetimes:
 
 @contextmanager
 def application(policy: Policy, runtime: Path, *, plain: bool
-                ) -> Iterator[tuple[subprocess.Popen[str], SdkProcess | None]]:
-    """Own the native app and SDK through final drain, including failed samples."""
-    runtime.mkdir(mode=0o700)
-    sdk = process = descriptor = None
-    command = adapter.invocation(adapter.ROOT, entry=adapter.ROOT / 'examples/python/BenchmarkApp.py',
-                                 module=None, arguments=())
-    try:
-        environment = None
-        inherited = ()
-        if not plain:
-            sdk = SdkProcess.start(policy, runtime / 'sdk', bind=False)
-            descriptor, environment = adapter.prepare(policy, runtime, sdk, adapter.ROOT)
-            inherited = (*sdk.channel.descriptors, descriptor)
-        with (runtime.parent / ('plain.stderr' if plain else 'instrumented.stderr')).open('w') as errors:
-            process = subprocess.Popen(command, cwd=adapter.ROOT, env=environment, pass_fds=inherited,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
-            (runtime / 'process.json').write_text(json.dumps({'driver_pid': os.getpid(),
-                'application_pid': process.pid, 'sdk_pid': sdk.process.pid if sdk else None,
-                'application_command': command}, indent=2) + '\n')
-            if sdk is not None:
-                sdk.channel.close()
-                os.close(descriptor)
-                descriptor = None
-            try:
-                yield process, sdk
-            finally:
-                try:
-                    benchmark.stop(process)
-                finally:
-                    if sdk is not None:
-                        report = sdk.wait_report(application_pid=process.pid)
-                        validate_drain(report, process.pid, sdk.process.pid,
-                                       lifetimes=policy.data['lifetimes']['enabled'])
-    finally:
-        try:
-            if descriptor is not None:
-                os.close(descriptor)
-            if process is not None:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait(timeout=5)
-                for stream in (process.stdin, process.stdout):
-                    if stream is not None:
-                        stream.close()
-        finally:
-            if sdk is not None:
-                sdk.abort()
-        if process is not None:
-            (runtime / 'exit.json').write_text(json.dumps({'application_exit': process.returncode,
-                'sdk_exit': sdk.process.poll() if sdk else None}) + '\n')
+                ) -> Iterator[tuple[launch.Application, int | None]]:
+    """Validate the actual public launch and its independent final SDK drain."""
+    manager = stock.application(policy, runtime) if plain else launch.application(policy, runtime, plain=False)
+    with manager as process:
+        yield process, process.sdk_pid
+    if not plain:
+        validate_drain(process.sdk_report, process.pid, process.sdk_pid,
+                       lifetimes=policy.data['lifetimes']['enabled'])
 
 
 def measure_process(policy: Policy, output: Path, lane: str,
-                    expected: int, records: benchmark.Measurements) -> tuple[int, int | None]:
-    """The driver launches the real app directly, without inventing a wrapper PID."""
+                    expected: int, records: benchmark.Measurements) -> launch.Application:
+    """Measure actual application/SDK identities separately from the supervisor."""
     plain = lane == 'plain'
     runtime = output / lane
     endpoint = None if plain else runtime / 'control.json'
-    with application(policy, runtime, plain=plain) as (process, sdk):
-        sdk_pid = sdk.process.pid if sdk else None
+    with application(policy, runtime, plain=plain) as (process, sdk_pid):
         if endpoint is not None:
             ready = control.wait_ready(endpoint, process.pid)
             if ready.get('sdk_pid') != sdk_pid:
                 raise ValueError('Python benchmark SDK identity differs')
             control.request(endpoint, 'off')
+        # This unmeasured one-call handshake is deliberately outside the steady
+        # sample timer. It includes launch/readiness, controls, pipe and body time.
+        response = benchmark.batch(process, 1)
+        received = time.monotonic_ns()
+        process.first_response = {'elapsed_ns': received - process.created_at_monotonic_ns,
+            'calls': 1, 'response': response,
+            'scope': 'process creation through first workload response; includes readiness, controls, IPC and body'}
+        files.write(runtime / 'python-first-response.json', process.first_response)
+        if response['checksum'] != benchmark.checksum(1):
+            raise ValueError('startup checksum mismatch')
         for _ in range(policy.data['benchmark']['warmup']):
             if benchmark.batch(process, policy.data['benchmark']['iterations'])['checksum'] != expected:
                 raise ValueError('warmup checksum mismatch')
         if endpoint is not None:
             control.request(endpoint, 'flush')
-        benchmark_process.measure_batches(process, policy, output, endpoint, sdk_pid, expected, records)
-        return process.pid, sdk_pid
+        benchmark_process.measure_batches(process, policy, output, endpoint, sdk_pid, expected, records,
+                                          supervisor_pid=process.supervisor_pid)
+    process.evidence['python-first-response.json'] = file_identity(runtime / 'python-first-response.json')
+    return process
 
 
 def run(policy: Policy, output: Path, *, comparison_id: str | None = None,
@@ -153,23 +123,31 @@ def run(policy: Policy, output: Path, *, comparison_id: str | None = None,
     before = file_identity(source)
     records = benchmark.Measurements()
     expected = benchmark.checksum(policy.data['benchmark']['iterations'])
-    pids = {}
-    sdk_pid = None
-    for lane in ('plain', 'instrumented'):
-        pids[lane], child = measure_process(policy, output, lane, expected, records)
-        sdk_pid = child or sdk_pid
+    processes = {lane: measure_process(policy, output, lane, expected, records)
+                 for lane in ('plain', 'instrumented')}
+    for lane, process in processes.items():
+        (stock.recheck if lane == 'plain' else launch.recheck)(process)
+    pids = {lane: process.pid for lane, process in processes.items()}
+    supervisors = {lane: process.supervisor_pid for lane, process in processes.items()}
+    sdk_pid = processes['instrumented'].sdk_pid
     if file_identity(source) != before:
         raise ValueError('application source changed')
     identity = benchmark_process.RunIdentity('python', platform.python_implementation() + ' ' + platform.python_version(),
-        'CPython bytecode', ('native source launch', 'no additional interpreter flags'), before['sha256'])
+        'CPython bytecode', ('stock CPython plain; prepared native code-v2 instrumented', 'no additional application interpreter flags'), before['sha256'])
     report = benchmark_process.summary(policy, output, records, identity, pids, sdk_pid, comparison_id)
+    report['launch_profile'] = 'stock-plain-prepared-codes-v5'
+    report['supervisor_pids'] = supervisors
+    report['launch_to_first_response'] = {lane: process.first_response for lane, process in processes.items()}
+    report['baseline'] = {'plain': 'direct stock interpreter; no otelc observer, bootstrap or SDK',
+        'instrumented': 'prepared supervisor/application/SDK', 'plain_consumed_source': 'unavailable'}
+    report['launch_evidence'] = {lane: process.evidence for lane, process in processes.items()}
     report['config_sha256'] = policy_digest(policy)
     executable = Path(sys.executable).resolve(strict=True)
     report['interpreter'] = {'path': sys.executable, 'resolved_path': str(executable),
         'sha256': hashlib.sha256(executable.read_bytes()).hexdigest(), 'version': sys.version,
         'environment': {key: os.environ.get(key) for key in ('PYTHONOPTIMIZE', 'PYTHONHASHSEED', 'PYTHONDONTWRITEBYTECODE')}}
     report['requirements_sha256'] = hashlib.sha256((adapter.ROOT / 'requirements.txt').read_bytes()).hexdigest()
-    report['source_evidence_scope'] = 'internal example source hashes and bootstrap files; full Python import/code provenance unqualified'
+    report['source_evidence_scope'] = 'stock plain: original filesystem identities only; instrumented: prepared supervisor, native entry/ordinary-loader reads and format-checked code-v2 descriptors; source/dependency attribution unqualified'
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     if publish:
         benchmark.export_result(report, policy.data['export']['endpoint'])

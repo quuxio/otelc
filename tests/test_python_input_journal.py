@@ -30,6 +30,20 @@ def final(*, pid: int = 12, count: int = 1, size: int = 9, failures: int = 0,
 
 
 class PythonInputJournalTests(unittest.TestCase):
+    def test_import_records_are_separate_from_entry_and_final_counts_cover_both(self) -> None:
+        payload = journal.SOURCE.pack(12, 3, 4, 4, 0, 0, stat.S_IFREG | 0o644) + b'pyc!'
+        data = source() + record(3, 2, payload, b'module.pyc') + final(count=2, size=13, sequence=3)
+        value = journal.decode(data, expected_pid=12)
+        self.assertTrue(value.complete)
+        self.assertEqual(len(value.sources), 1)
+        self.assertEqual([(item.path, item.content) for item in value.imports], [(b'module.pyc', b'pyc!')])
+        for changed in (data[:-1], source() + record(3, 2, payload, b'module.pyc')
+                        + final(count=1, size=9, sequence=3)):
+            with self.assertRaises(ValueError):
+                journal.decode(changed, expected_pid=12)
+        imports_only = record(3, 1, payload, b'module.pyc') + final(size=4, expected=0)
+        self.assertFalse(journal.decode(imports_only, expected_pid=12).complete)
+
     def test_exact_source_identity_bytes_signed_timestamp_and_final_counters(self) -> None:
         value = journal.decode(source() + final(), expected_pid=12)
         self.assertTrue(value.complete)
@@ -122,3 +136,27 @@ class PythonInputJournalTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, 'wrapper failed'):
                     journal.read(path, expected_pid=12)
             self.assertEqual(len(os.listdir('/dev/fd')), before)
+
+    def test_code_records_allow_completed_threads_to_write_out_of_identity_order(self) -> None:
+        def code(code_id: int, sequence: int, **changes) -> bytes:
+            values = dict(pid=12, identity=code_id, offset=0, version=0x030c00f0,
+                          descriptor_version=1, length=6, reserved=0)
+            values.update(changes)
+            return record(4, sequence, journal.CODE.pack(*values.values()) + b'opaque', b'entry.py')
+
+        good = source() + code(2, 2) + code(1, 3) + final(count=3, size=21, sequence=4)
+        value = journal.decode(good, expected_pid=12)
+        self.assertTrue(value.complete)
+        self.assertEqual([item.identity for item in value.codes], [2, 1])
+        for bad in (source() + code(2, 2) + final(count=2, size=15, sequence=3),
+                    source() + code(1, 2) + code(1, 3) + final(count=3, size=21, sequence=4)):
+            with self.assertRaises(ValueError):
+                journal.decode(bad, expected_pid=12)
+        lost = source() + code(2, 2) + final(count=2, size=15, sequence=3, failures=1)
+        self.assertFalse(journal.decode(lost, expected_pid=12).complete)
+        for changes in ({'pid': 13}, {'identity': 0}, {'offset': 1}, {'version': 0x030b00f0},
+                        {'version': 0x04000000}, {'version': 2**32}, {'descriptor_version': 3},
+                        {'length': 0}, {'length': 5}, {'reserved': 1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                journal.decode(source() + code(1, 2, **changes)
+                               + final(count=2, size=15, sequence=3), expected_pid=12)
