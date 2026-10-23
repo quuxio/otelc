@@ -14,7 +14,7 @@ Object lifetimes are selected through the common policy. Report construction-to-
 
 1. Java: official OpenTelemetry Java agent, common-policy translation and small extension for direct function metrics, live controls and lifetime observation.
 2. Microsoft TypeScript and JavaScript: official Node SDK/instrumentations, generated loader/bootstrap and precise application probes; qualify both Microsoft compiler paths and CJS/ESM.
-3. Python: official SDK/library instrumentors with CPython monitoring and bounded lifecycle observation. The [SDK metric gates](python-sdk-controls.md) are in development; source-free launch and the separate SDK process still need implementation and qualification.
+3. Python: official SDK/library instrumentors with CPython monitoring and bounded lifecycle observation. The [SDK metric gates](python-sdk-controls.md) and [isolated SDK process bridge](python-sdk-process.md) are in development; source-free launch and language qualification remain pending.
 4. Go: official compile-time rule engine and SDK, generated rules and metric-only live controls.
 5. LLVM: selectively reuse the archive's exception-aware pass and manifest/runtime contract; independent IR fixture.
 6. C: equivalent workload and selected resource acquisition/release observations.
