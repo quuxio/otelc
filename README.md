@@ -18,6 +18,8 @@ The [Python frontend candidate](docs/python-native.md) launches original CPython
 
 The [native input component](docs/python-input-journal.md#validation-scope) includes an SDK-independent descriptor encoder for source-origin work. It does not yet bind source reads to selected code or enable a new provider capability.
 
+Native launch also retains the selected interpreter's pre-site executable identities, preserving the tested Homebrew alias and copied-venv metadata under ordinary and `-S` startup.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.

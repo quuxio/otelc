@@ -47,7 +47,8 @@ class PythonNativeInputTests(NativeInputCase):
     def test_relative_unicode_symlink_flags_and_entry_metadata_remain_native(self) -> None:
         source = b'''import json,sys
 print(json.dumps({'argv':sys.argv,'orig_argv':sys.orig_argv,'path':sys.path,
-'executable':sys.executable,'prefix':sys.prefix,'base_prefix':sys.base_prefix,
+'executable':sys.executable,'base_executable':sys._base_executable,
+'prefix':sys.prefix,'base_prefix':sys.base_prefix,
 'file':__file__,'spec':__spec__,'loader':type(__loader__).__name__,
 'cached':__cached__,'back':sys._getframe().f_back is None,'flags':repr(sys.flags)},sort_keys=True))
 '''
@@ -133,6 +134,15 @@ print('original')
                 self.assertEqual((result.returncode, result.stdout, result.stderr), (64, b'', b''))
         result = subprocess.run([str(self.tool)], capture_output=True, timeout=15)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (64, b'', b''))
+        path = self.root / 'wrong-interpreter.journal'
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            result = subprocess.run([str(self.tool), str(descriptor), sys.executable + '-other',
+                self.argv0, str(entry)], capture_output=True, pass_fds=(descriptor,), timeout=15)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (64, b'', b''))
+            self.assertEqual(path.read_bytes(), b'')
+        finally:
+            os.close(descriptor)
         arguments = ['--otelc-invalid-python-option', str(entry)]
         native = subprocess.run([sys.executable, *arguments], capture_output=True, timeout=15)
         status, out, err, path, pid = self.launch(arguments)

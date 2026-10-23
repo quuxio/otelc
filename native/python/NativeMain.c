@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     int origins = argc > 1 && !strcmp(argv[1], "--origin-observer");
     if (origins) { --argc; ++argv; }
     /* driver inherited-journal-fd selected-python original-argv0 [native args] */
-    if (argc < 5) return 64;
+    if (argc < 5 || strcmp(argv[2], OTELC_PY_SELECTED_EXECUTABLE)) return 64;
     char *end;
     errno = 0;
     long descriptor = strtol(argv[1], &end, 10);
@@ -50,7 +50,10 @@ int main(int argc, char **argv) {
     if (config.orig_argv.length) {
         checked(PyConfig_SetBytesString(&config, &config.orig_argv.items[0], argv[3]), &config);
     }
-    checked(PyConfig_SetBytesString(&config, &config.executable, argv[2]), &config);
+    /* Use the selected frontend's pre-site identity, then let its normal
+       startup hooks run once. Forcing the host's post-site alias breaks -S. */
+    checked(PyConfig_SetBytesString(&config, &config.executable, OTELC_PY_INITIAL_EXECUTABLE), &config);
+    checked(PyConfig_SetBytesString(&config, &config.base_executable, OTELC_PY_BASE_EXECUTABLE), &config);
     checked(Py_InitializeFromConfig(&config), &config);
     if (origins && otelc_py_encoder_ready(config.filesystem_encoding, config.filesystem_errors)) {
         PyConfig_Clear(&config);
