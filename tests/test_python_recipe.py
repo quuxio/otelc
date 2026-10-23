@@ -133,7 +133,7 @@ class PythonRecipeTests(unittest.TestCase):
             with self.subTest(change=tuple(change)):
                 with self.assertRaises(ValueError):
                     recipe.resolve_plan({**original, **change})
-        for change in ({'requested': '-entry.py'}, {'resolved': str(self.cwd / 'outside.py')},
+        for change in ({'resolved': str(self.cwd / 'outside.py')},
                        {'resolved': str(self.root / 'entry.pyc')}, {'resolved': 'relative'},
                        {'requested': 'bad\0path'}, {'extra': True}):
             altered = copy.deepcopy(original)
@@ -143,6 +143,24 @@ class PythonRecipeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             recipe.resolve_plan({**original, 'module': None,
                 'paths': {key: value for key, value in original['paths'].items() if key != 'entry'}})
+
+    def test_dash_prefixed_files_keep_intent_and_cannot_become_interpreter_options(self) -> None:
+        for name in ('-cprint(123).py', '-m.py', '--.py', '--help.py'):
+            with self.subTest(name=name):
+                (self.root / name).write_text('print("original")\n')
+                original = self.requested(entry=name, arguments=('-c', '-m', '--', 'literal'))
+                self.assertEqual(original['paths']['entry']['requested'], name)
+                plan = recipe.resolve_plan(original)
+                self.assertEqual(plan['native_arguments'], ['./' + name, '-c', '-m', '--', 'literal'])
+                recipe.verify(original, plan)
+                altered = copy.deepcopy(plan)
+                altered['native_arguments'][0] = name
+                with self.assertRaisesRegex(ValueError, 'fixed recipe'):
+                    recipe.verify(original, altered)
+        changed = self.requested()
+        changed['paths']['entry']['requested'] = '-m.py'
+        with self.assertRaisesRegex(ValueError, 'path resolution changed'):
+            recipe.verify(changed, recipe.resolve_plan(changed))
 
     def test_interpreter_metadata_is_strict_and_rechecked_without_editing_the_binary(self) -> None:
         original = self.requested()

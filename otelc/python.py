@@ -27,7 +27,10 @@ def invocation(root: Path, *, entry: Path | None, module: str | None,
             raise ValueError('Python entry must be a source .py file inside the application root')
         # Root is the command cwd. Preserve the caller's spelling and native
         # __file__/argv semantics rather than substituting a generated runner.
-        return [sys.executable, str(entry), *arguments]
+        script = str(entry)
+        if script.startswith('-'):
+            script = './' + script
+        return [sys.executable, script, *arguments]
     if type(module) is not str or not all(part.isidentifier() for part in module.split('.')):
         raise ValueError('invalid Python module entry')
     return [sys.executable, '-m', module, *arguments]
