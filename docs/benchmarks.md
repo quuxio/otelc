@@ -47,3 +47,9 @@ Lifetime and trace configuration remain in every raw report. To measure lifecycl
 Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate Node panels show CPU/operation and RSS by application/SDK role. The dashboard uses exported driver measurements rather than sampled function-duration histograms.
 
 Use [function metrics and lifetimes](http://localhost:3001/d/otelc-lifetimes) for application telemetry and [task/service traces](http://localhost:3001/d/otelc-traces) for trace trees. The local stack uses OTLP/HTTP port 4320, Prometheus 9091, Tempo 3201 and Grafana 3001. Export success alone is insufficient: check the Collector, Prometheus samples and, when traces are enabled, decoded Tempo spans. Missing language series mean that no qualified results were published for that selection; they are never filled with synthetic values.
+
+## View completed runs
+
+Select a dashboard time range that includes the run, then choose its comparison ID. The panels use the latest retained sample for each series within that range, so completed runs remain visible after the Collector expires their live series. The run selector refreshes when the time range changes. Runtime identity rows omit the query evaluation time; it is not the benchmark recording time.
+
+The local Collector expires inactive metric series after one hour, while Prometheus retains scraped history for seven days. For older results, retain the raw report and sample files. Stopping the stack preserves its named data volumes. Historical throughput and overhead still describe the recorded workload; they are not current application rates.
