@@ -4,6 +4,8 @@
 
 This candidate adds selected function metrics/spans, weak object/resource lifetime observations and live metric controls to original CPython sources. It uses the official SDK tracer, context, sampling and metric/OTLP pipeline. The public `plan` still reports Python as remaining: official library instrumentors, complete source evidence, benchmarks, independent review and oteleq qualification are delivery work.
 
+Script entries are validated source files inside the selected root. A relative filename beginning with `-` is passed with a `./` prefix so CPython treats it as a file. Application arguments, including option-shaped strings, remain literal arguments after the entry. Other entry spelling and module-name validation are unchanged.
+
 ## An unchanged application
 
 [BenchmarkApp.py](../examples/python/BenchmarkApp.py) is an ordinary application with no telemetry imports, decorators, annotations or bootstrap. Its workload uses the same seeded recurrence as the Java, JavaScript and TypeScript examples:
