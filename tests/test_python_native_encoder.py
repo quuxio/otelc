@@ -198,6 +198,35 @@ else:
         status, out, err, _, _ = self.launch(['-B', str(entry)], origin_observer=True)
         self.assertEqual((status, out, err), (0, b'changed defaults refused\n', b''))
 
+    def test_changing_all_visible_default_dictionaries_cannot_replace_fixed_references(self) -> None:
+        entry = self.application('''import gc, types
+import _otelc_inputs as native
+function = next(value for value in gc.get_objects()
+                if type(value) is types.FunctionType and value.__module__ == "otelc.native.encoder")
+original = function.__kwdefaults__["_len"]
+dictionaries = [value for value in gc.get_objects()
+                if type(value) is dict and value.get("_code_type") is types.CodeType
+                and value.get("_len") is original]
+assert dictionaries
+calls = 0
+def changed(value):
+    global calls
+    calls += 1
+    return len(value)
+for dictionary in dictionaries:
+    dictionary["_len"] = changed
+def workload(): return 701
+try:
+    native.encode(workload.__code__)
+except RuntimeError:
+    assert calls == 0, calls
+    print("fixed references preserved")
+else:
+    raise AssertionError(("mutable reference accepted", calls))
+''')
+        status, out, err, _, _ = self.launch(['-B', str(entry)], origin_observer=True)
+        self.assertEqual((status, out, err), (0, b'fixed references preserved\n', b''))
+
     def test_fork_does_not_reuse_parent_encoder_owner(self) -> None:
         entry = self.application('''import os
 import _otelc_inputs as native

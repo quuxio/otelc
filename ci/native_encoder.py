@@ -139,6 +139,7 @@ def header(source: bytes) -> bytes:
         raise ValueError('maintained native encoder defaults changed')
     lines = ['/* Generated from the maintained encoder, for the exact selected CPython. */',
              f'#define OTELC_ENCODER_SOURCE_SHA256 "{hashlib.sha256(source).hexdigest()}"',
+             f'#define OTELC_ENCODER_DEFAULT_COUNT {len(DEFAULTS)}',
              'static PyObject *encoder_code_factory(void) {',
              f'    PyObject *nodes[{count}] = {{0}};', *factory.rows,
              f'    PyObject *result = Py_NewRef(nodes[{root}]);',

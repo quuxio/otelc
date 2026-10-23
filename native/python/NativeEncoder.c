@@ -14,7 +14,7 @@
 
 static PyInterpreterState *encoder_owner;
 static pid_t encoder_pid;
-static PyObject *encoder_function, *encoder_code, *encoder_defaults;
+static PyObject *encoder_function, *encoder_code;
 static void *json_handle, *struct_handle;
 static int attempted;
 
@@ -45,6 +45,10 @@ static PyObject *native_callable(PyMethodDef *definition, PyObject *self) {
 }
 
 #include "EncoderFactory.h"
+
+/* Keep the fixed reference set outside the mutable Python object graph.
+   Copying a dict does not protect it: both copies are visible through GC. */
+static struct { PyObject *name, *value; } encoder_defaults[OTELC_ENCODER_DEFAULT_COUNT];
 
 static PyObject *private_extension(const char *path, const char *symbol,
                                    const char *name, void **handle) {
@@ -123,18 +127,32 @@ int otelc_py_encoder_ready(const wchar_t *encoding, const wchar_t *errors) {
             PyDict_SetItemString(globals, "__name__", name)) goto failed;
     function = PyFunction_New(code, globals);
     if (!function || encoder_defaults_factory(function, json, structure, fs_encoding, fs_errors)) goto failed;
-    defaults = PyDict_Copy(PyFunction_GetKwDefaults(function));
-    if (!defaults) goto failed;
+    defaults = PyFunction_GetKwDefaults(function); /* Borrowed from our function. */
+    if (!defaults || !PyDict_CheckExact(defaults) ||
+            PyDict_Size(defaults) != OTELC_ENCODER_DEFAULT_COUNT) {
+        PyErr_SetString(PyExc_RuntimeError, "native encoder default definition differs");
+        goto failed;
+    }
+    Py_ssize_t position = 0;
+    size_t index = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(defaults, &position, &key, &value)) {
+        encoder_defaults[index].name = Py_NewRef(key);
+        encoder_defaults[index++].value = Py_NewRef(value);
+    }
     encoder_function = function;
     encoder_code = Py_NewRef(code);
-    encoder_defaults = defaults;
     Py_DECREF(json); Py_DECREF(structure); Py_DECREF(globals); Py_DECREF(code);
     Py_DECREF(fs_encoding); Py_DECREF(fs_errors); Py_DECREF(builtins); Py_DECREF(name);
     return 0;
 failed:
     Py_XDECREF(json); Py_XDECREF(structure); Py_XDECREF(globals); Py_XDECREF(code);
     Py_XDECREF(fs_encoding); Py_XDECREF(fs_errors); Py_XDECREF(builtins); Py_XDECREF(name);
-    Py_XDECREF(function); Py_XDECREF(defaults);
+    Py_XDECREF(function);
+    for (size_t index = 0; index < OTELC_ENCODER_DEFAULT_COUNT; ++index) {
+        Py_CLEAR(encoder_defaults[index].name);
+        Py_CLEAR(encoder_defaults[index].value);
+    }
     return -1;
 }
 
@@ -145,14 +163,20 @@ PyObject *otelc_py_native_encode(PyObject *code) {
     }
     PyObject *defaults = PyFunction_GetKwDefaults(encoder_function);
     if (PyFunction_GetCode(encoder_function) != encoder_code || !defaults ||
-            !PyDict_CheckExact(defaults) || PyDict_Size(defaults) != PyDict_Size(encoder_defaults)) {
+            !PyDict_CheckExact(defaults) || PyDict_Size(defaults) != OTELC_ENCODER_DEFAULT_COUNT) {
         PyErr_SetString(PyExc_RuntimeError, "native encoder function/defaults changed");
         return NULL;
     }
     Py_ssize_t position = 0;
     PyObject *key, *value;
     while (PyDict_Next(defaults, &position, &key, &value)) {
-        if (!PyUnicode_CheckExact(key) || PyDict_GetItemWithError(encoder_defaults, key) != value) {
+        if (!PyUnicode_CheckExact(key)) {
+            PyErr_SetString(PyExc_RuntimeError, "native encoder defaults changed");
+            return NULL;
+        }
+    }
+    for (size_t index = 0; index < OTELC_ENCODER_DEFAULT_COUNT; ++index) {
+        if (PyDict_GetItemWithError(defaults, encoder_defaults[index].name) != encoder_defaults[index].value) {
             PyErr_SetString(PyExc_RuntimeError, "native encoder defaults changed");
             return NULL;
         }
