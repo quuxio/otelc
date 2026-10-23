@@ -282,3 +282,37 @@ print(json.dumps(identities))
         self.assertEqual(rows, [[None]])
         self.assertFalse(evidence.complete)
         self.assertEqual(evidence.codes, ())
+
+    def test_embedded_nul_filenames_are_not_silently_truncated(self) -> None:
+        rows, evidence = self.run_code('''
+import json
+def workload(): return 701
+original = workload.__code__
+base = __file__
+for filename in (base + chr(0) + 'suffix', chr(0) + base, ''):
+    __file__ = filename
+    workload.__code__ = original.replace(co_filename=filename)
+    assert workload() == 701
+print(json.dumps(identities))
+''', ('workload',))
+        self.assertEqual(rows, [[None, None, None]])
+        self.assertFalse(evidence.complete)
+        self.assertEqual(evidence.codes, ())
+        self.assertEqual(evidence.capture_failures, 3)
+
+    def test_surrogateescaped_filename_bytes_agree_with_the_code_descriptor(self) -> None:
+        rows, evidence = self.run_code('''
+import json
+def workload(): return 701
+__file__ += chr(0xdcff)
+workload.__code__ = workload.__code__.replace(co_filename=__file__)
+assert workload() == 701
+print(json.dumps(identities))
+''', ('workload',))
+        self.assertEqual(rows, [[1]])
+        self.assertTrue(evidence.complete)
+        saved = evidence.codes[0]
+        root, nodes = self.descriptor(saved)
+        import os
+        self.assertEqual(os.fsencode(nodes[root['fields']['co_filename']]['value']), saved.path)
+        self.assertTrue(saved.path.endswith(b'\xff'))

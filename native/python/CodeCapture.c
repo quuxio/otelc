@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <limits.h>
+#include <string.h>
 #include <unistd.h>
 
 #define CODE_LIMIT 4096U
@@ -220,6 +221,10 @@ static PyObject *observe(PyObject *module, PyObject *arguments) {
         return failed();
     }
     PyObject *path = PyUnicode_EncodeFSDefault(((PyCodeObject *)code)->co_filename);
+    /* CodeType.replace accepts arbitrary Unicode filenames. The raw writer
+       takes a C path, so reject NUL/invalid lengths instead of retaining a prefix. */
+    if (path && (!PyBytes_GET_SIZE(path) || PyBytes_GET_SIZE(path) > OTELC_PY_PATH_LIMIT ||
+            memchr(PyBytes_AS_STRING(path), 0, (size_t)PyBytes_GET_SIZE(path)))) Py_CLEAR(path);
     PyObject *payload = path ? PyObject_CallOneArg(encoder, code) : NULL;
     if (!payload) {
         cache[available].failed = 1;
