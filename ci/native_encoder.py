@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+import _imp
 import dis
 import hashlib
 import inspect
 import os
+import sysconfig
 import types
 from pathlib import Path
 from typing import Any
@@ -161,6 +163,23 @@ def header(source: bytes) -> bytes:
     return ('\n'.join(lines) + '\n').encode('ascii')
 
 
+def dependency_library(name: str, module: types.ModuleType) -> Path:
+    """Pin a dynamic module or its actual shared-interpreter container.
+
+    Built-in standard modules can export the same multi-phase initialiser
+    from libpython. The native loader still checks that symbol's real origin.
+    """
+    filename = vars(module).get('__file__')
+    if type(filename) is str:
+        return Path(filename).resolve(strict=True)
+    if name not in ('_json', '_struct') or not _imp.is_builtin(name):
+        raise ValueError('native encoder dependency has no library origin: ' + name)
+    directory, library = (sysconfig.get_config_var(key) for key in ('LIBDIR', 'LDLIBRARY'))
+    if type(directory) is not str or type(library) is not str:
+        raise ValueError('native encoder builtin dependency requires a shared Python library')
+    return (Path(directory) / library).resolve(strict=True)
+
+
 def generate(root: Path) -> tuple[bytes, dict[str, Any]]:
     """Pin the helper, generator, generated constructors and actual C libraries."""
     import _json
@@ -172,7 +191,7 @@ def generate(root: Path) -> tuple[bytes, dict[str, Any]]:
               'generator_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     generated = header(data)
     for name, module in (('json', _json), ('struct', _struct)):
-        path = Path(module.__file__).resolve(strict=True)
+        path = dependency_library('_' + name, module)
         result[name] = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
         generated += (f'#define OTELC_ENCODER_{name.upper()}_PATH ' +
                       Factory.data(os.fsencode(path) + b'\0') + '\n').encode('ascii')

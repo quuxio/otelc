@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import tempfile
+import types
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -68,3 +70,28 @@ class NativeEncoderBuildTests(unittest.TestCase):
         self.assertEqual(factory.node(value), first)
         self.assertIs(factory.seen[id(value)][0], value)
         self.assertIn('PyTuple_New(1)', '\n'.join(factory.rows))
+
+    def test_builtin_dependencies_pin_the_actual_shared_interpreter_container(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            library = Path(temporary) / 'libpython.dylib'
+            library.write_bytes(b'owned interpreter container')
+            with mock.patch.object(native_encoder._imp, 'is_builtin', return_value=1), \
+                    mock.patch.object(native_encoder.sysconfig, 'get_config_var',
+                                      side_effect=lambda key: {'LIBDIR': temporary, 'LDLIBRARY': library.name}[key]):
+                for name in ('_json', '_struct'):
+                    self.assertEqual(native_encoder.dependency_library(name, types.ModuleType(name)), library.resolve())
+                library.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    native_encoder.dependency_library('_json', types.ModuleType('_json'))
+
+    def test_missing_file_requires_a_real_builtin_and_available_shared_library_metadata(self) -> None:
+        module = types.ModuleType('_json')
+        with mock.patch.object(native_encoder._imp, 'is_builtin', return_value=0), \
+                self.assertRaisesRegex(ValueError, 'no library origin'):
+            native_encoder.dependency_library('_json', module)
+        with self.assertRaisesRegex(ValueError, 'no library origin'):
+            native_encoder.dependency_library('unknown', module)
+        with mock.patch.object(native_encoder._imp, 'is_builtin', return_value=1), \
+                mock.patch.object(native_encoder.sysconfig, 'get_config_var', return_value=None), \
+                self.assertRaisesRegex(ValueError, 'shared Python library'):
+            native_encoder.dependency_library('_json', module)
