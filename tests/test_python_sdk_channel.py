@@ -89,9 +89,10 @@ class PythonSdkChannelTests(unittest.TestCase):
             channel.request('status')
         with self.assertRaises(RuntimeError):
             channel.controls(collection=True, emission=True)
-        channel.bind(os.getpid())
+        pid = os.getpid()
+        channel.bind(pid)
         with self.assertRaises(RuntimeError):
-            channel.bind(os.getpid())
+            channel.bind(pid)
         with self.assertRaises(ValueError):
             channel.request('shutdown')
         for value in (0, float('nan'), float('inf')):
