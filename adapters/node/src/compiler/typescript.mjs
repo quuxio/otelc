@@ -35,7 +35,9 @@ function executionFormat(filename, moduleKind, hint) {
   if (filename.endsWith('.mts')) return 'module';
   if (['module', 'commonjs'].includes(hint)) return hint;
   if (moduleKind === ts.ModuleKind.CommonJS) return 'commonjs';
-  return undefined;
+  // This is the concrete fallback already returned by the plain loader for
+  // Preserve output. Keep compiler receipts and both execution lanes aligned.
+  return 'module';
 }
 export function transpile(source, filename, sourceName, plan, root = process.cwd(), hintedFormat = undefined, readFile = ts.sys.readFile) {
   if (/\.d\.(?:ts|mts|cts)$/.test(filename) || filename.endsWith('.tsx')) throw new Error('TypeScript declarations and JSX are not executable adapter inputs');
