@@ -121,11 +121,32 @@ class PythonMonitor:
             return None
         return name
 
+    def _frame(self) -> FrameType | None:
+        """Respect unavailable frame access without changing application results."""
+        try:
+            return sys._getframe(2)
+        except Exception:
+            self.runtime.reject('monitor_frame')
+            return None
+
+    def _failed(self, reason: str, key: int | None) -> None:
+        # Never repeat an introspection operation that has already failed.
+        if key is not None:
+            try:
+                self.runtime.abandon(key)
+            except Exception:
+                self.runtime.reject('monitor_cleanup')
+        self.runtime.reject(reason)
+
     def _start(self, code: CodeType, offset: int) -> None:
+        key = None
         try:
             name = self.selected(code)
             if name is not None:
-                key = id(sys._getframe(1))
+                frame = self._frame()
+                if frame is None:
+                    return
+                key = id(frame)
                 if self._code_observer is None:
                     self.runtime.enter(key, name)
                 else:
@@ -136,16 +157,18 @@ class PythonMonitor:
                     else:
                         self.runtime.enter(key, name, code_id=identity)
         except Exception:
-            self.runtime.abandon(id(sys._getframe(1)))
-            self.runtime.reject('monitor_start')
+            self._failed('monitor_start', key)
         if self.lifetimes is not None:
             try:
-                self.lifetimes.start(sys._getframe(1))
+                if (frame := self._frame()) is not None:
+                    self.lifetimes.start(frame)
             except Exception:
                 self.lifetimes.reject('monitor_start')
 
     def _return(self, code: CodeType, offset: int, value: object) -> None:
-        frame = sys._getframe(1)
+        frame = self._frame()
+        if frame is None:
+            return
         if (self._startup_module is not None and code is site.execsitecustomize.__code__
                 and frame.f_back is not None and frame.f_back.f_code is site.main.__code__):
             if sys.modules.get('sitecustomize') is self._startup_module:
@@ -154,7 +177,8 @@ class PythonMonitor:
         self._complete(frame, None, value)
 
     def _unwind(self, code: CodeType, offset: int, error: BaseException) -> None:
-        self._complete(sys._getframe(1), error)
+        if (frame := self._frame()) is not None:
+            self._complete(frame, error)
 
     def _complete(self, frame: FrameType, error: BaseException | None,
                   value: object = None) -> None:
@@ -163,39 +187,46 @@ class PythonMonitor:
                 self.lifetimes.finish(frame, value, error)
             except Exception:
                 self.lifetimes.reject('monitor_completion')
+        key = None
         try:
             if (cached := self._names.get(id(frame.f_code))) is not None and cached[0]() is frame.f_code:
-                self.runtime.leave(id(frame), error)
+                key = id(frame)
+                self.runtime.leave(key, error)
         except Exception:
-            self.runtime.abandon(id(frame))
-            self.runtime.reject('monitor_completion')
+            self._failed('monitor_completion', key)
 
     def _yield(self, code: CodeType, offset: int, value: object) -> None:
-        self._suspend(sys._getframe(1), resume=False)
+        if (frame := self._frame()) is not None:
+            self._suspend(frame, resume=False)
 
     def _resume(self, code: CodeType, offset: int, *unused: object) -> None:
-        self._suspend(sys._getframe(1), resume=True)
+        if (frame := self._frame()) is not None:
+            self._suspend(frame, resume=True)
 
     def _suspend(self, frame: FrameType, *, resume: bool) -> None:
+        key = None
         try:
             if (cached := self._names.get(id(frame.f_code))) is not None and cached[0]() is frame.f_code:
                 operation = self.runtime.resume if resume else self.runtime.suspend
-                operation(id(frame))
+                key = id(frame)
+                operation(key)
         except Exception:
-            self.runtime.abandon(id(frame))
-            self.runtime.reject('monitor_context')
+            self._failed('monitor_context', key)
 
     def _call(self, code: CodeType, offset: int, callable: object, argument: object) -> None:
         try:
-            self.lifetimes.class_call(sys._getframe(1), offset, callable)
+            if (frame := self._frame()) is not None:
+                self.lifetimes.class_call(frame, offset, callable)
         except Exception:
             self.lifetimes.reject('monitor_call')
 
     def _c_return(self, code: CodeType, offset: int, callable: object, argument: object) -> None:
-        self._class_finished(sys._getframe(1), offset, failed=False)
+        if (frame := self._frame()) is not None:
+            self._class_finished(frame, offset, failed=False)
 
     def _c_raise(self, code: CodeType, offset: int, callable: object, argument: object) -> None:
-        self._class_finished(sys._getframe(1), offset, failed=True)
+        if (frame := self._frame()) is not None:
+            self._class_finished(frame, offset, failed=True)
 
     def _class_finished(self, frame: FrameType, offset: int, *, failed: bool) -> None:
         try:
