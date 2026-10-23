@@ -12,7 +12,7 @@ from pathlib import Path
 from ci import build_python_inputs as tooling
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c', 'NativeEncoder.c', 'FileIOCapture.c')
+NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c', 'NativeEncoder.c', 'FileIOCapture.c', 'OriginPins.c')
 
 
 def export_command(llvm: Path, objects: list[Path], profile: Path, architecture: str) -> list[str]:
@@ -53,7 +53,7 @@ def check() -> dict:
                        'LLVM_PROFILE_FILE': str(directory / 'inputs-%p-%m.profraw')}
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
                         'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder',
-                        'test_python_origin_writer', 'test_python_fileio_inputs', '-v'],
+                        'test_python_origin_writer', 'test_python_fileio_inputs', 'test_python_origin_pins', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:
@@ -64,7 +64,8 @@ def check() -> dict:
         fixture = ROOT / 'build/native' / ('python-input-fixture-' + sys.implementation.cache_tag)
         imports = ROOT / 'build/native' / ('python-import-fixture-' + sys.implementation.cache_tag)
         encoder = ROOT / 'build/native' / ('python-encoder-fixture-' + sys.implementation.cache_tag)
-        objects = [binary, binary.parent / manifest['library'], fixture, imports, encoder]
+        pins = ROOT / 'build/native' / ('python-origin-pins-fixture-' + sys.implementation.cache_tag)
+        objects = [binary, binary.parent / manifest['library'], fixture, imports, encoder, pins]
         output = subprocess.check_output(export_command(llvm, objects, profile, manifest['inputs']['machine']), text=True)
         (ROOT / 'build/python-native-coverage.raw.json').write_text(output)
         result = {'interpreter': manifest['inputs']['interpreter'], 'architecture': manifest['inputs']['machine'],
