@@ -40,8 +40,9 @@ class PythonOriginWriterTests(NativeInputCase):
         self.assertEqual(inputs.FINAL.unpack(records[5][3]), (child.pid, 5, 20, 0, 0, 1, 1))
         # This fixture deliberately writes opaque graph bytes. Framing alone
         # cannot qualify it as a genuine compiler/VM origin relation.
+        prepared_input = path.read_bytes()
         with self.assertRaises(ValueError):
-            origins.decode(path.read_bytes(), expected_pid=child.pid)
+            origins.decode(prepared_input, expected_pid=child.pid)
 
     def test_old_profile_refuses_origin_records_and_event_failures_reset_the_token(self) -> None:
         for mode in ('origin-v1', 'origin-invalid'):

@@ -678,8 +678,9 @@ class ProcessGroupCleanupTests(unittest.TestCase):
             with self.subTest(platform=platform), patch.object(prepared.sys, 'platform', platform), \
                     patch.object(prepared.os, 'killpg', side_effect=PermissionError('denied')), \
                     patch.object(prepared.subprocess, 'check_output', return_value=table) as inspect:
+                prepared_input = Mock(pid=431)
                 with self.assertRaises(PermissionError):
-                    prepared.stop_group(Mock(pid=431))
+                    prepared.stop_group(prepared_input)
                 self.assertEqual(inspect.call_count, int(platform == 'darwin'))
 
     def test_unavailable_or_invalid_membership_never_becomes_success(self) -> None:
@@ -687,13 +688,15 @@ class ProcessGroupCleanupTests(unittest.TestCase):
             with self.subTest(table=table), patch.object(prepared.sys, 'platform', 'darwin'), \
                     patch.object(prepared.os, 'killpg', side_effect=PermissionError('unverified')), \
                     patch.object(prepared.subprocess, 'check_output', return_value=table):
+                prepared_input = Mock(pid=431)
                 with self.assertRaises(ValueError):
-                    prepared.stop_group(Mock(pid=431))
+                    prepared.stop_group(prepared_input)
         with patch.object(prepared.sys, 'platform', 'darwin'), \
                 patch.object(prepared.os, 'killpg', side_effect=PermissionError('unverified')), \
                 patch.object(prepared.subprocess, 'check_output', side_effect=subprocess.TimeoutExpired('ps', 1)):
+            prepared_input = Mock(pid=431)
             with self.assertRaises(subprocess.TimeoutExpired):
-                prepared.stop_group(Mock(pid=431))
+                prepared.stop_group(prepared_input)
 
     def test_normal_missing_group_reaps_without_running_an_external_observer(self) -> None:
         process = Mock(pid=431)

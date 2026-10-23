@@ -104,8 +104,9 @@ class BenchmarkTests(unittest.TestCase):
             output = Path(directory) / 'failed'
             with patch.object(benchmark_process, 'process_usage', side_effect=unavailable_after_batch), \
                     patch.object(benchmark, 'export_result') as publish:
+                prepared_input = Policy.parse(data)
                 with self.assertRaisesRegex(ValueError, 'resource observation unavailable'):
-                    benchmark.run(Policy.parse(data), output)
+                    benchmark.run(prepared_input, output)
             publish.assert_not_called()
             self.assertFalse((output / 'report.json').exists())
             self.assertFalse((output / 'raw.jsonl').exists())

@@ -28,9 +28,10 @@ def counts(value: Any, names: set[str]) -> dict[str, int]:
     return {key: value[key] for key in names}
 
 
-def validate_drain(report: dict[str, Any], pid: int, sdk_pid: int, *, lifetimes: bool) -> None:
+def validate_drain(report: dict[str, Any] | None, pid: int, sdk_pid: int, *, lifetimes: bool) -> None:
     """Require actual closed SDK evidence without claiming downstream receipt."""
-    if (report.get('phase') != 'closed' or report.get('sdk_phase') != 'closed'
+    if (type(report) is not dict
+            or report.get('phase') != 'closed' or report.get('sdk_phase') != 'closed'
             or type(report.get('pid')) is not int or report['pid'] != pid
             or type(report.get('sdk_pid')) is not int or report['sdk_pid'] != sdk_pid
             or report.get('producer_checkpoint_available') is not True
@@ -74,11 +75,23 @@ def application(policy: Policy, runtime: Path, *, plain: bool
                 ) -> Iterator[tuple[launch.Application, int | None]]:
     """Validate the actual public launch and its independent final SDK drain."""
     manager = stock.application(policy, runtime) if plain else launch.application(policy, runtime, plain=False)
-    with manager as process:
-        yield process, process.sdk_pid
-    if not plain:
-        validate_drain(process.sdk_report, process.pid, process.sdk_pid,
-                       lifetimes=policy.data['lifetimes']['enabled'])
+    process = None
+    failure = None
+    try:
+        with manager as process:
+            yield process, process.sdk_pid
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        # The owned manager publishes its final SDK report during exit. Body
+        # failures must not skip validation of that independent drain evidence.
+        if not plain and process is not None:
+            if process.sdk_report is None and failure is not None:
+                failure.add_note('Final SDK drain report is unavailable; drain was not validated')
+            else:
+                validate_drain(process.sdk_report, process.pid, process.sdk_pid,
+                               lifetimes=policy.data['lifetimes']['enabled'])
 
 
 def measure_process(policy: Policy, output: Path, lane: str,

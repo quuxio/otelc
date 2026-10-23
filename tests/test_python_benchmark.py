@@ -124,6 +124,30 @@ class PythonBenchmarkTests(unittest.TestCase):
         self.assertFalse(self.capture.points('otelc.benchmark.operation.duration'))
         self.assertEqual(json.loads((output / 'instrumented/python-execution.json').read_text())['sdk']['returncode'], 0)
 
+    def test_measured_body_failure_retains_the_real_closed_sdk_report(self) -> None:
+        runtime = self.root / 'body-failure'
+        failure = RuntimeError('controlled measured-body failure')
+        observed = []
+
+        def failed_measurement():
+            with python_benchmark.application(self.policy, runtime, plain=False) as (process, sdk_pid):
+                observed.append(process)
+                self.assertEqual(benchmark.batch(process, 1)['checksum'], benchmark.checksum(1))
+                self.assertEqual(sdk_pid, process.sdk_pid)
+                raise failure
+
+        with self.assertRaises(RuntimeError) as caught:
+            failed_measurement()
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(len(observed), 1)
+        process = observed[0]
+        self.assertIsNotNone(process.owner.poll())
+        self.assertEqual(process.sdk_report['phase'], 'closed')
+        execution = json.loads((runtime / 'python-execution.json').read_text())
+        self.assertEqual(execution['application'], {'pid': process.pid, 'returncode': 0})
+        self.assertEqual(execution['sdk']['pid'], process.sdk_pid)
+        self.assertEqual(execution['sdk']['returncode'], 0)
+
     def test_valid_body_response_survives_a_later_flush_failure_without_fake_cpu_window(self) -> None:
         process = mock.Mock(pid=os.getpid())
         response = {'calls': 10, 'elapsed_ns': 1000, 'checksum': 42, 'pid': -1}
@@ -141,8 +165,10 @@ class PythonBenchmarkTests(unittest.TestCase):
 
     def test_disabled_policy_is_refused_before_any_process(self) -> None:
         output = self.root / 'refused'
-        with mock.patch('otelc.python_benchmark.application') as launch, self.assertRaises(ValueError):
-            python_benchmark.run(Policy.parse(self.policy.data | {'languages': ['java']}), output)
+        with mock.patch('otelc.python_benchmark.application') as launch:
+            prepared_input = Policy.parse(self.policy.data | {'languages': ['java']})
+            with self.assertRaises(ValueError):
+                python_benchmark.run(prepared_input, output)
         launch.assert_not_called()
         self.assertFalse(output.exists())
 
@@ -163,9 +189,9 @@ class PythonBenchmarkTests(unittest.TestCase):
 
         with mock.patch.object(launch, 'start', side_effect=start), \
                 mock.patch.object(launch.files, 'write', side_effect=write):
+            manager = python_benchmark.application(self.policy, self.root / 'runtime', plain=False)
             with self.assertRaisesRegex(OSError, 'evidence write failure'):
-                with python_benchmark.application(self.policy, self.root / 'runtime', plain=False):
-                    self.fail('failed setup must not yield an application')
+                self.enterContext(manager)
         self.assertEqual(len(started), 1)
         self.assertIsNotNone(started[0].owner.poll())
         for pid in (started[0].pid, started[0].sdk_pid):

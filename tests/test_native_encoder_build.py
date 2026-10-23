@@ -81,8 +81,9 @@ class NativeEncoderBuildTests(unittest.TestCase):
                 for name in ('_json', '_struct'):
                     self.assertEqual(native_encoder.dependency_library(name, types.ModuleType(name)), library.resolve())
                 library.unlink()
+                prepared_input = types.ModuleType('_json')
                 with self.assertRaises(FileNotFoundError):
-                    native_encoder.dependency_library('_json', types.ModuleType('_json'))
+                    native_encoder.dependency_library('_json', prepared_input)
 
     def test_missing_file_requires_a_real_builtin_and_available_shared_library_metadata(self) -> None:
         module = types.ModuleType('_json')
