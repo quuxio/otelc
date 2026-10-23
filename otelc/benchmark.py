@@ -4,24 +4,36 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import platform
-import random
 import select
-import statistics
 import subprocess
 import tempfile
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, TextIO
 
 from otelc import control, java
 from otelc.config import Policy
 
 STATES = {"both_off": (False, False), "collection_only": (True, False),
           "emission_only": (False, True), "both_on": (True, True)}
+
+
+class Application(Protocol):
+    """Application identity and pipes, independently of its supervising owner."""
+
+    @property
+    def pid(self) -> int: ...
+
+    @property
+    def stdin(self) -> TextIO | None: ...
+
+    @property
+    def stdout(self) -> TextIO | None: ...
+
+    def poll(self) -> int | None: ...
+    def wait(self, timeout: float | None = None) -> int: ...
+    def kill(self) -> None: ...
 
 
 @dataclass
@@ -43,7 +55,7 @@ def checksum(count: int) -> int:
     return total
 
 
-def batch(process: subprocess.Popen[str], count: int) -> dict[str, Any]:
+def batch(process: Application, count: int) -> dict[str, Any]:
     """Measure the application's batch body, excluding pipe/control overhead."""
     if process.stdin is None or process.stdout is None:
         raise ValueError("benchmark requires application pipes")
@@ -53,12 +65,14 @@ def batch(process: subprocess.Popen[str], count: int) -> dict[str, Any]:
     if not ready:
         raise TimeoutError("application batch did not complete")
     value = json.loads(process.stdout.readline())
-    if value.get("calls") != count or type(value.get("elapsed_ns")) is not int or value["elapsed_ns"] <= 0:
+    if (type(value) is not dict or type(value.get("calls")) is not int
+            or value["calls"] != count or type(value.get("checksum")) is not int
+            or type(value.get("elapsed_ns")) is not int or value["elapsed_ns"] <= 0):
         raise ValueError("invalid application timing response")
     return value
 
 
-def stop(process: subprocess.Popen[str]) -> None:
+def stop(process: Application) -> None:
     """Bound shutdown and surface an unexpected application exit."""
     try:
         if process.poll() is None and process.stdin:
@@ -99,12 +113,25 @@ def export_result(report: dict[str, Any], endpoint: str) -> None:
             for value in values:
                 duration.record(value / 1_000_000_000., labels)
         export_process_usage(meter, report, comparison_id)
+        export_launch_timing(meter, report, comparison_id)
         metrics = reader.get_metrics_data()
         if metrics is None or exporter.export(metrics) is not MetricExportResult.SUCCESS:
             raise ValueError("Collector did not accept benchmark metrics")
     finally:
         provider.shutdown(timeout_millis=5000)
         exporter.shutdown(timeout_millis=5000)
+
+
+def export_launch_timing(meter: Any, report: dict[str, Any], comparison_id: str) -> None:
+    """Keep launch-to-response timing separate from application-body samples."""
+    if 'launch_to_first_response' not in report:
+        return
+    timing = meter.create_histogram('otelc.benchmark.launch_to_first_response', unit='s')
+    for lane, value in report['launch_to_first_response'].items():
+        timing.record(value['elapsed_ns'] / 1_000_000_000., {
+            'comparison_id': comparison_id, 'run_id': report['run_id'],
+            'language': report['language'], 'mode': lane, 'scope': value['scope'],
+            'runtime': report['runtime'], 'profile': report['launch_profile']})
 
 
 def export_process_usage(meter: Any, report: dict[str, Any], comparison_id: str) -> None:
@@ -124,7 +151,7 @@ def export_process_usage(meter: Any, report: dict[str, Any], comparison_id: str)
             rss.record(usage['rss_bytes'], labels)
 
 
-def switch_state(socket: Path, process: subprocess.Popen[str], mode: str) -> dict[str, Any]:
+def switch_state(socket: Path, process: Application, mode: str) -> dict[str, Any]:
     """Apply a live state and wait for the export-off barrier before timing."""
     collection, emission = STATES[mode]
     control.request(socket, "collection " + ("on" if collection else "off"))
@@ -144,18 +171,18 @@ def measure_batches(process: subprocess.Popen[str], policy: Policy, output: Path
                     socket: Path, *, plain: bool, expected: int,
                     records: Measurements) -> None:
     """Retain raw samples immediately; functional failures never become timings."""
+    from otelc import benchmark_process
+
     configuration = policy.data["benchmark"]
     count = configuration["iterations"]
-    order = ["plain"] if plain else list(STATES)
     for sample in range(configuration["samples"]):
-        if not plain:
-            random.Random(sample).shuffle(order)
-        for mode in order:
+        for mode in benchmark_process.state_order(sample, plain=plain):
             if not plain:
                 records.transitions.append({"sample": sample, "mode": mode, **switch_state(socket, process, mode)})
-            result = batch(process, count)
+            result = benchmark_process.measured_batch(
+                process, count, None if plain else socket, None, output, sample, mode)
             with (output / "raw.jsonl").open("a") as raw:
-                raw.write(json.dumps({"sample": sample, "mode": mode, "pid": process.pid, **result}) + "\n")
+                raw.write(json.dumps({**result, "sample": sample, "mode": mode, "pid": process.pid}) + "\n")
             if result["checksum"] != expected:
                 raise ValueError("plain/instrumented workload checksum differs")
             records.samples[mode].append(result["elapsed_ns"] / count)
@@ -198,10 +225,11 @@ def measure_process(policy: Policy, output: Path, runtime: Path, *, plain: bool,
 def run(policy: Policy, output: Path, *, publish: bool = True,
         comparison_id: str | None = None) -> dict[str, Any]:
     """Compare plain and four live states of one unchanged Java application."""
+    from otelc import benchmark_process
+
     configuration = policy.data["benchmark"]
     count = configuration["iterations"]
     expected = checksum(count)
-    run_id = uuid.uuid4().hex
     output.mkdir(parents=True, exist_ok=False)
     source = java.ROOT / "examples/java/BenchmarkApp.java"
     before = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -216,17 +244,12 @@ def run(policy: Policy, output: Path, *, publish: bool = True,
     if before != after:
         raise ValueError("application source changed")
     version = subprocess.check_output([java.executable("java"), "-version"], stderr=subprocess.STDOUT, text=True).splitlines()[0]
-    report = {"schema_version": 1, "run_id": run_id, "comparison_id": comparison_id or run_id, "language": "java", "runtime": version,
-              "javaagent_version": java.AGENT_VERSION, "javaagent_sha256": java.AGENT_SHA256,
-              "extension_sha256": hashlib.sha256((java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar").read_bytes()).hexdigest(),
-              "config_sha256": hashlib.sha256(json.dumps(policy.data, sort_keys=True).encode()).hexdigest(),
-              "build_flags": ["javac default", "JVM default"],
-              "host": platform.platform(), "machine": platform.machine(), "workload": "integer128-v1", "iterations": count,
-              "warmup": configuration["warmup"], "expected_checksum": expected, "source_sha256": before,
-              "config": policy.data, "pids": pids, "transitions": records.transitions,
-              "samples_ns_per_operation": records.samples,
-              "median_ns_per_operation": {mode: statistics.median(values) for mode, values in records.samples.items()},
-              "recorded_at_unix_ns": time.time_ns(), "host_pid": os.getpid()}
+    compiler = subprocess.check_output([java.executable('javac'), '-version'], stderr=subprocess.STDOUT, text=True).strip()
+    identity = benchmark_process.RunIdentity('java', version, compiler, ('javac default', 'JVM default'), before)
+    report = benchmark_process.summary(policy, output, records, identity, pids, None, comparison_id)
+    report.update(javaagent_version=java.AGENT_VERSION, javaagent_sha256=java.AGENT_SHA256,
+                  extension_sha256=hashlib.sha256((java.ROOT / 'adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar').read_bytes()).hexdigest(),
+                  config_sha256=hashlib.sha256(json.dumps(policy.data, sort_keys=True).encode()).hexdigest())
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     if publish:
         export_result(report, policy.data["export"]["endpoint"])

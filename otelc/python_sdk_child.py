@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-# The private SDK interpreter uses -I and this exact script. Its own source
-# root is added explicitly; application PYTHONPATH/startup hooks are not used.
+# The private SDK interpreter uses -I/-S/-B and this exact script. Explicit
+# source/wheel paths avoid application PYTHONPATH and installed startup hooks.
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from otelc.cli_bootstrap import install_sdk_paths
+install_sdk_paths()
 
 import argparse
 import hashlib

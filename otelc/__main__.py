@@ -2,24 +2,38 @@
 
 from __future__ import annotations
 
+import sys
+
+if __name__ == "__main__":
+    # Normal module startup has already run site hooks. Refuse this CLI path
+    # before SDK imports instead of returning contaminated application/JSON data.
+    print("Use bin/quux-otelc for isolated CLI startup.", file=sys.stderr)
+    raise SystemExit(2)
+
 import argparse
 import json
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java
-from otelc import python as python_adapter
+from otelc import prepared_python as python_adapter
+from otelc import python_benchmark
 from otelc.config import LANGUAGES, Policy
 
 
 def run_example(policy: Policy, language: str, *, plain: bool) -> int:
     """Keep example runtime files through the selected adapter's complete shutdown."""
-    if language not in ("java", "javascript", "typescript"):
+    if language not in ("java", "javascript", "typescript", "python"):
         raise ValueError(f"{language} is not implemented in the rebuild yet")
     with tempfile.TemporaryDirectory(prefix="otelc-", dir="/tmp") as temporary:
+        if language == "python":
+            runtime = Path(temporary) / 'runtime'
+            if not plain:
+                print(f"Control descriptor: {runtime}/control.json", file=sys.stderr)
+            return python_adapter.run(policy, runtime, root=python_adapter.ROOT,
+                entry=python_adapter.ROOT / 'examples/python/BenchmarkApp.py', plain=plain)
         if language != "java":
             return node.run(policy, Path(temporary), language, plain=plain)
         command = java.command(policy, Path(temporary), plain=plain)
@@ -37,7 +51,7 @@ def main() -> int:
     compare = commands.add_parser("benchmark")
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument("--no-publish", action="store_true")
-    compare.add_argument("--language", choices=("java", "javascript", "typescript"), default="java")
+    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python"), default="java")
     compare.add_argument("--backend", choices=("native", "api"), default="native")
     compare.add_argument("--comparison-id", help="group equivalent language runs in Grafana")
     example = commands.add_parser("example")
@@ -59,12 +73,13 @@ def main() -> int:
     original.add_argument("--plain", action="store_true")
     original.add_argument("arguments", nargs=argparse.REMAINDER)
     python = commands.add_parser("python", help="candidate: launch original CPython sources")
-    python.add_argument("--root", type=Path, default=Path.cwd())
+    python.add_argument("--root", default=str(Path.cwd()))
     python_entry = python.add_mutually_exclusive_group(required=True)
-    python_entry.add_argument("--entry", type=Path)
+    python_entry.add_argument("--entry")
     python_entry.add_argument("--module")
     python.add_argument("--runtime", type=Path, required=True, help="new private directory retained for reports")
     python.add_argument("--plain", action="store_true")
+    python.add_argument("--prepare-only", action="store_true", help="emit fixed JSON launch recipe without starting app or SDK")
     python.add_argument("arguments", nargs=argparse.REMAINDER)
     metrics = commands.add_parser("metrics")
     metrics.add_argument("--socket", type=Path, required=True)
@@ -86,7 +101,8 @@ def main() -> int:
         if args.command == "python":
             arguments = application_arguments(args.arguments)
             return python_adapter.run(policy, args.runtime, root=args.root, entry=args.entry,
-                                      module=args.module, plain=args.plain, arguments=tuple(arguments))
+                                      module=args.module, plain=args.plain, arguments=tuple(arguments),
+                                      prepare_only=args.prepare_only)
         if args.command == "node":
             arguments = application_arguments(args.arguments)
             return node.run(policy, args.runtime, args.language, root=args.root, entry=args.entry,
@@ -98,7 +114,7 @@ def main() -> int:
                                      diagnostic_profile=args.diagnostic_profile)
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"],
-                              "candidates": ["typescript", "javascript"],
+                              "candidates": ["typescript", "javascript", "python"],
                               "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":
@@ -122,9 +138,8 @@ def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
     if args.language == "java":
         return benchmark.run(policy, args.output, publish=not args.no_publish,
                              comparison_id=args.comparison_id)
+    if args.language == 'python':
+        return python_benchmark.run(policy, args.output, publish=not args.no_publish,
+                                    comparison_id=args.comparison_id)
     return node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
                               publish=not args.no_publish, comparison_id=args.comparison_id)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
