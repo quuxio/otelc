@@ -48,6 +48,7 @@ public final class WitnessRuntime {
   private final WitnessClassCapture capture;
   private final java.util.function.LongSupplier clock;
   private final String runtime = fresh();
+  private final long pid = ProcessHandle.current().pid();
   private final Map<String, WitnessBindings.Binding> probes = new HashMap<>();
   private final Set<String> guarded = new HashSet<>();
   private final Map<String, WitnessScope> history = new LinkedHashMap<>();
@@ -143,7 +144,7 @@ public final class WitnessRuntime {
 
   private boolean actualCall(Class<?> owner, WitnessBindings.Binding binding, boolean recursive) {
     var type = loaded.get(binding.declaration().owner());
-    if (type == null || type.type() != owner || Thread.currentThread().isVirtual()) return false;
+    if (type == null || type.type() != owner) return false;
     return WALKER.walk(stream -> {
       var frames = stream.toList();
       for (int index = 0; index + 1 < frames.size(); index++) {
@@ -173,6 +174,13 @@ public final class WitnessRuntime {
     if (binding == null || !actualCall(owner, binding, recursive)) {
       synchronized (this) { rejected++; }
       return rejected(parent, binding == null ? "rejected" : binding.role());
+    }
+    if (Thread.currentThread().isVirtual()) {
+      synchronized (this) {
+        rejected++;
+        if (binding.role().equals(ENVELOPE)) failure = "unsupported_virtual_thread";
+      }
+      return rejected(parent, binding.role());
     }
     WitnessScope scope = selectScope(binding, parent, recursive);
     Entry entry = new Entry(parent, binding.role(), scope);
@@ -246,8 +254,9 @@ public final class WitnessRuntime {
   private void startSpan(Entry entry, WitnessBindings.Binding binding, boolean recursive) {
     WitnessScope scope = entry.scope;
     Context parent = binding.role().equals(WRAPPER) ? Context.root() : Context.current();
+    // The start processor attaches identities once; duplicate writes inflate SDK loss accounting.
     var builder = sdk.getTracer("io.quux.otelc.witness", "1").spanBuilder("otelc.action." + binding.role())
-        .setParent(parent).setAllAttributes(attributes(scope)).setAttribute(ROLE, recursive ? "recursive_target" : binding.role())
+        .setParent(parent).setAttribute(ROLE, recursive ? "recursive_target" : binding.role())
         .setAttribute("otelc.witness.probe_id", binding.probeId());
     entry.span = builder.startSpan();
     entry.context = parent.with(entry.span);
@@ -364,7 +373,7 @@ public final class WitnessRuntime {
 
   public String command(String text) {
     String[] words = text.split(" ", -1);
-    if (words.length < 3 || !words[0].equals("1") || !hex(words[1], 32)) return reply(null, "invalid_request", null);
+    if (words.length < 3 || !words[0].equals("2") || !hex(words[1], 32)) return reply(null, "invalid_request", null);
     String request = words[1];
     if (!words[2].equals("status") && !validCapture()) return reply(request, "class_identity_invalid", latest);
     if (words[2].equals("end")) return end(words, request);
@@ -386,10 +395,11 @@ public final class WitnessRuntime {
   }
 
   private String arm(String[] words, String request) {
-    if (words.length != 13 || !words[3].equals(runtime) || active == null || !words[4].equals(active.cookie)
+    if (words.length != 14 || !words[3].equals(runtime) || active == null || !words[4].equals(active.cookie)
         || !words[5].equals(Long.toString(active.sequence)) || !hex(words[6], 64) || !hex(words[7], 64)
         || !words[8].equals(plan.build()) || !words[9].equals(plan.selection()) || !words[10].equals(plan.tooling())
-        || !words[11].equals(plan.bindings().get(WRAPPER).probeId()) || !words[12].equals(plan.policy())) {
+        || !words[11].equals(plan.bindings().get(WRAPPER).probeId()) || !words[12].equals(plan.policy())
+        || !words[13].equals(Long.toString(active.threadId))) {
       return reply(request, "arm_identity_mismatch", active);
     }
     if (active.failure != null || !active.phase.equals(READY)) return reply(request, "not_ready", active);
@@ -430,8 +440,8 @@ public final class WitnessRuntime {
   }
 
   private synchronized String reply(String request, String error, WitnessScope scope) {
-    return "{\"schema_version\":1,\"profile\":\"" + WitnessBindings.PROFILE + "\",\"runtime_id\":\"" + runtime
-        + "\",\"request_id\":" + WitnessScope.value(request) + ",\"error\":" + WitnessScope.value(error)
+    return "{\"schema_version\":2,\"profile\":\"" + WitnessBindings.PROFILE + "\",\"runtime_id\":\"" + runtime
+        + "\",\"pid\":" + pid + ",\"request_id\":" + WitnessScope.value(request) + ",\"error\":" + WitnessScope.value(error)
         + ",\"build_sha256\":\"" + plan.build() + "\",\"selection_sha256\":\"" + plan.selection()
         + "\",\"policy_sha256\":\"" + plan.policy() + "\",\"tooling_sha256\":\"" + plan.tooling()
         + "\",\"wrapper_probe_id\":\"" + plan.bindings().get(WRAPPER).probeId()
@@ -457,7 +467,7 @@ public final class WitnessRuntime {
           if (!Set.of(CANCELLED, EXPIRED, "invalidated", INCOMPLETE).contains(scope.phase)) scope.phase = "terminated";
         }
       }
-      report = "{\"schema_version\":1,\"kind\":\"otelc.java-witness-final\",\"phase\":\"final\",\"pid\":"
+      report = "{\"schema_version\":2,\"kind\":\"otelc.java-witness-final\",\"phase\":\"final\",\"pid\":"
           + ProcessHandle.current().pid() + ",\"producer\":" + reply(null, failure, null).strip()
           + ",\"queue_evidence\":\"" + (queueKnown ? "derived_after_shutdown" : "unavailable")
           + "\",\"scopes\":[" + String.join(",", history.values().stream().map(WitnessScope::json).toList()) + "]}\n";

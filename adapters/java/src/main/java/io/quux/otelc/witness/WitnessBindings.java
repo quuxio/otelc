@@ -28,7 +28,7 @@ import org.objectweb.asm.tree.TableSwitchInsnNode;
 
 /** Compile exact method bindings for the proposed synchronous action capability. */
 public final class WitnessBindings {
-  public static final String PROFILE = "java-sync-action-v1";
+  public static final String PROFILE = "java-sync-action-v2";
   private static final String ENVELOPE = "envelope";
   private static final String RENDEZVOUS = "rendezvous";
   private static final String WRAPPER = "wrapper";
@@ -283,7 +283,7 @@ public final class WitnessBindings {
       declarations.put(ROLE_ORDER.get(index), new Declaration(owner, arguments[offset + 2], arguments[offset + 3]));
     }
     Map<String, Binding> result = compile(classes, declarations);
-    StringBuilder output = new StringBuilder("{\"schema_version\":1,\"kind\":\"otelc.java-witness-bindings\",\"profile\":\"")
+    StringBuilder output = new StringBuilder("{\"schema_version\":2,\"kind\":\"otelc.java-witness-bindings\",\"profile\":\"")
         .append(PROFILE).append("\",\"bindings\":{");
     for (String role : ROLE_ORDER) {
       if (!role.equals(ENVELOPE)) output.append(',');

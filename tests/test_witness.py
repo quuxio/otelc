@@ -22,7 +22,7 @@ import java.io.*;
 public final class Harness {
   static final BufferedReader INPUT = new BufferedReader(new InputStreamReader(System.in));
   static void rendezvous() throws IOException {
-    System.out.println("release");
+    System.out.println("release:" + Thread.currentThread().threadId());
     if (!"go".equals(INPUT.readLine())) throw new IOException("missing release");
   }
   static int wrapper(int seed) { return Work.target(seed); }
@@ -75,6 +75,15 @@ def read_line(process: subprocess.Popen[str]) -> str:
     return process.stdout.readline().strip()
 
 
+def read_release(process: subprocess.Popen[str]) -> str:
+    """Obtain the expected Java thread from the SDK-free fixture, not the producer."""
+    frame = read_line(process)
+    match = re.fullmatch(r"release:([1-9][0-9]*)", frame)
+    if match is None:
+        raise AssertionError(f"missing independent harness readiness: {frame!r}")
+    return match.group(1)
+
+
 def send(process: subprocess.Popen[str], value: str) -> None:
     """Use the same fixture channel in both lanes; no telemetry API enters the app."""
     assert process.stdin is not None
@@ -89,7 +98,7 @@ import java.io.*;
 import java.util.concurrent.CompletableFuture;
 public final class Harness {
   static final BufferedReader INPUT = new BufferedReader(new InputStreamReader(System.in));
-  static void rendezvous() throws IOException { System.out.println("release"); INPUT.readLine(); }
+  static void rendezvous() throws IOException { System.out.println("release:" + Thread.currentThread().threadId()); INPUT.readLine(); }
   static CompletableFuture<Integer> wrapper(int seed) { return Work.target(seed); }
   static CompletableFuture<Integer> envelope(int seed) throws IOException { rendezvous(); return wrapper(seed); }
   public static void main(String[] args) throws Exception {
@@ -139,15 +148,17 @@ final class Work {
                     try:
                         self.assertEqual(read_line(process), "ready")
                         send(process, "start")
-                        self.assertEqual(read_line(process), "release")
+                        expected_thread = read_release(process)
                         socket = runtime / "witness.sock"
                         if not plain:
                             control.wait_ready(runtime / "control.sock", process.pid)
                             status = witness.request(socket, "status")
+                            self.assertEqual(status["pid"], process.pid)
+                            self.assertEqual(status["scope"]["thread_id"], expected_thread)
                             arm = witness.request(socket, "arm", status["runtime_id"], status["scope"]["cookie"],
                                 status["scope"]["sequence"], "a" * 64, "b" * 64, status["build_sha256"],
                                 status["selection_sha256"], status["tooling_sha256"], status["wrapper_probe_id"],
-                                status["policy_sha256"])
+                                status["policy_sha256"], expected_thread)
                             self.assertIsNone(arm["error"], arm)
                         send(process, "go")
                         self.assertEqual(read_line(process), "true:false")
@@ -229,7 +240,8 @@ final class Work {
                 base = root / 'base'
                 base.mkdir()
                 base_source = base / 'Harness.java'
-                base_source.write_text(source_text.replace('return seed + 1;', 'return seed + 99;'))
+                base_source.write_text(source_text.replace('return seed + 1;', 'return seed + 99;')
+                                       .replace('Thread.currentThread().threadId()', 'Thread.currentThread().getId()'))
                 subprocess.run([java.executable('javac'), '--release', '9', '-d', str(base), str(base_source)], check=True)
                 version = subprocess.check_output([java.executable('java'), '-version'], stderr=subprocess.STDOUT, text=True)
                 feature = int(re.search(r'version "([0-9]+)', version)[1])
@@ -291,24 +303,35 @@ final class Work {
                                 self.assertEqual((state["pid"], state["collection"], state["emission"]),
                                                  (process.pid, collection, emission))
                             send(process, str(seed))
-                            self.assertEqual(read_line(process), "release")
+                            expected_thread = read_release(process)
                             if not plain:
                                 status = witness.request(socket, "status")
+                                self.assertEqual(status["pid"], process.pid)
+                                self.assertEqual(status["scope"]["thread_id"], expected_thread)
                                 self.assertIsNone(status["error"], (runtime / "agent.log").read_text())
                                 self.assertEqual(status["scope"]["phase"], "ready", status)
                                 for role in witness.ROLES:
                                     self.assertEqual(status[role + "_probe_id"], compiler_result["bindings"][role]["probe_id"])
+                                if index == 0:
+                                    wrong = witness.request(socket, "arm", status["runtime_id"],
+                                        status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,
+                                        f"{index + 1:064x}", status["build_sha256"], status["selection_sha256"],
+                                        status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"],
+                                        str(int(expected_thread) + 1))
+                                    self.assertEqual(wrong["error"], "arm_identity_mismatch")
+                                    self.assertEqual(wrong["scope"]["phase"], "ready")
+                                    self.assertIsNone(wrong["scope"]["scope_id"])
                                 if index == 3:
                                     stale = witness.request(socket, "arm", "0" * 32,
                                         status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,
                                         f"{index + 1:064x}", status["build_sha256"], status["selection_sha256"],
-                                        status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"])
+                                        status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"], expected_thread)
                                     self.assertEqual(stale["error"], "arm_identity_mismatch")
                                     self.assertIsNone(stale["scope"]["scope_id"])
                                 arm = witness.request(socket, "arm", status["runtime_id"],
                                     status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,
                                     f"{index + 1:064x}", status["build_sha256"], status["selection_sha256"],
-                                    status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"])
+                                    status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"], expected_thread)
                                 self.assertIsNone(arm["error"], arm)
                                 self.assertEqual(arm["scope"]["phase"], "armed")
                                 if index == 2:
@@ -367,6 +390,9 @@ final class Work {
                             final = witness.read_final(runtime / "witness-health.json")
                             self.assertEqual(final["queue_evidence"], "derived_after_shutdown")
                             self.assertEqual(len(final["scopes"]), 1 if substituted else 5)
+                            self.assertEqual(final["pid"], process.pid)
+                            self.assertEqual(final["producer"]["pid"], process.pid)
+                            self.assertEqual({item["thread_id"] for item in final["scopes"]}, {expected_thread})
                             self.assertEqual([item["producer_complete"] for item in final["scopes"]],
                                 [False] if substituted else [True, True, False, True, False])
                             self.assertEqual([item["queue_dropped"] for item in final["scopes"]], ["0"] * (1 if substituted else 5))
@@ -391,9 +417,25 @@ final class Work {
             spans = [span for request in capture.traces for resource in request.resource_spans
                      for scope in resource.scope_spans for span in scope.spans]
             self.assertEqual(len(spans), 13 + extra_unscoped)  # Four scoped calls plus unrelated calls.
+            frozen_witness = json.loads((runtime / 'witness.json').read_text())
+            for span in spans:
+                self.assertEqual(span.dropped_attributes_count, 0, span.name)
+                self.assertEqual(span.dropped_events_count, 0, span.name)
+                self.assertEqual(span.dropped_links_count, 0, span.name)
+                for event in span.events:
+                    self.assertEqual(event.dropped_attributes_count, 0, span.name)
             for scope in scopes:
                 actual = [span for span in spans if span.trace_id.hex() == scope["trace_id"]]
                 self.assertEqual({span.span_id.hex() for span in actual}, set(scope["exported_ids"]))
+                expected = {"scope_id": scope["scope_id"], "runtime_id": status["runtime_id"],
+                    "context_cookie": scope["cookie"], "case_id": scope["case_id"],
+                    "attempt_id": scope["attempt_id"], **{key: frozen_witness[key] for key in
+                    ("build_sha256", "selection_sha256", "policy_sha256", "tooling_sha256")}}
+                for span in actual:
+                    attributes = {item.key: (item.value.WhichOneof('value'), item.value.string_value)
+                                  for item in span.attributes}
+                    for key, value in expected.items():
+                        self.assertEqual(attributes.get('otelc.witness.' + key), ('string_value', value))
                 roles = {next((a.value.string_value for a in span.attributes if a.key == "otelc.witness.role"), "function"): span
                          for span in actual}
                 self.assertEqual(set(roles), {"wrapper", "target", "function"})

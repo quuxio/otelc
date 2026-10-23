@@ -34,9 +34,9 @@ The binding document has this closed shape:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "otelc.java-witness-bindings",
-  "profile": "java-sync-action-v1",
+  "profile": "java-sync-action-v2",
   "bindings": {
     "envelope": {"probe_id": "SHA256", "owner": "examples/WitnessHarness", "name": "envelope", "descriptor": "(I)J", "class_sha256": "SHA256", "method_sha256": "SHA256"},
     "rendezvous": {"probe_id": "SHA256", "owner": "examples/WitnessHarness", "name": "rendezvous", "descriptor": "()V", "class_sha256": "SHA256", "method_sha256": "SHA256"},
@@ -50,16 +50,16 @@ Probe ID is SHA-256 over UTF-8 fields joined with a single LF and no final LF, i
 
 ## Runtime profile
 
-The `java-sync-action-v1` capability supports one active synchronous action on a platform thread and sequential actions in the same JVM. Use the ordinary prepared manifest for both plain and instrumented lanes. Compile bindings outside the agent JVM with `otelc.witness.compile_bindings(application, declarations, output)`; each declaration contains the original owner/name/descriptor. Then request them explicitly:
+The `java-sync-action-v2` capability supports one active synchronous action on a platform thread and sequential actions in the same JVM. Use the ordinary prepared manifest for both plain and instrumented lanes. Compile bindings outside the agent JVM with `otelc.witness.compile_bindings(application, declarations, output)`; each declaration contains the original owner/name/descriptor. Then request them explicitly:
 
 ```sh
-python -m otelc java --help
-python -m otelc java --manifest application.json --runtime /tmp/otelc-action --witness-bindings bindings.json --diagnostic-profile
+bin/quux-otelc java --help
+bin/quux-otelc java --manifest application.json --runtime /tmp/otelc-action --witness-bindings bindings.json --diagnostic-profile
 ```
 
 The runtime directory must be fresh. The common policy must select the target, enable tracing and set `sample_ratio = 1.0`. Plain comparison uses the same manifest and arguments with `--plain`, without `--witness-bindings`. Application source and class files are never edited by this profile. The optional argument supplies diagnostic role bindings, not developer-authored telemetry. See [the wire and evidence reference](java-witness-protocol.md) for the Python API and protocol.
 
-The exchange is ready → arm → acknowledgement → harness release → consumed → root/envelope exit → end/export evidence. An actual instrumented envelope establishes a fresh cookie and sequence before arm. The wrapper, target and rendezvous must be the declared loaded methods in that envelope; names and thread IDs alone cannot establish ownership. Re-entrant envelopes, reflected unrelated wrappers and concurrent noise do not consume another action's arm. Class-initialiser calls cannot stand in for the target. Receiver dispatch reaching an override instead of the bound implementation leaves target evidence missing.
+The exchange is ready → arm → acknowledgement → harness release → consumed → root/envelope exit → end/export evidence. An actual instrumented envelope establishes a fresh cookie, sequence and immutable platform-thread ID before arm. Every reply identifies the actual JVM. The consumer requires the PID and thread independently reported by its SDK-free harness before arming; a foreign envelope becoming ready first cannot stand in for the intended action. The wrapper, target and rendezvous must be the declared loaded methods in that envelope; names and thread IDs alone cannot establish ownership. Re-entrant envelopes, reflected unrelated wrappers and concurrent noise do not consume another action's arm. Class-initialiser calls cannot stand in for the target. Receiver dispatch reaching an override instead of the bound implementation leaves target evidence missing.
 
 The wrapper creates an explicit diagnostic trace root; the bound target and ordinary selected function spans are children. Supported same-thread recursion retains the context. Errors keep the original throwable and only record its type, without invoking message/cause/formatting getters. Metrics switches do not suppress tracing. Lifetime roots with links remain separate traces and are not silently counted as action children.
 
