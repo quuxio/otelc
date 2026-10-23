@@ -59,6 +59,8 @@ The private native driver also has an SDK-independent encoder foundation for fut
 
 The encoder tests run without an SDK and check application module/audit-policy preservation, descriptor equality, non-retention, graph bounds, changed defaults, fork/subinterpreter refusal and dependency/allocation failures. The generator has its own 80% Python line-coverage floor, separate from the native per-file floor.
 
+The separate [origin-journal component](python-origin-journal.md) adds an explicitly selected version-two writer and closed reader for future actual read/root/execution relations. Normal launcher output and format negotiation remain journal 1; the runtime origin observer is not implemented by that component.
+
 The [post-run comparison component](python-code-comparison.md) can compile or decode retained inputs in isolated workers and compare nested code roots with selected descriptors. It keeps ambiguous, unmatched and incomplete outcomes explicit. This diagnostic API is not yet automatic supervisor publication, source-origin proof or whole-program closure; `source_complete=false` stays unchanged.
 
 Native tests compare raw stdout/stderr, exits, encodings, BOM/CRLF, error printing, main-frame identity, relative/Unicode/symlink spelling, flags and entry metadata. They retain actual consumed bytes even when the running app later rewrites its own file. Other cases cover size/count bounds, invalid launch descriptors/options, actual failed I/O, FD reuse and abrupt exit. The C writer fixture tests protocol/status boundaries. A separate native fault fixture checks read errors with context-manager cleanup errors, invalid metadata/path encoding and wrapper allocation failure. Its synthetic/error records are component tests, not application provenance.

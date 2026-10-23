@@ -136,6 +136,11 @@ def _final(payload: bytes, path: bytes, at_eof: bool, sources: list[SourceInput]
 
 def read(path: Path, *, expected_pid: int) -> InputJournal:
     """Read a private journal; the caller must first wait for its owning process."""
+    return decode(_read_bytes(path), expected_pid=expected_pid)
+
+
+def _read_bytes(path: Path) -> bytes:
+    """Share bounded, non-following file IO without sharing wire-version policy."""
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         before = os.fstat(descriptor)
@@ -151,4 +156,4 @@ def read(path: Path, *, expected_pid: int) -> InputJournal:
             raise ValueError('native Python journal changed while reading')
     finally:
         os.close(descriptor)
-    return decode(data, expected_pid=expected_pid)
+    return data
