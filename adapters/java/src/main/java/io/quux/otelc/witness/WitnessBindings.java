@@ -104,6 +104,14 @@ public final class WitnessBindings {
   /** Validate all four roles together; do not derive a runtime capability from this result. */
   public static Map<String, Binding> compile(Map<String, byte[]> classes,
                                               Map<String, Declaration> declarations) {
+    return compileForProfile(classes, declarations, PROFILE);
+  }
+
+  static Map<String, Binding> compileForProfile(Map<String, byte[]> classes,
+                                               Map<String, Declaration> declarations, String profile) {
+    if (!PROFILE.equals(profile) && !HandleBindings.PROFILE.equals(profile)) {
+      throw new IllegalArgumentException("unsupported witness binding profile");
+    }
     if (!declarations.keySet().equals(ROLES)) {
       throw new IllegalArgumentException("exactly envelope, rendezvous, wrapper and target are required");
     }
@@ -129,7 +137,7 @@ public final class WitnessBindings {
       }
       String classHash = digest(bytes);
       String methodHash = methodDigest(declaration, method);
-      String probe = digest(String.join("\n", PROFILE, role, declaration.owner(), declaration.name(),
+      String probe = digest(String.join("\n", profile, role, declaration.owner(), declaration.name(),
           declaration.descriptor(), classHash, methodHash).getBytes(StandardCharsets.UTF_8));
       bindings.put(role, new Binding(role, declaration, classHash, methodHash, probe));
       methods.put(role, method);
@@ -137,7 +145,8 @@ public final class WitnessBindings {
     if (!declarations.get(RENDEZVOUS).descriptor().equals("()V")) {
       throw new IllegalArgumentException("rendezvous must be static ()V");
     }
-    validateWrapper(methods.get(WRAPPER), declarations.get(TARGET), methods.get(TARGET));
+    if (PROFILE.equals(profile)) validateWrapper(methods.get(WRAPPER), declarations.get(TARGET), methods.get(TARGET));
+    else HandleBindings.validate(classes, declarations, bindings);
     validateEnvelope(methods.get(ENVELOPE), declarations.get(RENDEZVOUS), declarations.get(WRAPPER));
     return Map.copyOf(bindings);
   }
@@ -267,8 +276,9 @@ public final class WitnessBindings {
     }
   }
 
-  /** Offline diagnostic compiler: four ordered groups of classfile/owner/name/descriptor. */
-  public static void main(String[] arguments) throws IOException {
+  record CompilerInputs(Map<String, byte[]> classes, Map<String, Declaration> declarations) {}
+
+  static CompilerInputs compilerInputs(String[] arguments) throws IOException {
     if (arguments.length != 16) throw new IllegalArgumentException("expected four classfile/owner/name/descriptor groups");
     Map<String, byte[]> classes = new LinkedHashMap<>();
     Map<String, Declaration> declarations = new LinkedHashMap<>();
@@ -282,7 +292,13 @@ public final class WitnessBindings {
       }
       declarations.put(ROLE_ORDER.get(index), new Declaration(owner, arguments[offset + 2], arguments[offset + 3]));
     }
-    Map<String, Binding> result = compile(classes, declarations);
+    return new CompilerInputs(classes, declarations);
+  }
+
+  /** Offline diagnostic compiler: four ordered groups of classfile/owner/name/descriptor. */
+  public static void main(String[] arguments) throws IOException {
+    CompilerInputs inputs = compilerInputs(arguments);
+    Map<String, Binding> result = compile(inputs.classes(), inputs.declarations());
     StringBuilder output = new StringBuilder("{\"schema_version\":2,\"kind\":\"otelc.java-witness-bindings\",\"profile\":\"")
         .append(PROFILE).append("\",\"bindings\":{");
     for (String role : ROLE_ORDER) {
