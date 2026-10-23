@@ -253,13 +253,17 @@ print("fork refused")
                 self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b'', b''))
 
     def test_filesystem_metadata_does_not_call_application_sys_replacements(self) -> None:
-        (self.root / 'sitecustomize.py').write_text('''import sys
+        (self.root / 'sitecustomize.py').write_text('''import sys, builtins
+builtins.expected_filesystem = (sys.getfilesystemencoding(), sys.getfilesystemencodeerrors())
 def trap(): raise AssertionError("application filesystem callback")
 sys.getfilesystemencoding = sys.getfilesystemencodeerrors = trap
 ''')
         entry = self.application('''import _otelc_inputs as native
+import builtins
 def workload(): return 42
-assert b'"encoding":"utf-8"' in native.encode(workload.__code__)
+payload = native.encode(workload.__code__)
+for name, value in zip(("encoding", "errors"), builtins.expected_filesystem):
+    assert ('"' + name + '":"' + value + '"').encode() in payload
 print("runtime configuration")
 ''')
         status, out, err, _, _ = self.launch(['-B', str(entry)], origin_observer=True,
