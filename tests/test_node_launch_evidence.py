@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -100,3 +101,47 @@ class NodeLaunchEvidenceTests(unittest.TestCase):
             result = run_checked([sys.executable, '-c', 'print("module")'],
                                  cwd=root, runtime=root, timeout=5)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'module\n', ''))
+
+    def test_success_matches_the_original_text_mode_newline_translation(self) -> None:
+        command = [sys.executable, '-c',
+                   'import os;os.write(1,b"one\\r\\ntwo\\rthree\\n");os.write(2,b"err\\r\\n")']
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            previous = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=5)
+            result = run_checked(command, cwd=root, runtime=root, timeout=5)
+        self.assertEqual((result.returncode, result.stdout, result.stderr),
+                         (previous.returncode, previous.stdout, previous.stderr))
+
+    def test_fifo_symlinks_and_directories_are_unavailable_without_waiting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fifo = root / 'node-status.json'
+            os.mkfifo(fifo)
+            command = [sys.executable, '-c',
+                       'import json,sys;from pathlib import Path;from node_launch_evidence import report;'
+                       'print(json.dumps(report(Path(sys.argv[1]))))', str(fifo)]
+            child = subprocess.run(command, cwd=Path(__file__).resolve().parent,
+                                   capture_output=True, text=True, timeout=3)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            self.assertEqual(json.loads(child.stdout), {'unavailable': 'not_regular'})
+            target = root / 'target'
+            target.write_bytes(b'private report')
+            link = root / 'link'
+            link.symlink_to(target)
+            self.assertEqual(report(link), {'unavailable': 'not_regular'})
+            self.assertEqual(report(root), {'unavailable': 'not_regular'})
+
+    def test_replaced_report_does_not_gain_a_coherent_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'node-status.json'
+            path.write_bytes(b'original')
+            original_open = os.open
+
+            def replace_after_open(*args, **kwargs):
+                descriptor = original_open(*args, **kwargs)
+                path.unlink()
+                path.write_bytes(b'replacement')
+                return descriptor
+
+            with mock.patch('node_launch_evidence.os.open', side_effect=replace_after_open):
+                self.assertEqual(report(path), {'unavailable': 'changed_during_read'})
