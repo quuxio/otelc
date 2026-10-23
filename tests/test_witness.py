@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 import select
 import subprocess
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 
 from otelc import control, java, prepared_java, witness
@@ -198,9 +200,14 @@ final class Work {
     def test_virtual_dispatch_cannot_substitute_a_different_target_implementation(self) -> None:
         self.exercise(OVERRIDE_SOURCE, receiver=True, substituted=True)
 
+    def test_runtime_archive_members_drive_bindings_and_actual_action_evidence(self) -> None:
+        for archive in ('ordinary', 'active', 'versioned-only'):
+            with self.subTest(archive=archive):
+                self.exercise(SOURCE, archive=archive)
+
     def exercise(self, source_text: str, *, receiver: bool = False, substituted: bool = False,
                  helper_collision: bool = False, extra_unscoped: int = 0,
-                 live_metrics: bool = False) -> None:
+                 live_metrics: bool = False, archive: str | None = None) -> None:
         capture = Capture()
         self.addCleanup(capture.close)
         with tempfile.TemporaryDirectory(prefix="otelc-wit-", dir="/tmp") as directory:
@@ -216,8 +223,28 @@ final class Work {
                                   " public static int applicationValue() { return 1; }}")
                 sources.append(helper)
             subprocess.run([java.executable("javac"), "-d", str(classes), *map(str, sources)], check=True)
+            classpath = "classes"
+            if archive is not None:
+                classpath = "application.jar"
+                base = root / 'base'
+                base.mkdir()
+                base_source = base / 'Harness.java'
+                base_source.write_text(source_text.replace('return seed + 1;', 'return seed + 99;'))
+                subprocess.run([java.executable('javac'), '--release', '9', '-d', str(base), str(base_source)], check=True)
+                version = subprocess.check_output([java.executable('java'), '-version'], stderr=subprocess.STDOUT, text=True)
+                feature = int(re.search(r'version "([0-9]+)', version)[1])
+                with zipfile.ZipFile(root / classpath, 'w') as bundle:
+                    bundle.writestr('META-INF/MANIFEST.MF', 'Manifest-Version: 1.0\r\n'
+                                     + ('Multi-Release: true\r\n' if archive != 'ordinary' else '') + '\r\n')
+                    if archive != 'versioned-only':
+                        selected = classes if archive == 'ordinary' else base
+                        for path in selected.rglob('*.class'):
+                            bundle.write(path, path.relative_to(selected).as_posix())
+                    if archive != 'ordinary':
+                        for path in classes.rglob('*.class'):
+                            bundle.write(path, f'META-INF/versions/{feature}/' + path.relative_to(classes).as_posix())
             manifest = root / "application.json"
-            manifest.write_text(json.dumps({"schema_version": 1, "main_class": "Harness", "classpath": ["classes"],
+            manifest.write_text(json.dumps({"schema_version": 1, "main_class": "Harness", "classpath": [classpath],
                 "bindings": {owner: binding(source, classes / f"{owner}.class", "src/Harness.java")
                              for owner in ("Harness", "Work")}}))
             application = prepared_java.PreparedApplication.load(manifest)

@@ -14,6 +14,9 @@ jobs:
   quality:
     name: Documentation and tooling
     runs-on: ubuntu-latest
+    env:
+      CXX: /usr/bin/clang++
+      OTELC_LLVM_BIN: /usr/bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -26,12 +29,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Install native observer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang llvm
       - run: make setup check PYTHON=.venv/bin/python
       - run: docker compose config --quiet
   macos:
     # Keep the existing protected check identifier; this job runs each delivered adapter.
     name: Native macOS ARM64 and 80% coverage
     runs-on: macos-26
+    env:
+      CXX: /opt/homebrew/opt/llvm@22/bin/clang++
+      OTELC_LLVM_BIN: /opt/homebrew/opt/llvm@22/bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -44,12 +54,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Install native observer tools
+        run: brew install llvm@22
       - run: make setup check PYTHON=.venv/bin/python
   sonar:
     name: SonarQube
     needs: [quality, macos]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    env:
+      CXX: /usr/bin/clang++
+      OTELC_LLVM_BIN: /usr/bin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -58,14 +73,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
           java-version: '21'
+      - name: Install native observer tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang llvm
       - run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
-          make java-check test sonar-policy
+          npm ci --ignore-scripts --no-audit
+          make java-check node-check test sonar-policy
           mvn -q -f adapters/java/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.11.0:copy-dependencies -DincludeScope=test -DoutputDirectory=target/dependency
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

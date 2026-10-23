@@ -203,7 +203,7 @@ def compile_bindings(application: PreparedApplication,
                     or declaration["owner"].replace("/", ".") not in application.bindings):
                 raise ValueError("witness roles must refer to declared original application classes")
             owner = declaration["owner"]
-            raw = class_bytes(application, owner)
+            raw = class_bytes(application, owner, identity=before)
             copy = Path(directory) / f"role-{index}.class"
             copy.write_bytes(raw)
             command.extend([str(copy), owner, declaration["name"], declaration["descriptor"]])
@@ -215,19 +215,36 @@ def compile_bindings(application: PreparedApplication,
     return load_bindings(output, application)
 
 
-def class_bytes(application: PreparedApplication, owner: str) -> bytes:
-    """Read one original definition from the already validated explicit classpath."""
+def _class_location(application: PreparedApplication, owner: str,
+                    identity: dict[str, Any]) -> tuple[Path, str]:
+    """Use the selected JDK's effective member, including versioned-only classes."""
     if owner.replace("/", ".") not in application.bindings:
         raise ValueError("witness class requires a source binding")
     name = owner + ".class"
-    for entry in application.classpath:
+    resolution = identity.get("archive_resolution")
+    archives = {item["classpath_index"]: item for item in resolution["archives"]} if resolution else {}
+    for index, entry in enumerate(application.classpath):
         if entry.is_dir() and (entry / name).is_file():
-            return (entry / name).read_bytes()
-        if entry.is_file():
-            with zipfile.ZipFile(entry) as archive:
-                if name in archive.namelist():
-                    return archive.read(name)
+            return entry, name
+        archive = archives.get(index)
+        if archive is not None and owner.replace("/", ".") in archive["classes"]:
+            return entry, archive["classes"][owner.replace("/", ".")]["entry"]
     raise ValueError("witness owner is absent from the explicit classpath")
+
+
+def class_bytes(application: PreparedApplication, owner: str, *,
+                identity: dict[str, Any] | None = None) -> bytes:
+    """Read and check the actual runtime-selected original class definition."""
+    current = application.input_identity() if identity is None else identity
+    entry, member = _class_location(application, owner, current)
+    if entry.is_dir():
+        raw = (entry / member).read_bytes()
+    else:
+        with zipfile.ZipFile(entry) as archive:
+            raw = archive.read(member)
+    if hashlib.sha256(raw).hexdigest() != application.bindings[owner.replace("/", ".")]["class_sha256"]:
+        raise ValueError("witness runtime class digest disagrees with prepared inputs")
+    return raw
 
 
 def digest(value: object) -> str:
@@ -275,19 +292,13 @@ def _validate_binding(role: str, binding: object, application: PreparedApplicati
         raise ValueError("witness probe ID disagrees with binding")
 
 
-def origin(application: PreparedApplication, owner: str) -> str:
+def origin(application: PreparedApplication, owner: str, *,
+           identity: dict[str, Any] | None = None) -> str:
     """Use the same real file URL as the system classloader, without URL equality/DNS."""
-    name = owner + ".class"
-    for entry in application.classpath:
-        if entry.is_dir():
-            found = (entry / name).is_file()
-        else:
-            with zipfile.ZipFile(entry) as archive:
-                found = name in archive.namelist()
-        if found:
-            url = entry.resolve(strict=True).as_uri().replace("file:///", "file:/", 1)
-            return url + ("/" if entry.is_dir() and not url.endswith("/") else "")
-    raise ValueError("witness owner is absent from the explicit classpath")
+    current = application.input_identity() if identity is None else identity
+    entry, _ = _class_location(application, owner, current)
+    url = entry.resolve(strict=True).as_uri().replace("file:///", "file:/", 1)
+    return url + ("/" if entry.is_dir() and not url.endswith("/") else "")
 
 
 def configure(application: PreparedApplication, policy: Policy, runtime: Path,
@@ -309,7 +320,7 @@ def configure(application: PreparedApplication, policy: Policy, runtime: Path,
               "policy": digest(policy.data), "tooling": digest([*tooling, file_identity(bindings_file)])}
     for role, binding in document["bindings"].items():
         values.update({f"{role}.{key}": value for key, value in binding.items()})
-        values[f"{role}.origin"] = origin(application, binding["owner"])
+        values[f"{role}.origin"] = origin(application, binding["owner"], identity=application_identity)
     plan = runtime / "witness.properties"
     plan.write_text(java.properties(values))
     metadata = {"schema_version": 1, "kind": "otelc.java-witness-launch", "profile": PROFILE,

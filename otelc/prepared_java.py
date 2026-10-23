@@ -9,16 +9,14 @@ import os
 import re
 import stat
 import subprocess
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from otelc import java
+from otelc import java, java_archives
 from otelc.config import Policy
 
 AMBIENT_OPTIONS = ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")
-EXTENSION_JAR = "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"
 
 
 def file_identity(path: Path) -> dict[str, Any]:
@@ -35,6 +33,13 @@ def file_identity(path: Path) -> dict[str, Any]:
     return {"path": str(path), "sha256": digest, "size": after.st_size,
             "inode": after.st_ino, "device": after.st_dev,
             "mtime_ns": after.st_mtime_ns}
+
+
+def verify_tooling(identities: list[dict[str, Any]]) -> None:
+    """Check the exact products and configuration consumed by launch preparation."""
+    for expected in identities:
+        if file_identity(Path(expected["path"])) != expected:
+            raise ValueError("prepared launch tooling or configuration changed")
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -62,30 +67,6 @@ def binary_name(value: Any) -> str:
     return name
 
 
-def jar_classes(path: Path) -> dict[str, str]:
-    """Inventory class bytes without extracting or following implicit classpaths."""
-    try:
-        return read_jar_classes(path)
-    except (zipfile.BadZipFile, UnicodeDecodeError) as error:
-        raise ValueError(f"invalid prepared JAR: {path}") from error
-
-
-def read_jar_classes(path: Path) -> dict[str, str]:
-    """Read an explicit, single-version JAR inventory."""
-    with zipfile.ZipFile(path) as archive:
-        names = archive.namelist()
-        if len(set(names)) != len(names) or any(name.startswith("META-INF/versions/") for name in names):
-            raise ValueError("duplicate or multi-release JAR entries are unsupported")
-        if "META-INF/INDEX.LIST" in names:
-            raise ValueError("implicit JAR indexes are unsupported")
-        if "META-INF/MANIFEST.MF" in names:
-            manifest = archive.read("META-INF/MANIFEST.MF").decode("utf-8")
-            if any(line.lower().startswith("class-path:") for line in manifest.splitlines()):
-                raise ValueError("implicit JAR Class-Path is unsupported; supply the complete classpath")
-        return {name[:-6].replace("/", "."): hashlib.sha256(archive.read(name)).hexdigest()
-                for name in names if name.endswith(".class") and name != "module-info.class"}
-
-
 def directory_classes(entry: Path) -> tuple[dict[str, str], list[dict[str, Any]]]:
     """Inventory class bytes and resources without following symlinked inputs."""
     classes = {}
@@ -103,23 +84,29 @@ def directory_classes(entry: Path) -> tuple[dict[str, str], list[dict[str, Any]]
     return classes, inputs
 
 
-def inspect_classpath(classpath: tuple[Path, ...]) -> tuple[dict[str, str], list[dict[str, Any]]]:
+def inspect_classpath(classpath: tuple[Path, ...]
+                      ) -> tuple[dict[str, str], list[dict[str, Any]], dict[str, Any] | None]:
     """Bind every explicit classpath file and refuse ambiguous class resolution."""
     classes: dict[str, str] = {}
     inputs = []
-    for entry in classpath:
+    resolution = java_archives.resolve(classpath)
+    archives = {archive["classpath_index"]: archive for archive in resolution["archives"]} if resolution else {}
+    for index, entry in enumerate(classpath):
         if entry.is_dir():
             current, files = directory_classes(entry)
             inputs.extend(files)
         elif entry.is_file() and entry.suffix.lower() == ".jar":
-            inputs.append(file_identity(entry))
-            current = jar_classes(entry)
+            identity = file_identity(entry)
+            if identity["sha256"] != archives[index]["sha256"]:
+                raise ValueError("runtime archive changed after resolution")
+            inputs.append(identity)
+            current = {name: member["sha256"] for name, member in archives[index]["classes"].items()}
         else:
             raise ValueError("classpath entries must be existing directories or JARs")
         if classes.keys() & current.keys():
             raise ValueError("duplicate class definitions in the prepared classpath")
         classes.update(current)
-    return classes, inputs
+    return classes, inputs, resolution
 
 
 @dataclass(frozen=True)
@@ -160,7 +147,7 @@ class PreparedApplication:
             raise ValueError("prepared Java requires unset ambient JVM option variables")
         if file_identity(self.manifest) != self.manifest_identity:
             raise ValueError("prepared manifest changed after loading")
-        classes, inputs = inspect_classpath(self.classpath)
+        classes, inputs, resolution = inspect_classpath(self.classpath)
         sources = {}
         for name, binding in self.bindings.items():
             source = self.validate_binding(name, binding, classes)
@@ -169,9 +156,12 @@ class PreparedApplication:
                 raise ValueError(f"stale source binding: {name}")
         if self.main_class not in self.bindings:
             raise ValueError("main class requires an original-source binding")
-        return {"manifest": self.manifest_identity, "classpath": inputs,
-                "main_class": self.main_class, "ordered_classpath": list(map(str, self.classpath)),
-                "sources": list(sources.values()), "bindings": self.bindings}
+        identity = {"manifest": self.manifest_identity, "classpath": inputs,
+                    "main_class": self.main_class, "ordered_classpath": list(map(str, self.classpath)),
+                    "sources": list(sources.values()), "bindings": self.bindings}
+        if resolution is not None:
+            identity["archive_resolution"] = resolution
+        return identity
 
     def validate_binding(self, name: str, binding: Any, classes: dict[str, str]) -> Path:
         """Require both byte digests and an explicit original-path attestation."""
@@ -201,23 +191,7 @@ class PreparedLaunch:
         """Refuse stale inputs before launch or a changed result after execution."""
         if self.application.input_identity() != self.identity["application"]:
             raise ValueError("prepared application inputs changed")
-        for expected in self.identity["tooling"]:
-            if file_identity(Path(expected["path"])) != expected:
-                raise ValueError("prepared launch tooling or configuration changed")
-
-
-def _launch_tooling(executable: Path, runtime: Path, plain: bool) -> list[dict[str, Any]]:
-    paths = [executable]
-    if not plain:
-        paths.extend((
-            java.agent(), java.parser_patch(), java.ROOT / EXTENSION_JAR,
-            runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
-        if (runtime / "helpers-extension.jar").exists():
-            from otelc import java_helpers
-
-            paths.extend(runtime / name for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
-            paths.append(java_helpers.tool(java.ROOT / EXTENSION_JAR))
-    return [file_identity(path) for path in paths]
+        verify_tooling(self.identity["tooling"])
 
 
 def _configure_witness(application: PreparedApplication, policy: Policy, runtime: Path,
@@ -225,7 +199,7 @@ def _configure_witness(application: PreparedApplication, policy: Policy, runtime
                        tooling: list[dict[str, Any]], argv: list[str]) -> None:
     from otelc import java_helpers, witness
 
-    compiler = java_helpers.tool(java.ROOT / EXTENSION_JAR)
+    compiler = java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")
     if not any(item["path"] == str(compiler) for item in tooling):
         tooling.append(file_identity(compiler))
     files = witness.configure(application, policy, runtime, bindings_file.resolve(strict=True),
@@ -234,28 +208,71 @@ def _configure_witness(application: PreparedApplication, policy: Policy, runtime
     argv.insert(1, f"-Dotelc.witness.plan={runtime / 'witness.properties'}")
 
 
+def archive_tooling(classpath: tuple[Path, ...], executable: Path, plain: bool) -> list[dict[str, Any]]:
+    """Bind the archive resolver and, when consumed, its selected-JDK metadata tool."""
+    if not any(path.is_file() and path.suffix.lower() == ".jar" for path in classpath):
+        return []
+    identities = [file_identity(java_archives.tool())]
+    if not plain:
+        javap = Path(java.executable("javap")).resolve(strict=True)
+        if javap != (executable.parent / "javap").resolve(strict=True):
+            raise ValueError("runtime archive metadata requires java and javap from the same full JDK")
+        identities.append(file_identity(javap))
+    return identities
+
+
+def validate_runtime(runtime: Path, arguments: tuple[str, ...]) -> None:
+    """Require private fresh output and JVM-safe diagnostic paths before writing files."""
+    metadata = runtime.stat()
+    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700 or any(runtime.iterdir()):
+        raise ValueError("prepared runtime must be a fresh, owned 0700 directory")
+    if any(not isinstance(argument, str) for argument in arguments):
+        raise ValueError("application arguments must be strings")
+    log_path = str(runtime / "class-load.log")
+    if (any(character in log_path for character in ":,=%") or any(ord(char) < 32 for char in log_path)
+            or len(os.fsencode(runtime / "control.sock")) > 100):
+        raise ValueError("use a short runtime path without JVM log delimiters (:,=)")
+
+
+def launch_tooling(executable: Path, runtime: Path, archive_tools: list[dict[str, Any]],
+                   plain: bool) -> list[dict[str, Any]]:
+    """Retain each actual product once, including archive inspection without relocation."""
+    verify_tooling(archive_tools)
+    tooling = [file_identity(executable), *archive_tools]
+    if plain:
+        return tooling
+    tooling.extend(file_identity(path) for path in (
+        java.agent(), java.parser_patch(), java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar",
+        runtime / "agent.properties", runtime / "plan.properties", runtime / "selection.json"))
+    if (runtime / "helpers-extension.jar").exists():
+        from otelc import java_helpers
+
+        tooling.extend(file_identity(runtime / name) for name in ("helpers-extension.jar", "helpers.json", "helpers.properties"))
+        helper_tool = file_identity(java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar"))
+        if helper_tool not in tooling:
+            tooling.append(helper_tool)
+    return tooling
+
+
 def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
             plain: bool = False, arguments: tuple[str, ...] = (),
             diagnostic_profile: bool = False,
             witness_bindings: Path | None = None) -> PreparedLaunch:
     """Create a launch plan in a fresh private directory, without compiling."""
     runtime = runtime.resolve(strict=True)
-    metadata = runtime.stat()
-    if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700 or any(runtime.iterdir()):
-        raise ValueError("prepared runtime must be a fresh, owned 0700 directory")
-    if any(not isinstance(argument, str) for argument in arguments):
-        raise ValueError("application arguments must be strings")
+    validate_runtime(runtime, arguments)
     if plain and witness_bindings is not None:
         raise ValueError("witness bindings apply to the instrumented lane; use the ordinary plain launch for comparison")
     log_path = str(runtime / "class-load.log")
-    if (any(character in log_path for character in ":,=%") or any(ord(char) < 32 for char in log_path)
-            or len(os.fsencode(runtime / "control.sock")) > 100):
-        raise ValueError("use a short runtime path without JVM log delimiters (:,=)")
-    application_identity = copy.deepcopy(application.input_identity())
-    bindings = {name: binding["policy_path"] for name, binding in application.bindings.items()}
-    argv = java.launch_command(policy, runtime, list(application.classpath),
-                               application.main_class, bindings, plain=plain, arguments=arguments)
     executable = Path(java.executable("java")).resolve(strict=True)
+    archive_tools = archive_tooling(application.classpath, executable, plain)
+    application_identity = copy.deepcopy(application.input_identity())
+    resolution = application_identity.get("archive_resolution")
+    bindings = {name: binding["policy_path"] for name, binding in application.bindings.items()}
+    with java_archives.metadata_classpath(application.classpath, None if plain else resolution, runtime) as inspection:
+        argv = java.launch_command(policy, runtime, list(application.classpath),
+                                   application.main_class, bindings, plain=plain, arguments=arguments,
+                                   inspection_classpath=inspection)
     # JVM origin diagnostics go to a separate file in both plain and instrumented runs.
     argv[0] = str(executable)
     argv.insert(1, f"-Xlog:class+load=info:file={log_path}")
@@ -267,11 +284,11 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
         # application logger and not a redirection/filter of System.err.
         argv[1:1] = ["-Dotel.javaagent.logging=simple",
                      f"-Dio.opentelemetry.javaagent.slf4j.simpleLogger.logFile={agent_log}"]
-    tooling = _launch_tooling(executable, runtime, plain)
+    tooling = launch_tooling(executable, runtime, archive_tools, plain)
     if witness_bindings is not None:
         _configure_witness(application, policy, runtime, witness_bindings,
                            application_identity, tooling, argv)
-    identity = {"schema_version": 1, "language": "java", "plain": plain,
+    identity = {"schema_version": 2 if resolution is not None else 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
                 "agent_diagnostics": agent_log,
                 "health_report": None if plain else str(runtime / "health.json"),

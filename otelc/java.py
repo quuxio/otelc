@@ -184,9 +184,44 @@ def command(policy: Policy, runtime: Path, *, plain: bool = False) -> list[str]:
     return launch_command(policy, runtime, [classes], "examples.BenchmarkApp", bindings, plain=plain)
 
 
+def context_configuration(policy: Policy) -> dict[str, str]:
+    """Translate common propagation intent into the pinned official agent modules."""
+    settings = policy.data["context"]
+    values = {"otel.instrumentation.executors.enabled": str(settings["tasks"]).lower(),
+              "otel.instrumentation.java-http-client.enabled": str(settings["http"]).lower(),
+              "otel.instrumentation.java-http-server.enabled": str(settings["http"]).lower(),
+              "otel.instrumentation.otelc-http-headers.enabled": str(settings["http"]).lower()}
+    if settings["http"]:
+        values["otel.propagators"] = "tracecontext,baggage"
+    return values
+
+
+def validate_http_header_shape() -> None:
+    """Refuse an incompatible JDK before enabling the header-view preservation guard."""
+    declarations = {
+        "jdk.internal.net.http.ImmutableHttpRequest": ("private final java.net.http.HttpHeaders headers;",
+                                                      "public java.net.http.HttpHeaders headers();"),
+        "jdk.internal.net.http.HttpRequestImpl": ("private final java.net.http.HttpHeaders userHeaders;",
+                                                  "public java.net.http.HttpHeaders headers();",
+                                                  "java.net.http.HttpHeaders getUserHeaders();"),
+    }
+    for owner, expected in declarations.items():
+        validate_http_type(owner, expected)
+
+
+def validate_http_type(owner: str, expected: tuple[str, ...]) -> None:
+    """Inspect JDK declarations without executing application methods or loading their classes."""
+    checked = subprocess.run([executable("javap"), "-p", "--module", "java.net.http",
+                              owner],
+                             capture_output=True, text=True, timeout=30)
+    if checked.returncode or any(declaration not in checked.stdout for declaration in expected):
+        raise ValueError("HTTP propagation requires the qualified JDK immutable-request header layout")
+
+
 def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_class: str,
                    bindings: dict[str, str], *, plain: bool = False,
-                   arguments: tuple[str, ...] = ()) -> list[str]:
+                   arguments: tuple[str, ...] = (),
+                   inspection_classpath: list[Path] | None = None) -> list[str]:
     """Translate one policy without compiling or changing application inputs."""
     if "java" not in policy.data["languages"]:
         raise ValueError("java is not enabled by this policy")
@@ -199,11 +234,14 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
         raise ValueError("build the Java extension with make java-build first")
     from otelc import java_helpers
 
-    extension = java_helpers.extension(classpath, extension, runtime)
-    selected, types, resources = resolve_bindings(classpath, bindings, policy)
+    inspected = classpath if inspection_classpath is None else inspection_classpath
+    extension = java_helpers.extension(inspected, extension, runtime)
+    selected, types, resources = resolve_bindings(inspected, bindings, policy)
     selection = json.dumps({"methods": selected, "types": types, "resources": resources}, sort_keys=True)
     (runtime / "selection.json").write_text(selection + "\n")
     data = policy.data
+    if data["context"]["http"]:
+        validate_http_header_shape()
     values = {
         "otel.javaagent.enabled": "true",
         "otel.sdk.disabled": "false",
@@ -225,6 +263,7 @@ def launch_command(policy: Policy, runtime: Path, classpath: list[Path], main_cl
         "otel.instrumentation.opentelemetry-api.enabled": "true",
         "otel.instrumentation.methods.include": ";".join(f"{name}[{','.join(methods)}]" for name, methods in sorted(selected.items())),
     }
+    values.update(context_configuration(policy))
     configuration = runtime / "agent.properties"
     configuration.write_text(properties(values))
     plan = runtime / "plan.properties"

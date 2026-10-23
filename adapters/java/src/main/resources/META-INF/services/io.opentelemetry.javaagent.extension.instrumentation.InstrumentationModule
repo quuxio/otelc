@@ -1,2 +1,3 @@
 io.quux.otelc.LifetimeModule
 io.quux.otelc.MethodsModule
+io.quux.otelc.HttpHeadersModule

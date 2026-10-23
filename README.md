@@ -6,16 +6,32 @@ One configuration for source-free instrumentation across languages, using offici
 
 This rebuild starts with **Java**. TypeScript/JavaScript, Python, Go, the LLVM backend, C, C++ and Rust follow in that order. The shared policy lists all targets; that does not mean each adapter is implemented. The [previous implementation](https://github.com/quuxio/otelc/tree/archive/pre-rebuild-2026-10-21) is retained for reuse and comparison. See the [rebuild plan and acceptance criteria](docs/rebuild-plan.md).
 
+The [Node source candidate](docs/node-source.md) now provides public launches for ordinary JavaScript and both Microsoft TypeScript compiler profiles, with retained [launch input evidence](docs/node-launch-inputs.md). Its function/context/lifetime probes and live controls are being qualified. [Paired benchmarks](docs/benchmarks.md) compare it with Java and retain separate application/SDK resource observations. Complete prepared provenance and final independent language acceptance remain open. `plan` reports these profiles separately from delivered adapters.
+
+The [development notes](docs/node-development.md) describe compiler/runtime checks, independent SDK drain, qualified source boundaries and remaining delivery gaps.
+
+The merged [Node SDK/control foundation](docs/node-sdk-controls.md) supplies official SDK/exporters, independent live metric gates and the shared control client. Source probes and application launching belong to the separate Node candidate.
+
+The [Python frontend candidate](docs/python-native.md) launches original CPython sources with selected function metrics/spans, weak object/resource lifetime observations, official thread propagation and live controls. The [SDK metric gates](docs/python-sdk-controls.md) and [process bridge](docs/python-sdk-process.md) isolate aggregation/export and retain checked drain evidence. Its [paired benchmarks](docs/benchmarks.md) compare a direct stock CPython process with the prepared instrumented application, retaining body latency, separate launch-to-first-response timing and actual per-process CPU/RSS. The [HTTP candidate](docs/python-http.md) also drives official urllib/WSGI tooling with the same policy and live metric controls. Broader lifetime/framework shapes, full source evidence and language qualification remain work. Python is still reported as remaining by `plan`. The [prepared native launcher](docs/python-prepared-launch.md) connects the [entry input component](docs/python-input-journal.md) and [fixed request/argv layer](docs/python-launch-recipe.md), retaining actual ownership and post-drain input checks. Ordinary source/whole-bytecode loader reads are retained in the native journal. Selected function starts carry native code descriptors and span/metric code IDs. The post-run reader independently checks descriptor framing, types, graph bounds, aliases and filename bytes using the application's recorded filesystem codec, without constructing or executing code. The common [health command](docs/python-health.md) exposes live and retained Python application/SDK counters without changing metric switches or draining lifetime events. A [post-run comparison component](docs/python-code-comparison.md) compares retained source/pyc inputs in isolated workers, with explicit ambiguous, unmatched and incomplete results. Automatic publication, source-origin proof, whole-program coverage, dependency closure and provider admission remain outstanding.
+
+`plan` lists Python as a candidate and keeps it in `remaining`; it is not reported as implemented. Tooling consumers can inspect `otelc.prepared_python.protocols()` before launch to negotiate Python formats. These discovery responses do not establish source origin or provider qualification; see the [prepared launcher guide](docs/python-prepared-launch.md#negotiate-formats-without-launching).
+
+The [native input component](docs/python-input-journal.md#validation-scope) includes an SDK-independent descriptor encoder for source-origin work. The separate [origin-journal component](docs/python-origin-journal.md) defines and validates versioned read/root/execution relations; its runtime observer and both-lane wiring remain work. These components do not yet bind application source reads to selected code or enable a new provider capability.
+
+Native launch also retains the selected interpreter's pre-site executable identities, preserving the tested Homebrew alias and copied-venv metadata under ordinary and `-S` startup.
+
 ## Java example and Grafana
 
-Requirements: Python 3.12+, a full JDK 21+, Maven, Node/npm for Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
+Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
 
 ```sh
 make setup java-build
 make stack-up
-.venv/bin/python -m otelc plan
-.venv/bin/python -m otelc example java
+bin/quux-otelc plan
+bin/quux-otelc example java
 ```
+
+Use `bin/quux-otelc` from the checkout after `make setup`. It starts the tooling host in isolated/no-site mode before Python can run installed startup hooks. `OTELC_PYTHON=/path/to/sdk-venv/bin/python bin/quux-otelc ...` selects another SDK environment with the locked wheels installed. The old `python -m otelc` entry point is refused; application startup hooks still run normally in the application. See the [prepared Python launch guide](docs/python-prepared-launch.md).
 
 Enter `10` to run ten operations, `gc` to request collection from the test application, or `quit` to exit. The ten-operation checksum is `41284864`. The [ordinary application](examples/java/BenchmarkApp.java) has no telemetry dependency. otelc generates official-agent configuration and loads its own small extension; it does not modify application source or classes on disk.
 
@@ -25,7 +41,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. Select one comparison run in Grafana. Later language examples will use this same workload and policy so Java can be compared with C++, Rust, C, Python, JavaScript, Go and Microsoft TypeScript. Only delivered adapters produce data; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 
@@ -40,10 +56,10 @@ emission = true
 The benchmark changes these states in one instrumented PID. For manual control, the generated private runtime directory contains `control.sock`:
 
 ```sh
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock status
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock off
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock collection on
-.venv/bin/python -m otelc metrics --socket /tmp/otelc-RUNTIME/control.sock emission on
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock status
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock off
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock collection on
+bin/quux-otelc metrics --socket /tmp/otelc-RUNTIME/control.sock emission on
 ```
 
 Off/on controls both together; the separate controls change only their named state. Emission-off starts no new exports. Status reports in-flight requests that must settle before a strict off barrier is effective. Collection-off suppresses cached SDK instruments, observable callbacks and collection from disabled meters; emission-on alone does not make those meters emit a stale snapshot. Cumulative values remain available after collection is re-enabled; emission-only suppression can include the silent interval in a later cumulative point. Installed hooks, enabled tracing and lifecycle bookkeeping can retain overhead while metrics are off.
@@ -52,13 +68,19 @@ Java observes selected final classes with one constructor. It measures successfu
 
 See [measuring object and resource lifetimes](docs/lifetimes.md) for configuration, metrics, spans, failure cases and the language delivery plan.
 
+[Java task and HTTP propagation](docs/java-context.md) uses common `[context]` switches to drive the official agent. Ordinary task/client/server examples, source-free launch commands and tested parentage/sampling/preservation boundaries are included. These switches are selected at launch; metric collection/emission still change live without affecting traces.
+
+Open the [task and service trace dashboard](http://localhost:3001/d/otelc-traces) to search by service and inspect a selected span tree. It works with the local anonymous Viewer account and does not require Grafana Explore. The dashboard reuses the archived trace view with the rebuild's Tempo datasource and example service.
+
 Use the [prepared Java launcher](docs/prepared-java.md) for an existing compiled application or generated test main. An explicit classpath/main/source-binding manifest drives the same policy without compiling or editing application inputs. Plain and instrumented commands retain launch identities, separate JVM class-origin evidence and the same live controls.
+
+Prepared JAR launches resolve ordinary and multi-release archives through the selected JDK. Launch schema 2 records the actual member names and bytes used for metadata/helper inspection; directory-only launches retain schema 1. Original application archives, resources and runtime classpaths stay unchanged. Consumers must explicitly support the new schema.
 
 Application-owned helper names are preserved. When names conflict, the launcher generates a private extension with renamed helpers and records its identity; developers do not rename application classes.
 
 Prepared launches keep agent diagnostics in `agent.log`. For exact application stderr comparisons, select `--diagnostic-profile` in both lanes; it disables JVM CDS consistently and retains all application output without filtering. Use the default profile for ordinary JVM/CDS performance measurements and keep the profile label with results.
 
-[Runtime health](docs/runtime-health.md) records PID/policy/selection identity, raw SDK exporter activity and bounded final flush/shutdown outcomes in `health.json`, including while metrics are off. Inspect it with `python -m otelc health --socket ...` or `--report ...`. Queue loss stays unavailable until a supported clean drain establishes it; exporter success still requires separate downstream receipt evidence.
+[Runtime health](docs/runtime-health.md) records PID/policy/selection identity, raw SDK exporter activity and bounded final flush/shutdown outcomes in `health.json`, including while metrics are off. Inspect it with `bin/quux-otelc health --socket ...` or `--report ...`. Queue loss stays unavailable until a supported clean drain establishes it; exporter success still requires separate downstream receipt evidence.
 
 [Invocation attribution](docs/action-witness.md) is an explicit diagnostic profile for synchronous Java actions on platform threads. Frozen original-method bindings, actual loaded origins and role probes tie an action to its root, target and observed child spans. A separate private protocol records readiness, arm/consume, exits and export outcomes; decoded downstream receipt is still required. Default launches and the existing metrics/health protocols are unchanged. This profile does not establish arbitrary concurrent, async or cross-service attribution.
 
