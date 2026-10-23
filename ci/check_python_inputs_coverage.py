@@ -12,7 +12,7 @@ from pathlib import Path
 from ci import build_python_inputs as tooling
 
 ROOT = Path(__file__).resolve().parents[1]
-NATIVE_SOURCES = ('EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c')
+NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c')
 
 
 def summaries(data: dict) -> dict:
@@ -42,7 +42,7 @@ def check() -> dict:
                        'OTELC_NATIVE_COVERAGE': '1',
                        'LLVM_PROFILE_FILE': str(directory / 'inputs-%p-%m.profraw')}
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
-                        'test_python_import_inputs', '-v'],
+                        'test_python_import_inputs', 'test_python_code_inputs', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:

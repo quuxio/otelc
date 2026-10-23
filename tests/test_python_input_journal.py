@@ -136,3 +136,27 @@ class PythonInputJournalTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, 'wrapper failed'):
                     journal.read(path, expected_pid=12)
             self.assertEqual(len(os.listdir('/dev/fd')), before)
+
+    def test_code_records_allow_completed_threads_to_write_out_of_identity_order(self) -> None:
+        def code(code_id: int, sequence: int, **changes) -> bytes:
+            values = dict(pid=12, identity=code_id, offset=0, version=0x030c00f0,
+                          descriptor_version=1, length=6, reserved=0)
+            values.update(changes)
+            return record(4, sequence, journal.CODE.pack(*values.values()) + b'opaque', b'entry.py')
+
+        good = source() + code(2, 2) + code(1, 3) + final(count=3, size=21, sequence=4)
+        value = journal.decode(good, expected_pid=12)
+        self.assertTrue(value.complete)
+        self.assertEqual([item.identity for item in value.codes], [2, 1])
+        for bad in (source() + code(2, 2) + final(count=2, size=15, sequence=3),
+                    source() + code(1, 2) + code(1, 3) + final(count=3, size=21, sequence=4)):
+            with self.assertRaises(ValueError):
+                journal.decode(bad, expected_pid=12)
+        lost = source() + code(2, 2) + final(count=2, size=15, sequence=3, failures=1)
+        self.assertFalse(journal.decode(lost, expected_pid=12).complete)
+        for changes in ({'pid': 13}, {'identity': 0}, {'offset': 1}, {'version': 0x030b00f0},
+                        {'version': 0x04000000}, {'version': 2**32}, {'descriptor_version': 2},
+                        {'length': 0}, {'length': 5}, {'reserved': 1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                journal.decode(source() + code(1, 2, **changes)
+                               + final(count=2, size=15, sequence=3), expected_pid=12)

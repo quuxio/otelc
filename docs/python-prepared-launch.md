@@ -32,7 +32,7 @@ The private runtime retains:
 
 - `python-request.json`, `python-resolved-plan.json` and `python-prepared.json`: original common policy/TOML/caller inputs, separately derived settings, native driver/build identity, maintained producer files and the stable selected entry.
 - `python-supervisor-start.json` and `python-application-start.json`: actual parent/supervisor/application/SDK identities, process group and SDK readiness before app work.
-- `python-inputs.journal`: bounded bytes actually consumed for an ordinary script entry, with actual PID and opened-file metadata, plus separate whole ordinary-loader source/bytecode reads. These reads do not prove code execution.
+- `python-inputs.journal`: bounded bytes actually consumed for an ordinary script entry, with actual PID and opened-file metadata, plus separate whole ordinary-loader source/bytecode reads. Separate selected-code records bind genuine monitored starts and feed function span/metric code IDs; reads alone do not prove code execution.
 - `sdk/python-sdk-spawned.json`, readiness/final status, private SDK diagnostics and any startup-failure receipt: actual worker ownership and exit, including a failed start which never reaches app code.
 - `python-execution.json`: actual app/SDK exits, entry evidence, post-drain request/tool/input/bootstrap rechecks and explicit failures. `python-supervisor-error.json` contains owner diagnostics; these are not added to application stdout/stderr.
 
@@ -42,6 +42,6 @@ Normal exceptions and app failures preserve native output and exit codes. The re
 
 ## Current boundary
 
-This profile requires a stable selected entry and unchanged policy/tooling through final drain. A program can still execute and rewrite its own source; the consumed entry bytes remain in the journal, while the stable-input recheck fails. Source snapshots can change concurrent file-mutation timing. Ordinary source/whole-pyc reads are retained; actual executed/monitored-code binding, native/library and installed-dependency closure, common `health` presentation and frozen-provider oteleq admission remain outstanding. Forks, subinterpreters, custom loaders and arbitrary interpreter/flag profiles remain unqualified.
+This profile requires a stable selected entry and unchanged policy/tooling through final drain. A program can still execute and rewrite its own source; the consumed entry bytes remain in the journal, while the stable-input recheck fails. Source snapshots can change concurrent file-mutation timing. Ordinary source/whole-pyc reads are retained; source/pyc-to-code attribution, whole-program code coverage, native/library and installed-dependency closure, common `health` presentation and frozen-provider oteleq admission remain outstanding. Forks, subinterpreters, custom loaders and arbitrary interpreter/flag profiles remain unqualified.
 
 The [benchmark driver](benchmarks.md) uses this public recipe in both lanes, binds the retained preparation/execution/journal files and validates actual app/SDK completion before publication. Application latency and application/SDK/supervisor resource windows remain separate. The plain lane still captures native entry and ordinary-loader inputs; it has no telemetry probes or SDK. These receipts do not complete full import/code provenance or frozen-provider admission.

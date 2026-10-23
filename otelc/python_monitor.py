@@ -7,12 +7,14 @@ import site
 import sys
 import threading
 import weakref
+from importlib.machinery import BuiltinImporter
 from pathlib import Path
 from types import CodeType, FrameType, ModuleType
 from typing import Protocol
 
 from otelc.config import Policy
 from otelc.python_lifetimes import Lifetimes
+from otelc.python_code_descriptor import encode as encode_code
 
 MAX_FUNCTIONS = 4096
 MAX_REJECTED_CODES = 4096
@@ -21,7 +23,7 @@ MAX_REJECTED_CODES = 4096
 class ObservationRuntime(Protocol):
     """The monitoring mechanism owns no exporter, application frame or object."""
 
-    def enter(self, key: int, name: str) -> None: ...
+    def enter(self, key: int, name: str, *, code_id: int | None = None) -> None: ...
     def leave(self, key: int, error: BaseException | None) -> None: ...
     def suspend(self, key: int) -> None: ...
     def resume(self, key: int) -> None: ...
@@ -42,21 +44,22 @@ class PythonMonitor:
         self.sources = policy.selection('sources')
         self.functions = policy.selection('functions')
         self._producer = Path(__file__).resolve().parent
-        self._names: dict[int, tuple[CodeType, str | None]] = {}
+        self._names: dict[int, tuple[weakref.ReferenceType[CodeType], str]] = {}
         self._rejected: dict[int, weakref.ReferenceType[CodeType]] = {}
         self._rejected_lock = threading.RLock()
         self.tool: int | None = None
         self._callbacks: list[int] = []
         self._startup_module: ModuleType | None = None
+        self._code_observer = None
 
     def retire_startup_module(self, module: ModuleType) -> None:
         """Remove only our temporary module after CPython's outer import ends."""
         self._startup_module = module
 
     def selected(self, code: CodeType) -> str | None:
-        """Identity cache retains code objects so an ID cannot silently be reused."""
+        """Weak identity checks prevent ID reuse without retaining code constants."""
         entry = self._names.get(id(code))
-        if entry is not None:
+        if entry is not None and entry[0]() is code:
             return entry[1]
         rejected = self._rejected.get(id(code))
         if rejected is not None and rejected() is code:
@@ -65,10 +68,16 @@ class PythonMonitor:
         if name is None:
             self._cache_rejection(code)
             return None
+        if len(self._names) >= MAX_FUNCTIONS:
+            # No weakref callback can wait on a lifetime/GC lock. Dead slots
+            # remain bounded and are reclaimed only when capacity is needed.
+            for identity, cached in tuple(self._names.items()):
+                if cached[0]() is None and self._names.get(identity) is cached:
+                    self._names.pop(identity, None)
         if len(name.encode()) > 1024 or len(self._names) >= MAX_FUNCTIONS:
             self.runtime.reject('function_capacity')
             return None
-        self._names[id(code)] = (code, name)
+        self._names[id(code)] = (weakref.ref(code), name)
         return name
 
     def _cache_rejection(self, code: CodeType) -> None:
@@ -116,7 +125,16 @@ class PythonMonitor:
         try:
             name = self.selected(code)
             if name is not None:
-                self.runtime.enter(id(sys._getframe(1)), name)
+                key = id(sys._getframe(1))
+                if self._code_observer is None:
+                    self.runtime.enter(key, name)
+                else:
+                    identity = self._code_observer(code, offset)
+                    if type(identity) is not int or identity <= 0:
+                        self.runtime.reject('source_code')
+                        self.runtime.enter(key, name)
+                    else:
+                        self.runtime.enter(key, name, code_id=identity)
         except Exception:
             self.runtime.abandon(id(sys._getframe(1)))
             self.runtime.reject('monitor_start')
@@ -146,7 +164,7 @@ class PythonMonitor:
             except Exception:
                 self.lifetimes.reject('monitor_completion')
         try:
-            if id(frame.f_code) in self._names:
+            if (cached := self._names.get(id(frame.f_code))) is not None and cached[0]() is frame.f_code:
                 self.runtime.leave(id(frame), error)
         except Exception:
             self.runtime.abandon(id(frame))
@@ -160,7 +178,7 @@ class PythonMonitor:
 
     def _suspend(self, frame: FrameType, *, resume: bool) -> None:
         try:
-            if id(frame.f_code) in self._names:
+            if (cached := self._names.get(id(frame.f_code))) is not None and cached[0]() is frame.f_code:
                 operation = self.runtime.resume if resume else self.runtime.suspend
                 operation(id(frame))
         except Exception:
@@ -189,6 +207,15 @@ class PythonMonitor:
         """Use an unoccupied ID, and roll back a partial callback installation."""
         if self.tool is not None:
             raise RuntimeError('Python monitor is already installed')
+        # Only the native driver's registered builtin is eligible. Never import
+        # an application file with this private name from the search path.
+        spec = BuiltinImporter.find_spec('_otelc_inputs')
+        if spec is not None:
+            module = BuiltinImporter.create_module(spec)
+            BuiltinImporter.exec_module(module)
+            if module.bind(self._start, encode_code) is not True:
+                raise ValueError('native Python code callback binding failed')
+            self._code_observer = module.observe
         monitoring = sys.monitoring
         for tool in (3, 4, 2, 5):
             if monitoring.get_tool(tool) is None:

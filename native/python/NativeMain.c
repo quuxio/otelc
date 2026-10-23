@@ -30,6 +30,7 @@ int main(int argc, char **argv) {
             otelc_py_journal_open((int)descriptor)) return 64;
     if (atexit(process_exit)) return 78;
     if (otelc_py_imports_install()) return 78;
+    if (otelc_py_code_install()) return 78;
     int native_argc = argc - 3;
     char **native_argv = malloc((size_t)native_argc * sizeof(char *));
     if (!native_argv) return 78;
