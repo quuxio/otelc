@@ -70,7 +70,9 @@ def batch(process: Application, count: int) -> dict[str, Any]:
     if not ready:
         raise TimeoutError("application batch did not complete")
     value = json.loads(process.stdout.readline())
-    if value.get("calls") != count or type(value.get("elapsed_ns")) is not int or value["elapsed_ns"] <= 0:
+    if (type(value) is not dict or type(value.get("calls")) is not int
+            or value["calls"] != count or type(value.get("checksum")) is not int
+            or type(value.get("elapsed_ns")) is not int or value["elapsed_ns"] <= 0):
         raise ValueError("invalid application timing response")
     return value
 
@@ -116,12 +118,25 @@ def export_result(report: dict[str, Any], endpoint: str) -> None:
             for value in values:
                 duration.record(value / 1_000_000_000., labels)
         export_process_usage(meter, report, comparison_id)
+        export_launch_timing(meter, report, comparison_id)
         metrics = reader.get_metrics_data()
         if metrics is None or exporter.export(metrics) is not MetricExportResult.SUCCESS:
             raise ValueError("Collector did not accept benchmark metrics")
     finally:
         provider.shutdown(timeout_millis=5000)
         exporter.shutdown(timeout_millis=5000)
+
+
+def export_launch_timing(meter: Any, report: dict[str, Any], comparison_id: str) -> None:
+    """Keep launch-to-response timing separate from application-body samples."""
+    if 'launch_to_first_response' not in report:
+        return
+    timing = meter.create_histogram('otelc.benchmark.launch_to_first_response', unit='s')
+    for lane, value in report['launch_to_first_response'].items():
+        timing.record(value['elapsed_ns'] / 1_000_000_000., {
+            'comparison_id': comparison_id, 'run_id': report['run_id'],
+            'language': report['language'], 'mode': lane, 'scope': value['scope'],
+            'runtime': report['runtime'], 'profile': report['launch_profile']})
 
 
 def export_process_usage(meter: Any, report: dict[str, Any], comparison_id: str) -> None:
