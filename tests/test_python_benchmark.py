@@ -189,9 +189,9 @@ class PythonBenchmarkTests(unittest.TestCase):
 
         with mock.patch.object(launch, 'start', side_effect=start), \
                 mock.patch.object(launch.files, 'write', side_effect=write):
+            manager = python_benchmark.application(self.policy, self.root / 'runtime', plain=False)
             with self.assertRaisesRegex(OSError, 'evidence write failure'):
-                with python_benchmark.application(self.policy, self.root / 'runtime', plain=False):
-                    self.fail('failed setup must not yield an application')
+                self.enterContext(manager)
         self.assertEqual(len(started), 1)
         self.assertIsNotNone(started[0].owner.poll())
         for pid in (started[0].pid, started[0].sdk_pid):
