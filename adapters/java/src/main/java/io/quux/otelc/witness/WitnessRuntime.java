@@ -254,8 +254,9 @@ public final class WitnessRuntime {
   private void startSpan(Entry entry, WitnessBindings.Binding binding, boolean recursive) {
     WitnessScope scope = entry.scope;
     Context parent = binding.role().equals(WRAPPER) ? Context.root() : Context.current();
+    // The start processor attaches identities once; duplicate writes inflate SDK loss accounting.
     var builder = sdk.getTracer("io.quux.otelc.witness", "1").spanBuilder("otelc.action." + binding.role())
-        .setParent(parent).setAllAttributes(attributes(scope)).setAttribute(ROLE, recursive ? "recursive_target" : binding.role())
+        .setParent(parent).setAttribute(ROLE, recursive ? "recursive_target" : binding.role())
         .setAttribute("otelc.witness.probe_id", binding.probeId());
     entry.span = builder.startSpan();
     entry.context = parent.with(entry.span);

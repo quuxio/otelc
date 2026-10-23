@@ -417,9 +417,25 @@ final class Work {
             spans = [span for request in capture.traces for resource in request.resource_spans
                      for scope in resource.scope_spans for span in scope.spans]
             self.assertEqual(len(spans), 13 + extra_unscoped)  # Four scoped calls plus unrelated calls.
+            frozen_witness = json.loads((runtime / 'witness.json').read_text())
+            for span in spans:
+                self.assertEqual(span.dropped_attributes_count, 0, span.name)
+                self.assertEqual(span.dropped_events_count, 0, span.name)
+                self.assertEqual(span.dropped_links_count, 0, span.name)
+                for event in span.events:
+                    self.assertEqual(event.dropped_attributes_count, 0, span.name)
             for scope in scopes:
                 actual = [span for span in spans if span.trace_id.hex() == scope["trace_id"]]
                 self.assertEqual({span.span_id.hex() for span in actual}, set(scope["exported_ids"]))
+                expected = {"scope_id": scope["scope_id"], "runtime_id": status["runtime_id"],
+                    "context_cookie": scope["cookie"], "case_id": scope["case_id"],
+                    "attempt_id": scope["attempt_id"], **{key: frozen_witness[key] for key in
+                    ("build_sha256", "selection_sha256", "policy_sha256", "tooling_sha256")}}
+                for span in actual:
+                    attributes = {item.key: (item.value.WhichOneof('value'), item.value.string_value)
+                                  for item in span.attributes}
+                    for key, value in expected.items():
+                        self.assertEqual(attributes.get('otelc.witness.' + key), ('string_value', value))
                 roles = {next((a.value.string_value for a in span.attributes if a.key == "otelc.witness.role"), "function"): span
                          for span in actual}
                 self.assertEqual(set(roles), {"wrapper", "target", "function"})
