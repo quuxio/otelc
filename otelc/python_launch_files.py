@@ -52,9 +52,4 @@ def write(path: Path, value: dict[str, Any]) -> None:
     data = recipe.encoded(value).encode()
     if len(data) > MAX_METADATA:
         raise ValueError('Python launch metadata exceeds its bound')
-    descriptor = io.create_file(path)
-    try:
-        with os.fdopen(descriptor, 'wb', closefd=False) as output:
-            output.write(data)
-    finally:
-        os.close(descriptor)
+    io.publish_bytes(path, data)
