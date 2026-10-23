@@ -38,6 +38,8 @@ The private runtime retains:
 
 Normal exceptions and app failures preserve native output and exit codes. The receipt separately retains a signal's negative application return code; the supervisor uses the shell-style `128+signal` result. An otherwise successful app returns failure when required ownership, drain, entry binding or stable-input rechecks fail. An unsuccessful app retains its failure code. Abrupt `_exit`, worker death, missing final records and changed inputs cannot become a successful receipt.
 
+Ordinary monitoring errors preserve application results. If an application audit hook refuses frame access, the probes respect that refusal and record `monitor_frame` loss. They do not retry with another introspection mechanism. Returns, original exception objects and generator/coroutine results remain native; missing observations make the final SDK evidence fail. A call whose completion cannot be observed remains incomplete rather than acquiring a fabricated completion.
+
 `phase=closed` describes this owned execution and SDK drain, not full source provenance or collector delivery. Every prepared/final response still has `source_complete=false`. A module may complete its lifecycle while its complete entry/code provenance remains explicitly unavailable. `null` identities/exits identify unavailable evidence; they are not healthy zero counters.
 
 ## Current boundary

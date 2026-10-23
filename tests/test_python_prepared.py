@@ -206,6 +206,81 @@ assert workload() is payload
         self.assertFalse(receipt['source_complete'])
         self.assertEqual(self.entry.read_bytes(), original)
 
+    def test_denied_monitor_frames_preserve_native_results_and_report_loss(self) -> None:
+        header = """import sys
+
+def deny_frame(event, arguments):
+    if event == 'sys._getframe':
+        raise RuntimeError('frame access unavailable')
+"""
+        bodies = {
+            'before_start': """sys.addaudithook(deny_frame)
+def workload(): return 42
+print(workload())
+""",
+            'return': """def workload():
+    sys.addaudithook(deny_frame)
+    return 42
+print(workload())
+""",
+            'exception': """class OriginalError(Exception): pass
+original = OriginalError('original')
+def workload():
+    sys.addaudithook(deny_frame)
+    raise original
+try:
+    workload()
+except OriginalError as error:
+    print(error is original)
+""",
+            'generator': """sentinel = object()
+def workload():
+    sys.addaudithook(deny_frame)
+    yield sentinel
+    return 42
+value = workload()
+print(next(value) is sentinel)
+try:
+    next(value)
+except StopIteration as result:
+    print(result.value)
+""",
+            'coroutine': """sentinel = object()
+class Pause:
+    def __await__(self):
+        yield sentinel
+async def workload():
+    sys.addaudithook(deny_frame)
+    await Pause()
+    return 42
+value = workload()
+print(value.send(None) is sentinel)
+try:
+    value.send(None)
+except StopIteration as result:
+    print(result.value)
+""",
+        }
+        for name, body in bodies.items():
+            with self.subTest(name=name):
+                self.entry.write_text(header + body)
+                original = self.entry.read_bytes()
+                directory, value = self.prepare()
+                native = subprocess.run([sys.executable, *value['plan']['native_arguments']],
+                    cwd=self.app, capture_output=True, timeout=10)
+                self.assertEqual((native.returncode, native.stderr), (0, b''))
+                result = subprocess.run(value['command'], capture_output=True, timeout=20)
+                receipt, _ = files.read(directory / 'python-execution.json')
+                self.assertEqual((receipt['application']['returncode'], result.stdout, result.stderr),
+                                 (native.returncode, native.stdout, native.stderr))
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(receipt['phase'], 'failed')
+                self.assertEqual(receipt['failures']['sdk'], 'failed')
+                report = json.loads((directory / 'sdk/python-sdk-status.json').read_bytes())
+                self.assertGreater(report['producer']['runtime_losses']['monitor_frame'], 0)
+                self.assertFalse(receipt['source_complete'])
+                self.assertEqual(self.entry.read_bytes(), original)
+
     def test_owner_refuses_malformed_code_payloads_or_mismatched_filename_bytes(self) -> None:
         original_read = inputs.read
         for fault in ('payload', 'path'):
