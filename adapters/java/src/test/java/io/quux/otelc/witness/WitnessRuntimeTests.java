@@ -115,9 +115,11 @@ class WitnessRuntimeTests {
           runtime.attach(OpenTelemetrySdk.builder().setTracerProvider(provider).build());
           var scenario = new Scenario(actual, plan, runtime, exporter, provider, clock);
           scenario.control();
+          scenario.foreignReadyFirst();
           scenario.ownsArm();
           scenario.exports();
           scenario.cancellationAndExpiry();
+          scenario.virtualThreadRefusal();
           scenario.finalInvalidation(capture, owner, domain, original);
         }
       }
@@ -147,10 +149,65 @@ class WitnessRuntimeTests {
     }
 
     void control() throws Exception {
-    assertTrue(exchange(plan.socket(), "1 " + "0".repeat(32) + " status\n").contains("\"scope\":null"));
+    assertTrue(command(runtime, "status").contains("\"pid\":" + ProcessHandle.current().pid() + ","));
+    assertTrue(runtime.command("1 " + "0".repeat(32) + " status").contains("invalid_request"));
+    assertTrue(exchange(plan.socket(), "2 " + "0".repeat(32) + " status\n").contains("\"scope\":null"));
     assertTrue(exchange(plan.socket(), "unfinished").contains("invalid_request"));
     assertTrue(exchange(plan.socket(), "x".repeat(2049) + "\n").contains("invalid_request"));
     assertThrows(java.io.IOException.class, () -> WitnessServer.start(plan.socket(), runtime));
+    }
+
+    void foreignReadyFirst() throws Exception {
+      var ready = new java.util.concurrent.CountDownLatch(1);
+      var release = new java.util.concurrent.CountDownLatch(1);
+      var errors = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+      Thread intended = Thread.currentThread();
+      callback.set(null, (Runnable) () -> {
+        if (Thread.currentThread() != intended) {
+          ready.countDown();
+          try { assertTrue(release.await(3, java.util.concurrent.TimeUnit.SECONDS)); }
+          catch (InterruptedException error) { throw new AssertionError(error); }
+          return;
+        }
+        String status = command(runtime, "status");
+        assertNotEquals(Long.toString(intended.threadId()), property(status, "thread_id"));
+        String[] arguments = armArguments(status, plan);
+        arguments[10] = Long.toString(intended.threadId());
+        String refusal = command(runtime, "arm " + String.join(" ", arguments));
+        assertTrue(refusal.contains("arm_identity_mismatch"), refusal);
+        assertTrue(refusal.contains("\"phase\":\"ready\""), refusal);
+        assertTrue(refusal.contains("\"scope_id\":null"), refusal);
+      });
+      Thread foreign = Thread.ofPlatform().start(() -> {
+        try { assertEquals(8, method.invoke(null, 7)); }
+        catch (Throwable error) { errors.set(error); }
+      });
+      try {
+        assertTrue(ready.await(3, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(9, method.invoke(null, 8));
+      } finally {
+        release.countDown();
+        foreign.join(3000);
+      }
+      assertFalse(foreign.isAlive());
+      assertNull(errors.get());
+      String refused = command(runtime, "status");
+      assertEquals(Long.toString(foreign.threadId()), property(refused, "thread_id"));
+      assertTrue(refused.contains("\"scope_id\":null"), refused);
+      assertEquals(0, exporter.spans.size());
+    }
+
+    void virtualThreadRefusal() throws Exception {
+      callback.set(null, (Runnable) () -> {});
+      var errors = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+      Thread virtual = Thread.ofVirtual().start(() -> {
+        try { assertEquals(10, method.invoke(null, 9)); }
+        catch (Throwable error) { errors.set(error); }
+      });
+      virtual.join(3000);
+      assertFalse(virtual.isAlive());
+      assertNull(errors.get());
+      assertTrue(command(runtime, "status").contains("unsupported_virtual_thread"));
     }
 
     void ownsArm() throws Exception {
@@ -161,7 +218,7 @@ class WitnessRuntimeTests {
       String status = command(runtime, "status");
       assertTrue(status.contains("\"phase\":\"ready\""), status);
       String[] arguments = armArguments(status, plan);
-      for (int index : new int[] {0, 1, 2, 5, 6, 7, 8, 9}) {
+      for (int index : new int[] {0, 1, 2, 5, 6, 7, 8, 9, 10}) {
         String[] wrong = arguments.clone();
         wrong[index] = index == 2 ? "999" : "0".repeat(wrong[index].length());
         assertTrue(command(runtime, "arm " + String.join(" ", wrong)).contains("arm_identity_mismatch"));
@@ -285,7 +342,7 @@ class WitnessRuntimeTests {
   }
 
   private static String command(WitnessRuntime runtime, String operation) {
-    return runtime.command("1 " + UUID.randomUUID().toString().replace("-", "") + " " + operation);
+    return runtime.command("2 " + UUID.randomUUID().toString().replace("-", "") + " " + operation);
   }
 
   private static String property(String json, String key) {
@@ -297,7 +354,7 @@ class WitnessRuntimeTests {
   private static String[] armArguments(String status, WitnessPlan plan) {
     return new String[] {property(status, "runtime_id"), property(status, "cookie"), property(status, "sequence"),
         "e".repeat(64), "f".repeat(64), plan.build(), plan.selection(), plan.tooling(),
-        plan.bindings().get("wrapper").probeId(), plan.policy()};
+        plan.bindings().get("wrapper").probeId(), plan.policy(), property(status, "thread_id")};
   }
 
   private static byte[] fixture(String owner) {

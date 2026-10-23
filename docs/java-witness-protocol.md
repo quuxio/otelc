@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This is the optional `java-sync-action-v1` diagnostic producer protocol. Use it with a frozen SDK source/product snapshot and [the supported action shapes](action-witness.md). It does not replace the common instrumentation policy, change the default prepared-launch or runtime-health schemas, or establish downstream receipt.
+This is the optional `java-sync-action-v2` diagnostic producer protocol. Use it with a frozen SDK source/product snapshot and [the supported action shapes](action-witness.md). It does not replace the common instrumentation policy, change the default prepared-launch or runtime-health schemas, or establish downstream receipt.
 
 ## Prepare and connect
 
@@ -13,16 +13,16 @@ This is the optional `java-sync-action-v1` diagnostic producer protocol. Use it 
 The socket is owned by the launch user and mode 0600. Use `otelc.witness.request(socket, operation, *arguments)` for correlated, bounded exchanges. Requests are ASCII, a single LF-terminated line, at most 2048 bytes before LF:
 
 ```text
-1 REQUEST_ID status
-1 REQUEST_ID status RUNTIME_ID SCOPE_ID
-1 REQUEST_ID arm RUNTIME_ID COOKIE SEQUENCE CASE_ID ATTEMPT_ID BUILD SELECTION TOOLING WRAPPER_PROBE POLICY
-1 REQUEST_ID end RUNTIME_ID SCOPE_ID
-1 REQUEST_ID cancel RUNTIME_ID SCOPE_ID
+2 REQUEST_ID status
+2 REQUEST_ID status RUNTIME_ID SCOPE_ID
+2 REQUEST_ID arm RUNTIME_ID COOKIE SEQUENCE CASE_ID ATTEMPT_ID BUILD SELECTION TOOLING WRAPPER_PROBE POLICY EXPECTED_THREAD_ID
+2 REQUEST_ID end RUNTIME_ID SCOPE_ID
+2 REQUEST_ID cancel RUNTIME_ID SCOPE_ID
 ```
 
-`REQUEST_ID` is a fresh 32-character lowercase hexadecimal value chosen by the client. Runtime, cookie and scope IDs are 32-character lowercase hexadecimal; case, attempt, digest and probe IDs are 64-character lowercase hexadecimal. Sequence and counters use canonical non-negative decimal strings; sequence starts at 1. Case/attempt identity is client-supplied, not an application value. All arm identities must match the current ready envelope and frozen launch metadata. The server accepts no application values or arbitrary executable commands.
+`REQUEST_ID` is a fresh 32-character lowercase hexadecimal value chosen by the client. Runtime, cookie and scope IDs are 32-character lowercase hexadecimal; case, attempt, digest and probe IDs are 64-character lowercase hexadecimal. Sequence and counters use canonical non-negative decimal strings; sequence starts at 1. Case/attempt identity is client-supplied, not an application value. `EXPECTED_THREAD_ID` is the positive Java logical thread ID independently reported by the ordinary private harness. It is the fourteenth word and is compared before allocating a scope or changing readiness; a mismatch leaves the envelope ready and unarmed. It is not an OS thread ID and must not be copied from the first producer status as the expected harness identity. All arm identities must match the current ready envelope and frozen launch metadata. The server accepts no application values or arbitrary executable commands.
 
-Wait for the ordinary fixture to reach its rendezvous, then read `status` and require a ready scope and no producer error. Send `arm` with that exact cookie/sequence and launch identities. Require the correlated successful `armed` acknowledgement before releasing the ordinary fixture channel. Observe consumed/exited state, require the application outcome, then call `end`. Cancellation records a sticky failure; it does not stop or alter application execution. `end` waits at most 1500 ms for a real SDK flush outside the scope monitor. A delayed export can settle and be checked with another `end`.
+Wait for the ordinary fixture to reach its rendezvous and retain its independent PID/thread readiness, then read `status` and require a ready scope and no producer error. Require the launched PID and independent Java thread to match. Send `arm` with that exact cookie/sequence and independently expected thread ID and launch identities. Require the correlated successful `armed` acknowledgement before releasing the ordinary fixture channel. Observe consumed/exited state, require the application outcome, then call `end`. Cancellation records a sticky failure; it does not stop or alter application execution. `end` waits at most 1500 ms for a real SDK flush outside the scope monitor. A delayed export can settle and be checked with another `end`.
 
 ## Closed response
 
@@ -30,8 +30,9 @@ Every response is LF-terminated JSON with exactly these header fields. Unknown o
 
 | Field | Type and meaning |
 | --- | --- |
-| `schema_version`, `profile` | Integer `1`, string `java-sync-action-v1` |
+| `schema_version`, `profile` | Integer `2`, string `java-sync-action-v2` |
 | `runtime_id`, `request_id` | Runtime identity; echoed request identity, or null for an invalid uncorrelated request/final header |
+| `pid` | Positive JSON integer from the actual JVM; compare with the launched PID |
 | `error` | Null or a bounded lowercase error code |
 | `build_sha256`, `selection_sha256`, `policy_sha256`, `tooling_sha256` | Frozen launch identities |
 | `envelope_probe_id`, `rendezvous_probe_id`, `wrapper_probe_id`, `target_probe_id` | Exact original role binding identities; compare all four with the frozen launch |
@@ -42,6 +43,7 @@ Every response is LF-terminated JSON with exactly these header fields. Unknown o
 | Scope field | Type and meaning |
 | --- | --- |
 | `cookie`, `sequence` | Fresh live envelope cookie and monotonic decimal-string sequence |
+| `thread_id` | Positive canonical decimal string captured from `Thread.threadId()` at envelope entry |
 | `scope_id`, `case_id`, `attempt_id` | Null before arm; opaque identities after arm |
 | `phase` | `entered`, `ready`, `armed`, `consumed`, `exited`, `expired`, `cancelled`, `complete`, `invalidated`, `incomplete` or `terminated` |
 | `failure` | Null or first retained failure code |
@@ -62,6 +64,8 @@ The runtime serialises one active action. Other envelopes and unrelated reflecte
 
 ## Final evidence
 
-Read the post-exit report with `otelc.witness.read_final(path)`. The reader requires an owned private directory, a non-symlink regular private file and a maximum size of 4 MiB. The closed document has `schema_version: 1`, `kind: otelc.java-witness-final`, `phase: final`, positive integer `pid`, `producer` (the header above with null request/scope), `queue_evidence` and `scopes`. Scopes retain their original order, unique cookies and unique non-null scope IDs, with at most 64 entries. Incomplete contexts remain present.
+Read the post-exit report with `otelc.witness.read_final(path)`. The reader requires an owned private directory, a non-symlink regular private file and a maximum size of 4 MiB. The closed document has `schema_version: 2`, `kind: otelc.java-witness-final`, `phase: final`, positive integer `pid`, `producer` (the header above with null request/scope), `queue_evidence` and `scopes`. The outer and producer-header PIDs must agree with the launched JVM. Scopes retain their original order, unique cookies and unique non-null scope IDs, with at most 64 entries. Incomplete contexts remain present.
 
 `queue_evidence` is `derived_after_shutdown` only when the existing runtime-health boundary proves the supported global drain; otherwise it is `unavailable` and per-scope queue loss remains null. A failed attempted export is distinct from a queue drop. Abrupt termination can leave no report: that is missing evidence, not a completed action. Retain the final report, default runtime-health report, launch/tooling identities, application outcome and independently decoded receiver data together.
+
+Version 1 bindings, generated witness plans, launch descriptors and wire replies are refused by this profile. The role tracer remains `io.quux.otelc.witness` version `1`; its span names and nine identity attributes are unchanged. Ordinary selected-method children retain the pinned official instrumentation scope. A virtual-thread envelope records `unsupported_virtual_thread` and cannot be armed. Async migration and concurrent admitted actions remain unsupported.

@@ -111,7 +111,7 @@ public record WitnessPlan(Path socket, Map<String, WitnessBindings.Binding> bind
     Set<String> allowed = new HashSet<>(Set.of("schema_version", "profile", "socket", "build",
         "selection", "policy", "tooling"));
     for (String role : ROLES) for (String field : FIELDS) allowed.add(role + "." + field);
-    if (!values.stringPropertyNames().equals(allowed) || !"1".equals(values.getProperty("schema_version"))
+    if (!values.stringPropertyNames().equals(allowed) || !"2".equals(values.getProperty("schema_version"))
         || !WitnessBindings.PROFILE.equals(values.getProperty("profile"))) {
       throw new IllegalArgumentException("unsupported or incomplete witness plan");
     }

@@ -77,7 +77,7 @@ class WitnessPlanTests {
 
   private Properties valid() throws Exception {
     Properties values = new Properties();
-    values.setProperty("schema_version", "1");
+    values.setProperty("schema_version", "2");
     values.setProperty("profile", WitnessBindings.PROFILE);
     values.setProperty("socket", root.resolve("witness.sock").toString());
     for (String key : java.util.List.of("build", "selection", "policy", "tooling")) values.setProperty(key, "a".repeat(64));

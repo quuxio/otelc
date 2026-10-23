@@ -262,7 +262,7 @@ class WitnessBindingsTests {
       System.setOut(stdout);
     }
     String json = output.toString(StandardCharsets.UTF_8);
-    assertTrue(json.contains("\"profile\":\"java-sync-action-v1\""));
+    assertTrue(json.contains("\"profile\":\"java-sync-action-v2\""));
     assertTrue(json.contains(compile(original()).get("wrapper").probeId()));
     assertTrue(json.contains("\"descriptor\":\"(I)I\""));
     Path changed = directory.resolve("changed.class");

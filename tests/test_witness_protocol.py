@@ -19,13 +19,13 @@ from otelc.config import Policy
 
 def reply() -> dict:
     """A complete observed two-role scope, independent of any requested application value."""
-    value = {"schema_version": 1, "profile": witness.PROFILE, "runtime_id": "a" * 32,
+    value = {"schema_version": 2, "profile": witness.PROFILE, "runtime_id": "a" * 32, "pid": 42,
              "request_id": "b" * 32, "error": None, "rejected_probes": "0",
              "max_scopes": 64, "max_spans_per_scope": 1024}
     value.update({key: "c" * 64 for key in ("build_sha256", "selection_sha256", "policy_sha256",
                                            "tooling_sha256", "wrapper_probe_id", "envelope_probe_id",
                                            "rendezvous_probe_id", "target_probe_id")})
-    value["scope"] = {"cookie": "d" * 32, "sequence": "1", "scope_id": "e" * 32,
+    value["scope"] = {"cookie": "d" * 32, "sequence": "1", "thread_id": "41", "scope_id": "e" * 32,
         "case_id": "f" * 64, "attempt_id": "0" * 64, "phase": "complete", "failure": None,
         "trace_id": "1" * 32, "root_span_id": "2" * 16, "target_span_id": "3" * 16,
         "root_exited": True, "envelope_exited": True, "target_exited": True,
@@ -37,6 +37,18 @@ def reply() -> dict:
 
 
 class WitnessProtocolTests(unittest.TestCase):
+    def test_v2_requires_actual_pid_and_positive_canonical_logical_thread(self) -> None:
+        valid = reply()
+        for pid in (True, 0, -1, "42"):
+            with self.subTest(pid=pid), self.assertRaises(ValueError):
+                witness.validate_reply(valid | {"pid": pid}, "b" * 32)
+        for thread in (True, None, "0", "01", "-1", "1.0", "١", str(2**63)):
+            with self.subTest(thread=thread), self.assertRaises(ValueError):
+                witness.validate_reply(valid | {"scope": valid["scope"] | {"thread_id": thread}}, "b" * 32)
+        for version, profile in ((1, "java-sync-action-v1"), (1, witness.PROFILE), (2, "java-sync-action-v1")):
+            with self.subTest(version=version, profile=profile), self.assertRaises(ValueError):
+                witness.validate_reply(valid | {"schema_version": version, "profile": profile}, "b" * 32)
+
     def test_fifo_bindings_are_refused_without_waiting_for_a_writer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'bindings.json'
@@ -67,12 +79,12 @@ class WitnessProtocolTests(unittest.TestCase):
             path = root / "witness-health.json"
             header = reply() | {"request_id": None, "scope": None}
             scope = reply()["scope"]
-            document = {"schema_version": 1, "kind": "otelc.java-witness-final", "phase": "final", "pid": 42,
+            document = {"schema_version": 2, "kind": "otelc.java-witness-final", "phase": "final", "pid": 42,
                         "producer": header, "queue_evidence": "unavailable", "scopes": [scope]}
             path.write_text(json.dumps(document))
             path.chmod(0o600)
             self.assertEqual(witness.read_final(path), document)
-            for mutation in (document | {"unexpected": True}, document | {"pid": True},
+            for mutation in (document | {"unexpected": True}, document | {"producer": header | {"pid": 43}}, document | {"pid": True},
                              document | {"phase": "running"}, document | {"scopes": [None]},
                              document | {"scopes": [scope, scope]}, document | {"scopes": [scope] * 65},
                              document | {"producer": reply()},
@@ -141,12 +153,12 @@ class WitnessProtocolTests(unittest.TestCase):
                 text = "\n".join([witness.PROFILE, role, "Example", role, "()V", "a" * 64, "b" * 64])
                 binding["probe_id"] = hashlib.sha256(text.encode()).hexdigest()
                 bindings[role] = binding
-            document = {"schema_version": 1, "kind": "otelc.java-witness-bindings", "profile": witness.PROFILE,
+            document = {"schema_version": 2, "kind": "otelc.java-witness-bindings", "profile": witness.PROFILE,
                         "bindings": bindings}
             path.write_text(json.dumps(document))
             self.assertEqual(witness.load_bindings(path, application), document)
             for mutation in (document | {"extra": 1}, document | {"schema_version": True}, document | {"bindings": {}},
-                             document | {"profile": "unknown"}, document | {"kind": "other"}):
+                             document | {"schema_version": 1}, document | {"profile": "unknown"}, document | {"kind": "other"}):
                 path.write_text(json.dumps(mutation))
                 with self.assertRaises(ValueError):
                     witness.load_bindings(path, application)

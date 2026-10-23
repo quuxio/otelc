@@ -8,6 +8,7 @@ final class WitnessScope {
   static final int MAX_SPANS = 1024;
   final String cookie;
   final long sequence;
+  final long threadId;
   final java.lang.ref.WeakReference<Thread> thread;
   final long expires;
   final Map<String, SpanState> spans = new LinkedHashMap<>();
@@ -31,6 +32,7 @@ final class WitnessScope {
   WitnessScope(String cookie, long sequence, Thread thread, long expires) {
     this.cookie = cookie;
     this.sequence = sequence;
+    this.threadId = thread.threadId();
     this.thread = new java.lang.ref.WeakReference<>(thread);
     this.expires = expires;
   }
@@ -58,7 +60,7 @@ final class WitnessScope {
   }
 
   String json() {
-    return "{\"cookie\":\"" + cookie + "\",\"sequence\":\"" + sequence + "\",\"scope_id\":" + value(id)
+    return "{\"cookie\":\"" + cookie + "\",\"sequence\":\"" + sequence + "\",\"thread_id\":\"" + threadId + "\",\"scope_id\":" + value(id)
         + ",\"case_id\":" + value(caseId) + ",\"attempt_id\":" + value(attempt)
         + ",\"phase\":\"" + phase + "\",\"failure\":" + value(failure)
         + ",\"trace_id\":" + value(trace) + ",\"root_span_id\":" + value(root)
