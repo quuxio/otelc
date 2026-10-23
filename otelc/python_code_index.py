@@ -152,6 +152,7 @@ def _graph(nodes: tuple[Node, ...], root: int) -> None:
     _require(sum(len(node.references) for node in nodes) <= MAX_EDGES, 'edge limit')
     for node in nodes:
         _require(all(identity <= len(nodes) for identity in node.references), 'missing node')
+    for node in nodes:
         _shape(node, nodes)
     active: set[int] = set()
     heights: dict[int, int] = {}

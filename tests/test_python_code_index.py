@@ -59,6 +59,15 @@ class PythonCodeIndexTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             result.nodes[0].fields[0] = ('changed', 99)
 
+    def test_forward_name_tuple_references_are_validated_before_code_shape(self) -> None:
+        for field in index.NAME_FIELDS:
+            with self.subTest(field=field):
+                value = graph()
+                value['nodes'].append({'id': 9, 'type': 'tuple', 'items': [999]})
+                value['nodes'][0]['fields'][field] = 9
+                with self.assertRaisesRegex(ValueError, 'missing node'):
+                    index.decode(record(value))
+
     def test_all_constant_types_preserve_bits_and_shared_references(self) -> None:
         data = graph()
         additions = [
