@@ -46,8 +46,9 @@ class PythonSdkProtocolTests(unittest.TestCase):
                    {'value': 2 ** 63}, {'unit': 'µs'}, {'version': 'x' * 129},
                    {'description': 'x' * 1025}, {'scope_attributes': []})
         for change in changes:
+            value = metric(**change)
             with self.subTest(change=change), self.assertRaises(ValueError):
-                wire.metric(metric(**change))
+                wire.metric(value)
         missing = metric()
         del missing['value']
         with self.assertRaises(ValueError):
@@ -96,24 +97,27 @@ class PythonSdkProtocolTests(unittest.TestCase):
                    {'links': {}}, {'links': [{'context': None}]},
                    {'links': [{'context': context()}] * 129})
         for change in changes:
+            value = span(**change)
             with self.subTest(change=change), self.assertRaises(ValueError):
-                wire.span(span(**change))
+                wire.span(value)
 
     def test_context_id_flags_and_primitive_helpers_are_strict(self) -> None:
         for changes in ({'unknown': 1}, {'trace_id': '0' * 32},
                         {'span_id': 'A' * 16}, {'trace_flags': 256},
                         {'trace_flags': True}, {'remote': 1},
                         {'trace_state': 'x' * 513}):
+            value = context(**changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
-                wire.context(context(**changes))
+                wire.context(value)
         for value in (False, -1, 2 ** 63):
             with self.assertRaises(ValueError):
                 wire.integer(value)
         for value in (0, None, 'true'):
             with self.assertRaises(ValueError):
                 wire.flag(value)
+        fields = set()
         with self.assertRaises(ValueError):
-            wire.fields([], set())
+            wire.fields([], fields)
         self.assertEqual(wire.number(-2 ** 63), -2 ** 63)
         self.assertEqual(wire.number(.25), .25)
 
@@ -124,5 +128,6 @@ class PythonSdkProtocolTests(unittest.TestCase):
             for count in (0, 1, 2 ** 32 - 1):
                 wire.span(span(**{field: [{**item, 'dropped_attributes': count}]}))
             for count in (True, -1, 2 ** 32, 1.0, '1', None):
+                value = span(**{field: [{**item, 'dropped_attributes': count}]})
                 with self.subTest(field=field, count=count), self.assertRaises(ValueError):
-                    wire.span(span(**{field: [{**item, 'dropped_attributes': count}]}))
+                    wire.span(value)
