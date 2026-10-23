@@ -69,6 +69,8 @@ public final class WitnessRuntime {
     Context context;
     io.opentelemetry.context.Scope attached;
     Span span;
+    boolean handleObserved;
+    boolean routeVerified;
     Entry(Entry parent, String role, WitnessScope scope) {
       this.parent = parent; this.role = role; this.scope = scope;
     }
@@ -92,7 +94,7 @@ public final class WitnessRuntime {
     try {
       WitnessPlan plan = WitnessPlan.load(Path.of(file));
       var instrumentation = io.opentelemetry.javaagent.bootstrap.InstrumentationHolder.getInstrumentation();
-      INSTANCE.set(new WitnessRuntime(plan, WitnessClassCapture.install(instrumentation, plan.bindings(), plan.origins())));
+      INSTANCE.set(new WitnessRuntime(plan, WitnessClassCapture.install(instrumentation, plan.bindings(), plan.origins(), plan.route())));
     } catch (IOException error) {
       throw new IllegalStateException("cannot read private witness plan", error);
     }
@@ -109,6 +111,8 @@ public final class WitnessRuntime {
 
   public synchronized void guarded(WitnessBindings.Binding binding) { guarded.add(binding.probeId()); }
 
+  public HandleBindings.Route route() { return plan.route(); }
+
   public void attach(OpenTelemetrySdk sdk) throws IOException {
     this.sdk = sdk;
     try {
@@ -119,6 +123,11 @@ public final class WitnessRuntime {
       helper = Class.forName("io.quux.otelc.witness.probe.Observer", false, ClassLoader.getSystemClassLoader());
       helper.getMethod("install", BiFunction.class, BiConsumer.class).invoke(null,
           (BiFunction<Class<?>, String, Object>) this::enter, (BiConsumer<Object, Throwable>) this::exit);
+      if (plan.route() != null) helper.getMethod("installHandle", java.util.function.Consumer.class,
+          java.util.function.Function.class).invoke(null,
+              (java.util.function.Consumer<java.lang.invoke.MethodHandle>) this::observeHandle,
+              (java.util.function.Function<Object[], Object>) values -> enter((Class<?>) values[0],
+                  (String) values[1], (Class<?>) values[2]));
     } catch (ReflectiveOperationException | RuntimeException | LinkageError unavailable) {
       failure = "probe_binding_failed";
     }
@@ -158,6 +167,12 @@ public final class WitnessRuntime {
   private boolean matchesCall(List<StackWalker.StackFrame> frames, int index,
                               WitnessBindings.Binding binding, boolean recursive) {
     if (!frame(frames.get(index + 1), binding.declaration())) return false;
+    if (plan.route() != null && binding.role().equals(TARGET)) {
+      if (recursive) return index + 2 < frames.size() && frame(frames.get(index + 2), binding.declaration());
+      int caller = index + 2;
+      while (caller < frames.size() && HandleIdentity.machinery(frames.get(caller))) caller++;
+      return caller < frames.size() && frame(frames.get(caller), plan.bindings().get(WRAPPER).declaration());
+    }
     String caller = switch (binding.role()) {
       case RENDEZVOUS, WRAPPER -> ENVELOPE;
       case TARGET -> recursive ? null : WRAPPER;
@@ -168,12 +183,27 @@ public final class WitnessRuntime {
   }
 
   private Object enter(Class<?> owner, String probe) {
+    return enter(owner, probe, null);
+  }
+
+  private Object enter(Class<?> owner, String probe, Class<?> receiver) {
     Entry parent = current.get();
     WitnessBindings.Binding binding = probes.get(probe);
     boolean recursive = parent != null && parent.scope != null && parent.scope.targetEntries > 0 && !parent.scope.targetExited;
     if (binding == null || !actualCall(owner, binding, recursive)) {
       synchronized (this) { rejected++; }
       return rejected(parent, binding == null ? "rejected" : binding.role());
+    }
+    if (plan.route() != null && binding.role().equals(TARGET)) {
+      boolean exactReceiver = plan.route().referenceKind() == java.lang.invoke.MethodHandleInfo.REF_invokeStatic
+          ? receiver == null : receiver == owner;
+      if (!exactReceiver || !recursive && (parent == null || !parent.routeVerified)) {
+        synchronized (this) {
+          rejected++;
+          if (parent != null && parent.scope != null) parent.scope.fail("unverified_handle_route");
+        }
+        return rejected(parent, binding.role());
+      }
     }
     if (Thread.currentThread().isVirtual()) {
       synchronized (this) {
@@ -196,6 +226,35 @@ public final class WitnessRuntime {
       }
     }
     return entry;
+  }
+
+  private void observeHandle(java.lang.invoke.MethodHandle operand) {
+    Entry entry = current.get();
+    if (entry == null || !entry.role.equals(WRAPPER) || entry.scope == null) return;
+    boolean actual = WALKER.walk(stream -> {
+      var frames = stream.toList();
+      for (int index = 0; index + 1 < frames.size(); index++) {
+        if (frames.get(index).getDeclaringClass() == helper && frames.get(index).getMethodName().equals("handle")) {
+          return frame(frames.get(index + 1), plan.bindings().get(WRAPPER).declaration());
+        }
+      }
+      return false;
+    });
+    synchronized (this) {
+      WitnessScope scope = entry.scope;
+      if (!actual || active != scope || !scope.phase.equals(CONSUMED)
+          || scope.thread.get() != Thread.currentThread() || scope.failure != null) return;
+      if (entry.handleObserved) { scope.fail("duplicate_handle_operand"); entry.routeVerified = false; return; }
+      entry.handleObserved = true;
+      var target = plan.bindings().get(TARGET).declaration();
+      var loadedTarget = loaded.get(target.owner());
+      if (loadedTarget == null || !HandleIdentity.matches(operand, loadedTarget.type(), plan.route(), target)) {
+        scope.fail("handle_identity_mismatch");
+        return;
+      }
+      entry.routeVerified = true;
+      scope.routeVerified = true;
+    }
   }
 
   private synchronized WitnessScope selectScope(WitnessBindings.Binding binding, Entry parent, boolean recursive) {
@@ -227,7 +286,7 @@ public final class WitnessRuntime {
   WitnessScope begin() {
     if (failure != null || active != null) { rejected++; return null; }
     if (history.size() >= MAX_SCOPES) { failure = "scope_capacity"; rejected++; return null; }
-    WitnessScope scope = new WitnessScope(fresh(), ++sequence, Thread.currentThread(), clock.getAsLong() + LIFE);
+    WitnessScope scope = new WitnessScope(fresh(), ++sequence, Thread.currentThread(), clock.getAsLong() + LIFE, plan.route() != null);
     active = scope; latest = scope; history.put(scope.cookie, scope);
     return scope;
   }
@@ -273,6 +332,7 @@ public final class WitnessRuntime {
         entry.span.end();
       }
     } finally {
+      entry.routeVerified = false;
       if (entry.attached != null) entry.attached.close();
       if (entry.parent == null) current.remove(); else current.set(entry.parent);
     }
@@ -373,7 +433,7 @@ public final class WitnessRuntime {
 
   public String command(String text) {
     String[] words = text.split(" ", -1);
-    if (words.length < 3 || !words[0].equals("2") || !hex(words[1], 32)) return reply(null, "invalid_request", null);
+    if (words.length < 3 || !words[0].equals(Integer.toString(plan.version())) || !hex(words[1], 32)) return reply(null, "invalid_request", null);
     String request = words[1];
     if (!words[2].equals("status") && !validCapture()) return reply(request, "class_identity_invalid", latest);
     if (words[2].equals("end")) return end(words, request);
@@ -395,11 +455,12 @@ public final class WitnessRuntime {
   }
 
   private String arm(String[] words, String request) {
-    if (words.length != 14 || !words[3].equals(runtime) || active == null || !words[4].equals(active.cookie)
+    if (words.length != (plan.route() == null ? 14 : 15) || !words[3].equals(runtime) || active == null || !words[4].equals(active.cookie)
         || !words[5].equals(Long.toString(active.sequence)) || !hex(words[6], 64) || !hex(words[7], 64)
         || !words[8].equals(plan.build()) || !words[9].equals(plan.selection()) || !words[10].equals(plan.tooling())
         || !words[11].equals(plan.bindings().get(WRAPPER).probeId()) || !words[12].equals(plan.policy())
-        || !words[13].equals(Long.toString(active.threadId))) {
+        || !words[13].equals(Long.toString(active.threadId))
+        || plan.route() != null && !words[14].equals(plan.route().sha256())) {
       return reply(request, "arm_identity_mismatch", active);
     }
     if (active.failure != null || !active.phase.equals(READY)) return reply(request, "not_ready", active);
@@ -440,7 +501,7 @@ public final class WitnessRuntime {
   }
 
   private synchronized String reply(String request, String error, WitnessScope scope) {
-    return "{\"schema_version\":2,\"profile\":\"" + WitnessBindings.PROFILE + "\",\"runtime_id\":\"" + runtime
+    return "{\"schema_version\":" + plan.version() + ",\"profile\":\"" + plan.profile() + "\",\"runtime_id\":\"" + runtime
         + "\",\"pid\":" + pid + ",\"request_id\":" + WitnessScope.value(request) + ",\"error\":" + WitnessScope.value(error)
         + ",\"build_sha256\":\"" + plan.build() + "\",\"selection_sha256\":\"" + plan.selection()
         + "\",\"policy_sha256\":\"" + plan.policy() + "\",\"tooling_sha256\":\"" + plan.tooling()
@@ -449,6 +510,7 @@ public final class WitnessRuntime {
         + "\",\"rendezvous_probe_id\":\"" + plan.bindings().get(RENDEZVOUS).probeId()
         + "\",\"target_probe_id\":\"" + plan.bindings().get(TARGET).probeId()
         + "\",\"rejected_probes\":\"" + rejected + "\",\"max_scopes\":64,\"max_spans_per_scope\":1024"
+        + (plan.route() == null ? "" : ",\"route_binding_sha256\":\"" + plan.route().sha256() + "\"")
         + ",\"scope\":" + (scope == null ? "null" : scope.json()) + "}\n";
   }
 
@@ -467,7 +529,7 @@ public final class WitnessRuntime {
           if (!Set.of(CANCELLED, EXPIRED, "invalidated", INCOMPLETE).contains(scope.phase)) scope.phase = "terminated";
         }
       }
-      report = "{\"schema_version\":2,\"kind\":\"otelc.java-witness-final\",\"phase\":\"final\",\"pid\":"
+      report = "{\"schema_version\":" + plan.version() + ",\"kind\":\"otelc.java-witness-final\",\"phase\":\"final\",\"pid\":"
           + ProcessHandle.current().pid() + ",\"producer\":" + reply(null, failure, null).strip()
           + ",\"queue_evidence\":\"" + (queueKnown ? "derived_after_shutdown" : "unavailable")
           + "\",\"scopes\":[" + String.join(",", history.values().stream().map(WitnessScope::json).toList()) + "]}\n";

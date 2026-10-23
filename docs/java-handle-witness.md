@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-The `java-sync-private-handle-v1` offline compiler is a building block for generated private-method callers. Runtime operand verification, prepared-launch integration, generated callers and independent admission remain to be implemented. Normal Java launch and `java-sync-action-v2` do not accept these bindings. This component does not enable a new common-policy capability.
+The `java-sync-private-handle-v1` candidate combines offline bindings with actual operand verification for ordinary generated callers. It has a separate explicit optional launch/control profile. Generated consumer integration, independent qualification and shipping admission remain outstanding. Default Java launch and `java-sync-action-v2` continue to refuse this binding format; this candidate does not mark another language or whole-provider capability complete.
 
 ## Offline compiler
 
@@ -29,9 +29,9 @@ The closed UTF-8 JSON result has exactly `schema_version: 3`, `kind: otelc.java-
 
 The route SHA-256 covers UTF-8 newline-joined values in this exact order, without a trailing newline: profile, kind, field owner, field name, field descriptor, decimal site instruction, invoke owner, invoke name, invoke descriptor, decimal reference kind, wrapper probe ID, target probe ID. Every original field declaration and initialiser byte is also covered by the role's original class hash.
 
-## Runtime contract to implement
+## Runtime candidate
 
-The route will use explicit version `3` for its generated plan, optional launch descriptor, socket exchanges and final report. The v2 profile and refusal rules remain exact, without version inference or fallback. The ordinary prepared-launch identity and default runtime-health formats stay unchanged.
+The route uses explicit version `3` for its generated plan, optional launch descriptor, socket exchanges and final report. The v2 profile and refusal rules remain exact, without version inference or fallback. The ordinary prepared-launch identity and default runtime-health formats stay unchanged.
 
 The launch descriptor uses the existing `otelc.java-witness-launch` kind and fields with the new profile/version, plus `route` above. Tooling identity binds the original bindings and generated plan/descriptor. The generated plan adds the route members under `route.` keys. Runtime replies add `route_binding_sha256` to the v2 header fields; scopes add boolean `route_verified`, initially false. The final `otelc.java-witness-final` document retains that version/header/scope structure. Requests begin with `3`; `arm` appends the expected route digest after the independently expected thread ID. Other word positions and identity checks stay the same as v2.
 
@@ -39,4 +39,31 @@ Observe the actual operand produced by the bound `GETSTATIC` after that instruct
 
 The initial instance profile requires the actual target receiver's exact Class. Subclasses, interface dispatch and inherited/overridden dispatch are unsupported. An actual target entry must follow only the verified JDK handle machinery back to that wrapper. Intervening application/initialiser frames are unrelated work and cannot consume proof. Retire proof on every exit and refusal. Producer completion additionally requires verified route evidence. Independent decoded receipt, complete default SDK health, original output/state/error observations and existing scope/loss checks remain mandatory.
 
-Required runtime tests include private/static/public/final targets, wide arguments, original exceptions/state, wrong or swapped handles, adaptation/binding, class-initialisation re-entry, foreign/stale context, mismatched receivers and all version/field refusals. These are acceptance criteria, not results established by offline compiler tests.
+Real-agent tests cover private static/instance and public/final instance targets, original output/state/error identity, all live metric states, wrong direct handles with the same output, adapted/bound handles restored to the same type, target initialiser noise, helper collisions, exact receiver refusal and direct recursion. They independently decode span IDs, parentage, nine typed identity attributes and zero reported attribute/event/link drops. Wrong thread, route digest and stale runtime arms do not consume readiness. Cancellation and delayed/failed export remain explicit incomplete outcomes. These tests do not establish generated consumer or shipping admission.
+
+## Use the explicit diagnostic API
+
+```python
+from otelc import prepared_java, witness
+
+profile = witness.HANDLE_PROFILE
+bindings = witness.compile_bindings(application, declarations, bindings_path, profile=profile)
+launch = prepared_java.prepare(application, policy, runtime,
+    witness_bindings=bindings_path, witness_profile=profile)
+# Start launch.argv through the owning supervisor and retain its actual PID.
+# Use the independent SDK-free caller channel to obtain its logical thread ID.
+status = witness.request(runtime / "witness.sock", "status", profile=profile)
+# Arm using the frozen launch IDs, cookie/sequence, independently expected
+# thread ID and bindings["route"]["sha256"], then release the ordinary caller.
+# After actual scope end and process exit, retain the closed final report.
+final = witness.read_final(runtime / "witness-health.json", profile=profile)
+```
+
+`runtime` is the new owned private directory required by the prepared API. Keep the ordinary plain caller identical and omit witness options in that lane. The API's default profile stays v2; a schema-3 document or reply cannot select the new profile implicitly. Choosing a nondefault profile without bindings is refused before normal launch preparation. The CLI requires both explicit options:
+
+```sh
+bin/quux-otelc java --manifest application.json --runtime /tmp/new-handle-runtime \
+  --witness-bindings bindings.json --witness-profile java-sync-private-handle-v1
+```
+
+This diagnostic command still needs an ordinary caller rendezvous and an owning supervisor; it does not create a generated test suite automatically.

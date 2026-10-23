@@ -218,7 +218,12 @@ final class Work {
 
     def exercise(self, source_text: str, *, receiver: bool = False, substituted: bool = False,
                  helper_collision: bool = False, extra_unscoped: int = 0,
-                 live_metrics: bool = False, archive: str | None = None) -> None:
+                 live_metrics: bool = False, archive: str | None = None,
+                 profile: str = witness.PROFILE, expected_refusal: str = "target_not_entered",
+                 substituted_value: int = 9, recursive_entries: int = 1) -> None:
+        def exchange(path, operation, *arguments):
+            return witness.request(path, operation, *arguments, profile=profile)
+
         capture = Capture()
         self.addCleanup(capture.close)
         with tempfile.TemporaryDirectory(prefix="otelc-wit-", dir="/tmp") as directory:
@@ -265,8 +270,9 @@ final class Work {
                                       "(LWork;I)I" if receiver and role in ("envelope", "wrapper") else "(I)I"}
                             for role in witness.ROLES}
             frozen = root / "bindings.json"
-            compiler_result = witness.compile_bindings(application, declarations, frozen)
+            compiler_result = witness.compile_bindings(application, declarations, frozen, profile=profile)
             self.assertEqual(set(compiler_result["bindings"]), set(witness.ROLES))
+            route_words = (compiler_result["route"]["sha256"],) if profile == witness.HANDLE_PROFILE else ()
             policy = Policy.parse({"schema_version": 3, "languages": ["java"],
                 "sources": {"include": ["src/**"]}, "functions": {"include": ["Work.target(*)"]},
                 "metrics": {"collection": False, "emission": False},
@@ -277,7 +283,7 @@ final class Work {
             for plain in (True, False):
                 runtime = root / ("plain" if plain else "instrumented")
                 runtime.mkdir(mode=0o700)
-                options = {} if plain else {"witness_bindings": frozen}
+                options = {} if plain else {"witness_bindings": frozen, "witness_profile": profile}
                 launch = prepared_java.prepare(application, policy, runtime, plain=plain,
                                                diagnostic_profile=True, **options)
                 self.assertEqual(len(launch.identity), 16)
@@ -305,37 +311,51 @@ final class Work {
                             send(process, str(seed))
                             expected_thread = read_release(process)
                             if not plain:
-                                status = witness.request(socket, "status")
+                                status = exchange(socket, "status")
                                 self.assertEqual(status["pid"], process.pid)
                                 self.assertEqual(status["scope"]["thread_id"], expected_thread)
                                 self.assertIsNone(status["error"], (runtime / "agent.log").read_text())
                                 self.assertEqual(status["scope"]["phase"], "ready", status)
+                                if route_words:
+                                    self.assertEqual(status["route_binding_sha256"], route_words[0])
+                                    self.assertFalse(status["scope"]["route_verified"])
                                 for role in witness.ROLES:
                                     self.assertEqual(status[role + "_probe_id"], compiler_result["bindings"][role]["probe_id"])
-                                if index == 0:
-                                    wrong = witness.request(socket, "arm", status["runtime_id"],
+                                if index == 0 and route_words:
+                                    wrong_route = exchange(socket, "arm", status["runtime_id"],
                                         status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,
                                         f"{index + 1:064x}", status["build_sha256"], status["selection_sha256"],
                                         status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"],
-                                        str(int(expected_thread) + 1))
+                                        expected_thread, "0" * 64)
+                                    self.assertEqual(wrong_route["error"], "arm_identity_mismatch")
+                                    self.assertEqual(wrong_route["scope"]["phase"], "ready")
+                                    self.assertIsNone(wrong_route["scope"]["scope_id"])
+                                if index == 0:
+                                    wrong = exchange(socket, "arm", status["runtime_id"],
+                                        status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,
+                                        f"{index + 1:064x}", status["build_sha256"], status["selection_sha256"],
+                                        status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"],
+                                        str(int(expected_thread) + 1), *route_words)
                                     self.assertEqual(wrong["error"], "arm_identity_mismatch")
                                     self.assertEqual(wrong["scope"]["phase"], "ready")
                                     self.assertIsNone(wrong["scope"]["scope_id"])
                                 if index == 3:
-                                    stale = witness.request(socket, "arm", "0" * 32,
+                                    stale = exchange(socket, "arm", "0" * 32,
                                         status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,
                                         f"{index + 1:064x}", status["build_sha256"], status["selection_sha256"],
-                                        status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"], expected_thread)
+                                        status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"], expected_thread, *route_words)
                                     self.assertEqual(stale["error"], "arm_identity_mismatch")
                                     self.assertIsNone(stale["scope"]["scope_id"])
-                                arm = witness.request(socket, "arm", status["runtime_id"],
+                                arm = exchange(socket, "arm", status["runtime_id"],
                                     status["scope"]["cookie"], status["scope"]["sequence"], "a" * 64,
                                     f"{index + 1:064x}", status["build_sha256"], status["selection_sha256"],
-                                    status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"], expected_thread)
+                                    status["tooling_sha256"], status["wrapper_probe_id"], status["policy_sha256"], expected_thread, *route_words)
                                 self.assertIsNone(arm["error"], arm)
                                 self.assertEqual(arm["scope"]["phase"], "armed")
+                                if route_words:
+                                    self.assertFalse(arm["scope"]["route_verified"])
                                 if index == 2:
-                                    cancelled = witness.request(socket, "cancel", status["runtime_id"], arm["scope"]["scope_id"])
+                                    cancelled = exchange(socket, "cancel", status["runtime_id"], arm["scope"]["scope_id"])
                                     self.assertEqual(cancelled["scope"]["failure"], "cancelled")
                                 if index == 3:
                                     capture.trace_request_seen.clear()
@@ -345,10 +365,10 @@ final class Work {
                             send(process, "go")
                             observed.append(json.loads(read_line(process)))
                             if not plain:
-                                end = witness.request(socket, "end", status["runtime_id"], arm["scope"]["scope_id"])
+                                end = exchange(socket, "end", status["runtime_id"], arm["scope"]["scope_id"])
                                 if substituted:
                                     self.assertEqual(end["error"], "incomplete", end)
-                                    self.assertEqual(end["scope"]["failure"], "target_not_entered", end)
+                                    self.assertEqual(end["scope"]["failure"], expected_refusal, end)
                                     self.assertIsNone(end["scope"]["target_span_id"])
                                     self.assertEqual(end["scope"]["target_entries"], "0")
                                     self.assertFalse(end["scope"]["producer_complete"])
@@ -364,7 +384,7 @@ final class Work {
                                     self.assertFalse(end["scope"]["producer_complete"])
                                     self.assertGreater(int(end["scope"]["pending_exports"]), 0)
                                     capture.trace_response_gate.set()
-                                    end = witness.request(socket, "end", status["runtime_id"], arm["scope"]["scope_id"])
+                                    end = exchange(socket, "end", status["runtime_id"], arm["scope"]["scope_id"])
                                     self.assertEqual(end["scope"]["flush_failures"], "1")
                                     if live_metrics:
                                         control.request(runtime / "control.sock", "flush")
@@ -377,7 +397,10 @@ final class Work {
                                     continue
                                 self.assertIsNone(end["error"], end)
                                 self.assertTrue(end["scope"]["producer_complete"], end)
-                                self.assertEqual(len(end["scope"]["started_ids"]), 3, end)
+                                if route_words:
+                                    self.assertTrue(end["scope"]["route_verified"])
+                                self.assertEqual(len(end["scope"]["started_ids"]), 2 * (recursive_entries if index == 0 else 1) + 1, end)
+                                self.assertEqual(int(end["scope"]["target_entries"]), recursive_entries if index == 0 else 1)
                                 self.assertEqual(end["scope"]["started_ids"], end["scope"]["ended_ids"])
                                 self.assertEqual(end["scope"]["started_ids"], end["scope"]["exported_ids"])
                                 scopes.append(end["scope"])
@@ -387,7 +410,7 @@ final class Work {
                         outputs.append(observed)
                         launch.verify_inputs()
                         if not plain:
-                            final = witness.read_final(runtime / "witness-health.json")
+                            final = witness.read_final(runtime / "witness-health.json", profile=profile)
                             self.assertEqual(final["queue_evidence"], "derived_after_shutdown")
                             self.assertEqual(len(final["scopes"]), 1 if substituted else 5)
                             self.assertEqual(final["pid"], process.pid)
@@ -403,11 +426,13 @@ final class Work {
                             process.wait(timeout=5)
             self.assertEqual(outputs[0], outputs[1])
             if substituted:
-                self.assertEqual(outputs[1], [{"value": 9, "getters": 0}])
+                self.assertEqual(outputs[1], [{"value": substituted_value, "getters": 0}])
                 spans = [span for request in capture.traces for resource in request.resource_spans
                          for scope in resource.scope_spans for span in scope.spans]
-                self.assertEqual(len(spans), 1)
-                self.assertEqual(next(a.value.string_value for a in spans[0].attributes if a.key == "otelc.witness.role"), "wrapper")
+                self.assertEqual(len(spans), 1 + extra_unscoped)
+                scoped = [span for span in spans if any(a.key == "otelc.witness.scope_id" for a in span.attributes)]
+                self.assertEqual(len(scoped), 1)
+                self.assertEqual(next(a.value.string_value for a in scoped[0].attributes if a.key == "otelc.witness.role"), "wrapper")
                 return
             self.assertEqual(outputs[1], [{"value": 8, "getters": 0}, {"error": True, "same": True, "getters": 0},
                 {"value": 3, "getters": 0}, {"value": 4, "getters": 0}, {"value": 5, "getters": 0}])
@@ -416,7 +441,7 @@ final class Work {
             self.assertEqual([scope["sequence"] for scope in scopes], ["1", "2", "4"])
             spans = [span for request in capture.traces for resource in request.resource_spans
                      for scope in resource.scope_spans for span in scope.spans]
-            self.assertEqual(len(spans), 13 + extra_unscoped)  # Four scoped calls plus unrelated calls.
+            self.assertEqual(len(spans), 13 + extra_unscoped + 2 * (recursive_entries - 1))  # Four scoped calls plus unrelated calls.
             frozen_witness = json.loads((runtime / 'witness.json').read_text())
             for span in spans:
                 self.assertEqual(span.dropped_attributes_count, 0, span.name)
@@ -438,9 +463,16 @@ final class Work {
                         self.assertEqual(attributes.get('otelc.witness.' + key), ('string_value', value))
                 roles = {next((a.value.string_value for a in span.attributes if a.key == "otelc.witness.role"), "function"): span
                          for span in actual}
-                self.assertEqual(set(roles), {"wrapper", "target", "function"})
+                self.assertEqual(set(roles), {"wrapper", "target", "function"} | ({"recursive_target"} if int(scope["target_entries"]) > 1 else set()))
                 self.assertEqual(roles["target"].parent_span_id.hex(), scope["root_span_id"])
-                self.assertEqual(roles["function"].parent_span_id, roles["target"].span_id)
+                functions = [span for span in actual if not any(a.key == "otelc.witness.role" for a in span.attributes)]
+                targets = [span for span in actual if any(a.key == "otelc.witness.role" and a.value.string_value in ("target", "recursive_target") for a in span.attributes)]
+                self.assertEqual(len(functions), int(scope["target_entries"]))
+                self.assertEqual(len(targets), int(scope["target_entries"]))
+                self.assertTrue(all(span.parent_span_id in {target.span_id for target in targets} for span in functions))
+                for span in targets:
+                    if span != roles["target"]:
+                        self.assertIn(span.parent_span_id, {function.span_id for function in functions})
                 for role in ("wrapper", "target"):
                     probe = next(a.value.string_value for a in roles[role].attributes if a.key == "otelc.witness.probe_id")
                     self.assertEqual(probe, compiler_result["bindings"][role]["probe_id"])

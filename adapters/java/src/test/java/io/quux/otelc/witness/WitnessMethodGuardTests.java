@@ -22,6 +22,20 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.InsnNode;
 
 class WitnessMethodGuardTests {
+  public static class HandleFixture {
+    public static final RuntimeException FAILURE = new RuntimeException("original");
+    private static final java.lang.invoke.MethodHandle HANDLE = handle();
+    private static java.lang.invoke.MethodHandle handle() {
+      try { return java.lang.invoke.MethodHandles.lookup().findStatic(HandleFixture.class, "target",
+          java.lang.invoke.MethodType.methodType(int.class, int.class)); }
+      catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+    }
+    private static int target(int value) { if (value < 0) throw FAILURE; return value + 1; }
+    public static int wrapper(int value) throws Throwable { return (int) HANDLE.invokeExact(value); }
+    public static void rendezvous() {}
+    public static int envelope(int value) throws Throwable { rendezvous(); return wrapper(value); }
+  }
+
   public static class Fixture {
     public static int target(int value) { if (value < 0) throw new IllegalArgumentException(); return value + 1; }
     public static int wrapper(int value) { return target(value); }
@@ -52,6 +66,33 @@ class WitnessMethodGuardTests {
 
   static ClassVisitor visitor(WitnessMethodGuard guard, ClassWriter writer) {
     return guard.wrap(TypeDescription.ForLoadedType.of(Fixture.class), writer, null, null, null, null, 0, 0);
+  }
+
+  @Test void actualHandleOperandProbePreservesVerifierResultsAndThrowableIdentity() throws Exception {
+    String owner = Type.getInternalName(HandleFixture.class);
+    byte[] original;
+    try (var input = HandleFixture.class.getResourceAsStream("/" + owner + ".class")) { original = input.readAllBytes(); }
+    Map<String, WitnessBindings.Declaration> declarations = new java.util.HashMap<>();
+    for (String role : WitnessPlan.ROLES) declarations.put(role,
+        new WitnessBindings.Declaration(owner, role, role.equals("rendezvous") ? "()V" : "(I)I"));
+    var compiled = HandleBindings.compile(Map.of(owner, original), declarations);
+    List<WitnessBindings.Binding> matched = new ArrayList<>();
+    var guard = new WitnessMethodGuard(new ArrayList<>(compiled.bindings().values()), matched::add, compiled.route());
+    byte[] transformed = new ByteBuddy().redefine(HandleFixture.class).visit(guard).make().getBytes();
+    var loader = new ByteArrayClassLoader.ChildFirst(HandleFixture.class.getClassLoader(), Map.of(HandleFixture.class.getName(), transformed));
+    Class<?> actual = loader.loadClass(HandleFixture.class.getName());
+    var envelope = actual.getMethod("envelope", int.class);
+    assertEquals(8, envelope.invoke(null, 7));
+    var failed = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> envelope.invoke(null, -1));
+    assertTrue(failed.getCause() == actual.getField("FAILURE").get(null));
+    assertEquals(4, matched.size());
+    var wrong = new HandleBindings.Route(owner, "OTHER", "(I)I", 6, "a".repeat(64));
+    var invalid = new ByteBuddy().redefine(HandleFixture.class).visit(
+        new WitnessMethodGuard(new ArrayList<>(compiled.bindings().values()), ignored -> {}, wrong));
+    assertThrows(IllegalStateException.class, invalid::make);
+    var missing = new ByteBuddy().redefine(Fixture.class).visit(new WitnessMethodGuard(bindings(), ignored -> {},
+        new HandleBindings.Route(OWNER, "MISSING", "(I)I", 6, "a".repeat(64))));
+    assertThrows(IllegalStateException.class, missing::make);
   }
 
   @Test void validatesActualByteBuddyInputAndPreservesExecutableAdvice() throws ReflectiveOperationException, IOException {

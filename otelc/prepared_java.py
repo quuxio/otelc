@@ -188,14 +188,14 @@ class PreparedLaunch:
 
 def _configure_witness(application: PreparedApplication, policy: Policy, runtime: Path,
                        bindings_file: Path, application_identity: dict[str, Any],
-                       tooling: list[dict[str, Any]], argv: list[str]) -> None:
+                       tooling: list[dict[str, Any]], argv: list[str], profile: str) -> None:
     from otelc import java_helpers, witness
 
     compiler = java_helpers.tool(java.ROOT / "adapters/java/target/java-extension-0.2.0-SNAPSHOT.jar")
     if not any(item["path"] == str(compiler) for item in tooling):
         tooling.append(file_identity(compiler))
     identities = witness.configure(application, policy, runtime, bindings_file.resolve(strict=True),
-                                   application_identity, tooling)
+                                   application_identity, tooling, profile=profile)
     tooling.extend(identities)
     argv.insert(1, f"-Dotelc.witness.plan={runtime / 'witness.properties'}")
 
@@ -249,8 +249,14 @@ def launch_tooling(executable: Path, runtime: Path, archive_tools: list[dict[str
 def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
             plain: bool = False, arguments: tuple[str, ...] = (),
             diagnostic_profile: bool = False,
-            witness_bindings: Path | None = None) -> PreparedLaunch:
+            witness_bindings: Path | None = None,
+            witness_profile: str = "java-sync-action-v2") -> PreparedLaunch:
     """Create a launch plan in a fresh private directory, without compiling."""
+    from otelc import witness
+
+    witness.profile_version(witness_profile)
+    if witness_profile != witness.PROFILE and witness_bindings is None:
+        raise ValueError("the explicit handle witness profile requires frozen bindings")
     runtime = runtime.resolve(strict=True)
     validate_runtime(runtime, arguments)
     if plain and witness_bindings is not None:
@@ -279,7 +285,7 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
     tooling = launch_tooling(executable, runtime, archive_tools, plain)
     if witness_bindings is not None:
         _configure_witness(application, policy, runtime, witness_bindings,
-                           application_identity, tooling, argv)
+                           application_identity, tooling, argv, witness_profile)
     identity = {"schema_version": 2 if resolution is not None else 1, "language": "java", "plain": plain,
                 "jvm_profile": "diagnostic-no-cds" if diagnostic_profile else "default",
                 "agent_diagnostics": agent_log,
@@ -301,12 +307,13 @@ def prepare(application: PreparedApplication, policy: Policy, runtime: Path, *,
 
 def run(manifest: Path, policy: Policy, runtime: Path, *, plain: bool = False,
         prepare_only: bool = False, arguments: tuple[str, ...] = (),
-        diagnostic_profile: bool = False, witness_bindings: Path | None = None) -> int:
+        diagnostic_profile: bool = False, witness_bindings: Path | None = None,
+        witness_profile: str = "java-sync-action-v2") -> int:
     """Run the public CLI profile, retaining PID and post-run input verification."""
     application = PreparedApplication.load(manifest)
     runtime.mkdir(mode=0o700)
     launch = prepare(application, policy, runtime, plain=plain, arguments=arguments,
-                     diagnostic_profile=diagnostic_profile, witness_bindings=witness_bindings)
+                     diagnostic_profile=diagnostic_profile, witness_bindings=witness_bindings, witness_profile=witness_profile)
     if prepare_only:
         print(json.dumps(launch.identity))
         return 0

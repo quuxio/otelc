@@ -11,6 +11,7 @@ final class WitnessScope {
   final long threadId;
   final java.lang.ref.WeakReference<Thread> thread;
   final long expires;
+  final boolean requiresRoute;
   final Map<String, SpanState> spans = new LinkedHashMap<>();
   String id;
   String caseId;
@@ -28,13 +29,19 @@ final class WitnessScope {
   long flushFailures;
   boolean checkpoint;
   Long queueDropped;
+  boolean routeVerified;
 
   WitnessScope(String cookie, long sequence, Thread thread, long expires) {
+    this(cookie, sequence, thread, expires, false);
+  }
+
+  WitnessScope(String cookie, long sequence, Thread thread, long expires, boolean requiresRoute) {
     this.cookie = cookie;
     this.sequence = sequence;
     this.threadId = thread.threadId();
     this.thread = new java.lang.ref.WeakReference<>(thread);
     this.expires = expires;
+    this.requiresRoute = requiresRoute;
   }
 
   static final class SpanState {
@@ -53,7 +60,7 @@ final class WitnessScope {
   }
 
   boolean canComplete() {
-    return checkpoint && failure == null && (queueDropped == null || queueDropped == 0)
+    return checkpoint && failure == null && (!requiresRoute || routeVerified) && (queueDropped == null || queueDropped == 0)
         && rootExited && envelopeExited && targetExited && targetEntries >= 1
         && root != null && target != null && !spans.isEmpty()
         && spans.values().stream().allMatch(span -> span.ended && span.exported && span.inFlight == 0);
@@ -72,7 +79,8 @@ final class WitnessScope {
         + ",\"receiver_confirmation_required\":true,\"started_ids\":" + ids(0)
         + ",\"ended_ids\":" + ids(1) + ",\"exported_ids\":" + ids(2)
         + ",\"pending_exports\":\"" + spans.values().stream().mapToInt(span -> span.inFlight).sum()
-        + "\",\"queue_dropped\":" + (queueDropped == null ? "null" : "\"" + queueDropped + "\"") + "}";
+        + "\",\"queue_dropped\":" + (queueDropped == null ? "null" : "\"" + queueDropped + "\"")
+        + (requiresRoute ? ",\"route_verified\":" + routeVerified : "") + "}";
   }
 
   private String ids(int state) {
