@@ -3,12 +3,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -26,6 +28,13 @@ type request struct {
 	SchemaVersion int    `json:"schema_version"`
 	Root          string `json:"root"`
 	Target        string `json:"target"`
+}
+
+type taggedRequest struct {
+	SchemaVersion int      `json:"schema_version"`
+	Root          string   `json:"root"`
+	Target        string   `json:"target"`
+	BuildTags     []string `json:"build_tags"`
 }
 
 type location struct {
@@ -84,6 +93,7 @@ type inventory struct {
 	Files          map[string]string      `json:"files"`
 	Packages       map[string]packageFact `json:"packages"`
 	CompilerInputs map[string]string      `json:"compiler_inputs"`
+	BuildTags      []string               `json:"build_tags,omitempty"`
 }
 
 type packageFact struct {
@@ -102,6 +112,23 @@ func validate(r request) error {
 	resolved, err := filepath.EvalSymlinks(r.Root)
 	if err != nil || resolved != r.Root {
 		return errors.New("Go source root must exist without symlink aliases")
+	}
+	return nil
+}
+
+func validateTags(tags []string) error {
+	if len(tags) == 0 || len(tags) > 128 || !sort.StringsAreSorted(tags) {
+		return errors.New("tagged inspection requires a canonical nonempty tag set")
+	}
+	for index, tag := range tags {
+		if len(tag) > 256 || (index > 0 && tags[index-1] == tag) {
+			return errors.New("Go build tag is oversized or repeated")
+		}
+		expression, err := constraint.Parse("//go:build " + tag)
+		single, ok := expression.(*constraint.TagExpr)
+		if err != nil || !ok || single.Tag != tag {
+			return errors.New("Go build tag must be one exact compiler tag, not an expression")
+		}
 	}
 	return nil
 }
@@ -274,9 +301,29 @@ func scanFile(r request, p *packages.Package, file *ast.File, parsed map[string]
 }
 
 func inspect(r request) (inventory, error) {
+	return inspectWithTags(r, nil)
+}
+
+func inspectTagged(r taggedRequest) (inventory, error) {
+	if r.SchemaVersion != 2 {
+		return inventory{}, errors.New("tagged Go inspection requires schema2")
+	}
+	if err := validateTags(r.BuildTags); err != nil {
+		return inventory{}, err
+	}
+	return inspectWithTags(request{1, r.Root, r.Target}, r.BuildTags)
+}
+
+func inspectWithTags(r request, tags []string) (inventory, error) {
 	out := inventory{SchemaVersion: 1, Root: r.Root, Target: r.Target, Functions: []function{}, Types: []objectType{}, Allocations: []allocation{}, Files: map[string]string{}, Packages: map[string]packageFact{}, CompilerInputs: map[string]string{}}
 	if err := validate(r); err != nil {
 		return out, err
+	}
+	flags := []string{"-mod=readonly"}
+	if tags != nil {
+		out.SchemaVersion = 2
+		out.BuildTags = append([]string(nil), tags...)
+		flags = append(flags, "-tags="+strings.Join(tags, ","))
 	}
 	if driver := os.Getenv("GOPACKAGESDRIVER"); driver != "" && driver != "off" {
 		return out, errors.New("external Go package drivers are outside this source profile")
@@ -298,7 +345,7 @@ func inspect(r request) (inventory, error) {
 		mu.Unlock()
 		return parser.ParseFile(fset, filename, src, parser.ParseComments)
 	}
-	loaded, err := packages.Load(&packages.Config{Dir: r.Root, Mode: mode, BuildFlags: []string{"-mod=readonly"}, ParseFile: parse}, r.Target)
+	loaded, err := packages.Load(&packages.Config{Dir: r.Root, Mode: mode, BuildFlags: flags, ParseFile: parse}, r.Target)
 	if err != nil {
 		return out, err
 	}
@@ -373,15 +420,37 @@ func inspect(r request) (inventory, error) {
 
 func run(input io.Reader, output io.Writer) error {
 	decoder := json.NewDecoder(io.LimitReader(input, 65537))
-	decoder.DisallowUnknownFields()
-	var r request
-	if err := decoder.Decode(&r); err != nil {
+	var body json.RawMessage
+	if err := decoder.Decode(&body); err != nil {
 		return err
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return errors.New("Go source request has trailing input")
 	}
-	value, err := inspect(r)
+	var version struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(body, &version); err != nil {
+		return err
+	}
+	decode := json.NewDecoder(bytes.NewReader(body))
+	decode.DisallowUnknownFields()
+	var value inventory
+	var err error
+	switch version.SchemaVersion {
+	case 1:
+		var r request
+		if err = decode.Decode(&r); err == nil {
+			value, err = inspect(r)
+		}
+	case 2:
+		var r taggedRequest
+		if err = decode.Decode(&r); err == nil {
+			value, err = inspectTagged(r)
+		}
+	default:
+		return errors.New("unsupported Go inspection request version")
+	}
 	if err != nil {
 		return err
 	}
