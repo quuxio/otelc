@@ -1,4 +1,5 @@
 #include "otelc/metric_control.h"
+#include "otelc/deadline.h"
 
 #include <cassert>
 #include <condition_variable>
@@ -332,11 +333,62 @@ void InvalidConstructionRefuses() {
   Invalid([&] { control::GatedMetricExporter value(nullptr, state); });
   Invalid([&] { control::GatedMetricExporter value(std::make_unique<Sink>(), nullptr); });
   control::GatedMetricExporter exporter(std::make_unique<Sink>(), state);
-  assert(exporter.Shutdown(0us));
+  assert(exporter.Shutdown(1s));
   Invalid([&] { control::MetricController value(provider, state); });
 }
 
+void ExhaustedBudgetDoesNotReachTheDelegate() {
+  auto state = std::make_shared<control::MetricState>(true, true);
+  auto sink = std::make_unique<Sink>();
+  auto *raw = sink.get();
+  control::GatedMetricExporter exporter(std::move(sink), state);
+  bool flushed = exporter.ForceFlush(0us);
+  bool shutdown = exporter.Shutdown(0us);
+  std::fprintf(stderr, "zero budget: flush=%d shutdown=%d delegate_flushes=%u delegate_shutdowns=%u\n",
+               flushed, shutdown, raw->flushes.load(), raw->shutdowns.load());
+  assert(!flushed && !shutdown && raw->flushes == 0 && raw->shutdowns == 0);
+  assert(state->Status().closing && !state->Status().closed && state->Status().in_flight == 0);
+  assert(exporter.Shutdown(1s) && raw->shutdowns == 1);
+}
+
+struct AdvancingClock {
+  using duration = std::chrono::steady_clock::duration;
+  using time_point = std::chrono::time_point<AdvancingClock>;
+  static unsigned reads;
+  static time_point now() { return time_point(++reads == 1 ? 1us : 3us); }
+};
+unsigned AdvancingClock::reads = 0;
+
+void DeadlineSnapshotCannotTurnIntoUnlimitedSdkTimeout() {
+  using otelc::native::detail::BeforeDeadline;
+  AdvancingClock::reads = 0;
+  const auto deadline = AdvancingClock::time_point(2us);
+  bool called = false;
+  assert(BeforeDeadline<AdvancingClock>(deadline, [&](auto timeout) {
+    called = true;
+    // A second budget sample would now return zero. The forwarded snapshot
+    // remains finite even if the thread is delayed before the SDK call.
+    assert(AdvancingClock::now() > deadline);
+    assert(timeout == 1us);
+    return true;
+  }));
+  assert(called);
+  called = false;
+  assert(!BeforeDeadline<AdvancingClock>(deadline, [&](auto) { called = true; return true; }));
+  assert(!called);
+  AdvancingClock::reads = 0;
+  assert(!BeforeDeadline<AdvancingClock>(AdvancingClock::time_point(1us + 1ns),
+                                       [&](auto) { called = true; return true; }));
+  assert(!called);
+  assert(BeforeDeadline<AdvancingClock>(AdvancingClock::time_point::max(), [&](auto timeout) {
+    assert(timeout == std::chrono::microseconds::max());
+    return true;
+  }));
+}
+
 int main() {
+  ExhaustedBudgetDoesNotReachTheDelegate();
+  DeadlineSnapshotCannotTurnIntoUnlimitedSdkTimeout();
   FourStatesAndCachedInstruments();
   ExportFailureRetainsCumulativeValues();
   InFlightAndQueuedCallsCannotBypassDisableOrShutdown();
@@ -345,5 +397,5 @@ int main() {
   ShutdownBudgetIncludesPendingCollectionUpdates();
   TracingIsIndependent();
   InvalidConstructionRefuses();
-  std::puts("native metric controls: eight contract groups passed");
+  std::puts("native metric controls: ten contract groups passed");
 }

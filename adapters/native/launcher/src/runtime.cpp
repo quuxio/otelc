@@ -1,5 +1,6 @@
 #include "otelc/native_runtime.h"
 #include "otelc/function_runtime.h"
+#include "otelc/deadline.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -82,9 +83,6 @@ class DiagnosticLog final : public opentelemetry::sdk::common::internal_log::Log
 
 std::string Decimal(std::uint64_t value) { return std::to_string(value); }
 void Require(bool condition, const char *message) { if (!condition) throw std::runtime_error(message); }
-Micros Remaining(Clock::time_point deadline) {
-  return std::max(std::chrono::duration_cast<Micros>(deadline - Clock::now()), Micros::zero());
-}
 bool WriteAll(int fd, const std::string &value, bool socket = false) {
   std::size_t offset = 0;
   while (offset < value.size()) {
@@ -247,8 +245,12 @@ class Runtime {
   bool Flush(Clock::time_point deadline) {
     ++flush_attempts_;
     flush_.store("pending");
-    bool metric_ok = Remaining(deadline) > Micros::zero() && meters->ForceFlush(Remaining(deadline));
-    bool trace_ok = !tracer || (Remaining(deadline) > Micros::zero() && tracer->ForceFlush(Remaining(deadline)));
+    bool metric_ok = native::detail::BeforeDeadline(deadline, [&](Micros remaining) {
+      return meters->ForceFlush(remaining);
+    });
+    bool trace_ok = !tracer || native::detail::BeforeDeadline(deadline, [&](Micros remaining) {
+      return tracer->ForceFlush(remaining);
+    });
     bool result = metric_ok && trace_ok;
     if (!result) ++flush_failed_;
     flush_.store(result ? "succeeded" : "failed");
@@ -336,8 +338,12 @@ class Runtime {
     while (!quiescent && Clock::now() < deadline) { std::this_thread::sleep_for(1ms); quiescent = functions->Close(); }
     if (quiescent) {
       bool flushed = Flush(deadline);
-      bool trace_ok = !tracer || (Remaining(deadline) > Micros::zero() && tracer->Shutdown(Remaining(deadline)));
-      bool metric_ok = Remaining(deadline) > Micros::zero() && meters->Shutdown(Remaining(deadline));
+      bool trace_ok = !tracer || native::detail::BeforeDeadline(deadline, [&](Micros remaining) {
+        return tracer->Shutdown(remaining);
+      });
+      bool metric_ok = native::detail::BeforeDeadline(deadline, [&](Micros remaining) {
+        return meters->Shutdown(remaining);
+      });
       shutdown_.store(flushed && trace_ok && metric_ok ? "succeeded" : "failed");
     } else { shutdown_.store("timed_out"); }
   }

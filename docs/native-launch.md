@@ -89,6 +89,8 @@ bin/quux-otelc health --report /tmp/native-demo-runtime/health.json
 
 The fixed private `agent.log` retains SDK diagnostics separately from application output, capped at 1 MiB. Health reports dropped diagnostic messages. A final `timed_out` checkpoint means the shutdown budget expired; pending exports and queue-loss uncertainty remain visible. The process-owned runtime is retained while any native frame or SDK drain still uses it. A successful SDK exporter call alone does not establish Collector/Prometheus/Tempo receipt.
 
+Each flush or shutdown operation forwards one positive remaining-budget sample to the SDK. An exhausted budget skips that call instead of passing zero, which parts of the SDK interpret as an unlimited wait. This prevents a deadline crossing between separate checks from turning a finite request into an unlimited one. Some SDK shutdown paths can still exceed a positive timeout; the process-owned drain and retained timeout checkpoint remain necessary.
+
 ## Selection and boundaries
 
 The explicit `llvm22-itanium-source-v1` compiler profile requires debug metadata and applies the common slash-aware source globs before function globs. Exported function identities include the project-relative file, for example `main.cpp::workload(int)`. This keeps same-named file-local functions in different translation units distinct. Functions whose source is outside the application root, excluded sources and compiler-generated functions without a supported source identity are omitted. Original source and non-system header identities must match between plain and instrumented compilation and again before launch. This is not a claim of whole-source or native-library closure; `source_complete=false` remains explicit.
