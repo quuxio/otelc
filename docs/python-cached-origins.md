@@ -2,7 +2,41 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This experimental contributor component adds a distinct deserialisation route for an existing ordinary source loader's `.pyc` input. It does not change the public `python-native-origins-v2` profile, enable cached origins in that profile, or establish Python language admission. Developers do not edit the target source, delete caches, force recompilation or add telemetry imports. Public prepared execution, live-control integration and independent provider qualification for this component remain work.
+The explicit `python-native-cache-origins-v3` candidate captures ordinary source-loader reads from source or an existing `.pyc` cache. It connects native deserialisation evidence to public prepared execution, selected function metrics/spans and live controls. Developers do not edit target source, delete caches, force recompilation or add telemetry imports. The default input profile and explicit source-only `python-native-origins-v2` profile keep their existing contracts. Independent provider qualification and protected delivery remain required; this is not whole-language admission.
+
+## Run the shared example with an existing cache
+
+Use shared/framework GIL CPython 3.12 or 3.14 on macOS ARM64 with the locked SDK environment and a supported native image. Start the [local collector and Grafana](benchmarks.md), then run from the checkout:
+
+```sh
+# Create an ordinary cache to demonstrate that it can remain in place.
+.venv/bin/python -m py_compile examples/python/BenchmarkApp.py
+runtime_parent=$(mktemp -d)
+printf '3\nthrow\nquit\n' | bin/quux-otelc --config examples/otelc.toml python \
+  --root "$PWD" --entry examples/python/CachedBenchmarkApp.py \
+  --runtime "$runtime_parent/runtime" --profile python-native-cache-origins-v3
+```
+
+`CachedBenchmarkApp.py` contains an ordinary `import BenchmarkApp`. It runs the existing application, which makes three workload calls and reports checksum `12598976`. The `throw` input reports the original negative-seed `ValueError`. The wrapper adds no instrumentation; an existing application can keep its own entry and imports. Precompilation above is only to demonstrate cache reuse, not a launch requirement. Existing source and cache bytes stay unchanged.
+
+For interactive controls, omit the `printf` pipe and use another terminal while the application waits for input:
+
+```sh
+bin/quux-otelc metrics --socket "$runtime_parent/runtime/control.json" collection off
+bin/quux-otelc metrics --socket "$runtime_parent/runtime/control.json" emission off
+bin/quux-otelc metrics --socket "$runtime_parent/runtime/control.json" collection on
+bin/quux-otelc metrics --socket "$runtime_parent/runtime/control.json" emission on
+```
+
+Each switch changes the running application and can be used independently. Tracing remains enabled when metric collection or emission is off. Enabling from an initially disabled policy also works without restarting. Enter `quit` to drain the SDK and retain the final reports. These lifetime observations preserve the existing distinction between resource release and observed GC; cached code does not change those semantics.
+
+## Prepare through the public API
+
+Tooling can use `otelc.prepared_python.prepare(..., profile='python-native-cache-origins-v3')`, `command` and `run`. `--prepare-only` exposes the same fixed supervisor recipe through the CLI without starting an application or SDK. `plain=True`/`--plain` uses the same native observer without an SDK or telemetry. That diagnostic lane still has observer overhead; use the benchmark driver's direct stock lane for a performance baseline.
+
+Explicit `protocols(profile='python-native-cache-origins-v3')` returns request, plan, prepared, command and execution formats 3, journal 3 with kinds 1-7, code descriptor 2, health 2 and SDK 1. Its `origin_scope` is `native-entry-and-application-root-source-and-cache-loaders`. `code_comparisons` is null because the separate post-run comparison API accepts journal 1. `source_complete` remains false.
+
+The resolved application root selects `--origin-loader-caches-root`. The prepared manifest binds the maintained producer and its actual native products. After owned shutdown and SDK drain, `python-execution.json` retains independently checked entry identity, root scope, raw capture health and SDK code joins. The plain lane must contain no SDK codes or joins. A substituted loader can leave the application's original output/exit unchanged while causing the tooling result and entry-evidence phase to fail. A complete summary describes this bounded capture, not complete dependency closure or downstream receipt.
 
 ## Explicit component capture
 
@@ -32,4 +66,11 @@ The reader validates framing, reference roles, code graphs and format identity a
 
 ## Acceptance
 
-Maintained cases cover timestamp, checked-hash and unchecked-hash caches, optimisation levels 0/1/2, invalid/stale headers, original marshal errors, repeated warm calls, worker imports, weak cleanup, existing builtin dictionary keys, substituted helpers/marshal calls, unrelated equal cache loads and explicit wire-version refusals. Internal SDK fixtures check actual cached function code IDs on main and worker spans and metric points; their external bootstrap is test scaffolding, not required target application code. Final native 80% component floors, full repository validation, independent review, public integration and protected hosted checks remain required before this component can be delivered.
+Maintained native cases cover timestamp, checked-hash and unchecked-hash caches, optimisation levels 0/1/2, invalid/stale headers, original marshal errors, repeated warm calls, worker imports, weak cleanup, existing builtin dictionary keys, substituted helpers/marshal calls, unrelated equal cache loads and explicit wire-version refusals. Public prepared cases cover unchanged source/cache bytes in both lanes, actual decoded code IDs, all four live metric states in one PID, startup-off enable, literal CLI application arguments, refused profile downgrades and the shared example's checksum/errors/lifetimes. Native SDK fixtures additionally check worker spans and metric points. Independent provider qualification, final full validation and protected hosted checks remain required before delivery.
+
+```sh
+PYTHONPATH=tests .venv/bin/python -m unittest -v \
+  test_python_cached_origins test_python_prepared_cached_origins \
+  test_python_prepared_origins test_python_recipe test_python_provider_protocol
+make check
+```

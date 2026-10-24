@@ -19,7 +19,7 @@ from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java, witness
 from otelc import prepared_python as python_adapter
-from otelc import python_benchmark
+from otelc import python_benchmark, python_recipe
 from otelc.config import LANGUAGES, Policy
 
 
@@ -82,6 +82,8 @@ def main() -> int:
     python_entry.add_argument("--module")
     python.add_argument("--runtime", type=Path, required=True, help="new private directory retained for reports")
     python.add_argument("--plain", action="store_true")
+    python.add_argument("--profile", choices=(python_recipe.INPUT_PROFILE, python_recipe.ORIGIN_PROFILE, python_recipe.CACHE_PROFILE),
+                        default=python_recipe.INPUT_PROFILE, help="select the declared launch evidence profile")
     python.add_argument("--prepare-only", action="store_true", help="emit fixed JSON launch recipe without starting app or SDK")
     python.add_argument("arguments", nargs=argparse.REMAINDER)
     metrics = commands.add_parser("metrics")
@@ -105,7 +107,7 @@ def main() -> int:
             arguments = application_arguments(args.arguments)
             return python_adapter.run(policy, args.runtime, root=args.root, entry=args.entry,
                                       module=args.module, plain=args.plain, arguments=tuple(arguments),
-                                      prepare_only=args.prepare_only)
+                                      prepare_only=args.prepare_only, profile=args.profile)
         if args.command == "node":
             arguments = application_arguments(args.arguments)
             return node.run(policy, args.runtime, args.language, root=args.root, entry=args.entry,

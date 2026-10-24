@@ -23,7 +23,9 @@ from test_java_integration import Capture
 PROFILE = 'python-native-origins-v2'
 
 
-class PreparedPythonOriginTests(unittest.TestCase):
+class PreparedOriginCase(unittest.TestCase):
+    profile = PROFILE
+
     def setUp(self) -> None:
         environment = mock.patch.dict(os.environ, {'PYTHONDONTWRITEBYTECODE': '1'})
         environment.start()
@@ -52,9 +54,11 @@ class PreparedPythonOriginTests(unittest.TestCase):
         self.counter += 1
         runtime = self.root / f'runtime-{self.counter}'
         result = prepared.prepare(self.policy, runtime, root=self.app,
-                                  entry='entry.py', plain=plain, profile=PROFILE)
+                                  entry='entry.py', plain=plain, profile=self.profile)
         return runtime, result
 
+
+class PreparedPythonOriginTests(PreparedOriginCase):
     def test_explicit_formats_and_prepare_bind_root_without_starting_application(self) -> None:
         legacy = prepared.protocols()
         origin = prepared.protocols(profile=PROFILE)
