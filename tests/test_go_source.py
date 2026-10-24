@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class GoSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        (ROOT / 'build').mkdir(exist_ok=True)
         cls.temporary = tempfile.TemporaryDirectory(prefix='go-source-', dir=ROOT / 'build')
         cls.directory = Path(cls.temporary.name).resolve()
         cls.root = cls.directory / 'original'
