@@ -104,9 +104,11 @@ def checked_artifact(row: dict[str, Any], path: Path) -> None:
 def generate(root: Path = ROOT) -> None:
     """Convert current checked component reports and optionally keep scan context."""
     output = root / 'build'
-    llvm = json.loads((output / 'llvm-pass-coverage-identity.json').read_bytes())
+    llvm = json.loads((output / 'llvm-pass-registry-coverage-identity.json').read_bytes())
     native = json.loads((output / 'native-control-coverage.json').read_bytes())
     checked_artifact(llvm['source'], root / PRODUCTION[0])
+    for header in llvm['headers']:
+        checked_artifact(header, Path(header['path']))
     for row in native['source_inputs']:
         checked_artifact(row, Path(row['path']))
     native_source = llvm_backend.identity(root / PRODUCTION[1])

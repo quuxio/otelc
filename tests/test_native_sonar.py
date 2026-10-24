@@ -26,6 +26,8 @@ class NativeSonarTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('ordinary source\n' * 6)
         self.sources = {self.root / relative for relative in (*sonar.PRODUCTION, sonar.TEST)}
+        header = self.root / 'native/llvm/function_abi.h'
+        header.write_text('fixed ABI header\n')
         self.records = []
         for name, relative in zip(('llvm-pass', 'native-control'), sonar.PRODUCTION, strict=True):
             source = self.root / relative
@@ -36,6 +38,7 @@ class NativeSonarTests(unittest.TestCase):
             self.records.append({'lcov': llvm_backend.identity(lcov),
                                  'compilation_database': llvm_backend.identity(database)})
         self.llvm = self.records[0] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[0]),
+                                     'headers': [llvm_backend.identity(header)],
                                      'line_coverage': {'count': 5, 'covered': 4}}
         self.native = self.records[1] | {'source_inputs': [llvm_backend.identity(self.root / sonar.PRODUCTION[1])],
             'line_coverage': {str(self.root / sonar.PRODUCTION[1]): {'count': 5, 'covered': 4}}}
@@ -53,7 +56,7 @@ class NativeSonarTests(unittest.TestCase):
                 'arguments': ['/compiler with spaces/clang++', '-c', str(source)]}
 
     def write_records(self) -> None:
-        for name, value in (('llvm-pass-coverage-identity.json', self.llvm),
+        for name, value in (('llvm-pass-registry-coverage-identity.json', self.llvm),
                             ('native-control-coverage.json', self.native)):
             (self.output / name).write_text(json.dumps(value))
 

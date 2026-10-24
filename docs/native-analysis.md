@@ -6,7 +6,7 @@ The native pipeline covers `native/llvm/OtelcPass.cpp` and `adapters/native/src/
 
 ## Actual build context
 
-The LLVM builder retains `compile_commands.json` with the actual compiler argv, source and fixed working directory, bound into its existing plugin evidence. The SDK check asks CMake for its actual compilation database. The analysis collector preserves exactly three compiled translation units: the pass, controls and control tests. It refuses missing or duplicate units and missing compilation directories. It does not execute recorded commands or invent include paths and definitions.
+The LLVM builder retains `compile_commands.json` with the actual compiler argv, source and fixed working directory, bound into its existing plugin evidence. The SDK check asks CMake for its actual compilation database. The analysis collector preserves exactly three compiled translation units: the pass, controls and control tests. Its pass context comes from the explicit registered variant, so both the base implementation and registration code are analysed; default and registered variants retain separate coverage floors and artifacts. It refuses missing or duplicate units and missing compilation directories. It does not execute recorded commands or invent include paths and definitions.
 
 The Sonar CI job sets `OTELC_CPP_ANALYSIS=1` through both compilation and scanning. This keeps the fresh SDK dependency headers and build directories present at the paths used by the compiler. Other check jobs use normal temporary-directory cleanup. An analysis run retains this additional scratch only for that runner's lifetime; a manually selected local analysis run needs the same context until its scan finishes.
 

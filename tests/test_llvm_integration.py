@@ -24,6 +24,8 @@ def no_core() -> None:
 
 
 class LLVMIntegrationTests(unittest.TestCase):
+    function_registry = False
+
     @classmethod
     def setUpClass(cls) -> None:
         (ROOT / 'build').mkdir(exist_ok=True)
@@ -31,14 +33,17 @@ class LLVMIntegrationTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory(prefix='llvm-hooks-', dir=ROOT / 'build',
                                                      delete=not cls.keep_analysis)
         cls.base = Path(cls.temporary.name).resolve()
-        cls.plugin = backend.build(cls.base / 'plugin', coverage=True)
+        cls.prefix = 'llvm-pass-registry' if cls.function_registry else 'llvm-pass'
+        cls.plugin = backend.build(cls.base / 'plugin', coverage=True, function_registry=cls.function_registry)
         cls.manifest = backend.verify(cls.plugin)
         cls.bin = Path(cls.manifest['toolchain']['directory'])
         cls.library = Path(cls.manifest['plugin']['path'])
         cls.original = {name.name: hashlib.sha256(name.read_bytes()).hexdigest() for name in FIXTURES.glob('*')}
         cls.policy = Policy.parse({'schema_version': 3, 'languages': ['c', 'cpp'],
                                   'functions': {'include': ['selected*', 'workload*']}})
-        subprocess.run([str(cls.bin / 'clang++'), '-std=c++17', '-c', str(FIXTURES / 'hooks.cpp'),
+        defines = ['-DOTELC_FUNCTION_REGISTRY_V1=1'] if cls.function_registry else []
+        subprocess.run([str(cls.bin / 'clang++'), '-std=c++17', '-I', str(backend.HEADER.parent), *defines,
+                        '-c', str(FIXTURES / 'hooks.cpp'),
                         '-o', str(cls.base / 'hooks.o')], check=True, capture_output=True, timeout=60)
 
     @classmethod
@@ -47,7 +52,7 @@ class LLVMIntegrationTests(unittest.TestCase):
         assert cls.original == {name.name: hashlib.sha256(name.read_bytes()).hexdigest() for name in FIXTURES.glob('*')}
         profiles = sorted(cls.base.glob('*.profraw'))
         assert profiles, 'native pass produced no coverage profiles'
-        merged = ROOT / 'build/llvm-pass.profdata'
+        merged = ROOT / 'build' / (cls.prefix + '.profdata')
         subprocess.run([str(cls.bin / 'llvm-profdata'), 'merge', '-sparse', *map(str, profiles),
                         '-o', str(merged)], check=True, capture_output=True, timeout=60)
         exported = subprocess.check_output([str(cls.bin / 'llvm-cov'), 'export', str(cls.library),
@@ -56,16 +61,17 @@ class LLVMIntegrationTests(unittest.TestCase):
         files = [file for block in data['data'] for file in block['files']
                  if Path(file['filename']).resolve() == backend.SOURCE.resolve()]
         assert len(files) == 1, 'native pass coverage is missing its exact source file'
-        (ROOT / 'build/llvm-pass-coverage.json').write_bytes(exported)
-        lcov = ROOT / 'build/llvm-pass.lcov'
+        (ROOT / 'build' / (cls.prefix + '-coverage.json')).write_bytes(exported)
+        lcov = ROOT / 'build' / (cls.prefix + '.lcov')
         lcov.write_bytes(subprocess.check_output([str(cls.bin / 'llvm-cov'), 'export', str(cls.library),
             '-format=lcov', '-instr-profile=' + str(merged), str(backend.SOURCE)], timeout=60))
-        database = ROOT / 'build/llvm-pass-compile-commands.json'
+        database = ROOT / 'build' / (cls.prefix + '-compile-commands.json')
         shutil.copyfile(cls.base / 'plugin/compile_commands.json', database)
-        retained = ROOT / 'build' / cls.library.name
+        retained = ROOT / 'build' / (('registry-' if cls.function_registry else '') + cls.library.name)
         shutil.copyfile(cls.library, retained)
-        (ROOT / 'build/llvm-pass-coverage-identity.json').write_text(json.dumps({
+        (ROOT / 'build' / (cls.prefix + '-coverage-identity.json')).write_text(json.dumps({
             'plugin_sha256': cls.manifest['plugin']['sha256'], 'source': cls.manifest['source'],
+            'headers': cls.manifest['headers'],
             'lcov': backend.identity(lcov), 'compilation_database': backend.identity(database),
             'line_coverage': files[0]['summary']['lines'], 'llvm_version': cls.manifest['toolchain']['version'],
             'scope': 'Exact compiler plugin executed inside Clang; fixture ABI counters are not a native SDK.'}, indent=2) + '\n')
@@ -245,6 +251,83 @@ class LLVMIntegrationTests(unittest.TestCase):
             output = self.base / ('invalid-' + str(value) + '.o')
             result = self.run_command([self.bin / 'clang', '-fpass-plugin=' + str(self.library),
                                        '-c', source, '-o', output], environment=env, success=False)
+            self.assertIn(b'otelc:', result.stderr)
+            self.assertFalse(output.exists())
+
+
+class LLVMRegistryIntegrationTests(LLVMIntegrationTests):
+    """The explicit registry variant must preserve every base compiler contract."""
+
+    function_registry = True
+
+    def test_empty_selection_adds_no_runtime_registration_or_link_dependency(self) -> None:
+        source = self.base / 'unselected.c'
+        source.write_text('#include <stdio.h>\nint main(void){printf("42\\n");return 0;}\n')
+        policy = Policy.parse({'schema_version': 3, 'languages': ['c']})
+        output, executable = self.base / 'unselected.ll', self.base / 'unselected'
+        self.run_command([self.bin / 'clang', '-fpass-plugin=' + str(self.library),
+            '-S', '-emit-llvm', source, '-o', output], environment=self.compiler_environment('c', policy))
+        self.assertNotIn('otelc.function.descriptors', output.read_text())
+        self.assertNotIn('@llvm.global_ctors', output.read_text())
+        self.run_command([self.bin / 'clang', output, '-o', executable])
+        self.assertEqual(self.run_command([executable]).stdout, b'42\n')
+
+    def test_generated_registry_binds_selected_addresses_utf8_names_and_early_initialisers(self) -> None:
+        source = self.base / 'registry.c'
+        source.write_text('#include <stdio.h>\n'
+            '__attribute__((noinline)) int selectedπ(void){return 40;}\n'
+            '__attribute__((noinline)) int excluded(void){return 2;}\n'
+            'static int value;\n__attribute__((constructor)) static void initialise(void){value=selectedπ();}\n'
+            'int main(void){printf("%d\\n",value+excluded());return 0;}\n')
+        original = source.read_bytes()
+        policy = Policy.parse({'schema_version': 3, 'languages': ['c'],
+                              'functions': {'include': ['selected*', 'excluded'], 'exclude': ['excluded']}})
+        for optimisation in ('0', '2'):
+            plain, woven = self.compile(source, 'registry-c-' + optimisation, 'c',
+                                        policy=policy, optimisation=optimisation)
+            report = self.base / ('registry-c-' + optimisation + '.json')
+            names = self.base / ('registry-c-' + optimisation + '.names')
+            baseline = self.run_command([plain])
+            result = self.run_command([woven], environment=dict(os.environ,
+                PROBE_REPORT=str(report), REGISTRY_REPORT=str(names)))
+            self.assertEqual((result.stdout, result.stderr), (baseline.stdout, baseline.stderr))
+            self.assertEqual(result.stdout, b'42\n')
+            self.assertEqual(names.read_text().splitlines(), ['selectedπ'])
+            self.assertEqual(json.loads(report.read_text()), {'entries': 1, 'normal': 1, 'unwind': 0, 'invalid': 0})
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_registry_names_remain_demangled_cpp_declarations(self) -> None:
+        source = self.base / 'registry.cpp'
+        source.write_text('#include <cstdio>\nnamespace ordinary {struct Box{'
+            '__attribute__((noinline)) int operator[](int value){return value+1;}};'
+            '__attribute__((noinline)) int selected(){Box value;return value[41];}}\n'
+            'int main(){std::printf("%d\\n",ordinary::selected());}\n')
+        policy = Policy.parse({'schema_version': 3, 'languages': ['cpp'], 'functions': {
+            'include': ['ordinary::selected()', 'ordinary::Box::operator[](int)']}})
+        plain, woven = self.compile(source, 'registry-cpp', 'cpp', policy=policy)
+        names, report = self.base / 'cpp.names', self.base / 'cpp.json'
+        baseline = self.run_command([plain])
+        actual = self.run_command([woven], environment=dict(os.environ,
+            PROBE_REPORT=str(report), REGISTRY_REPORT=str(names)))
+        self.assertEqual((actual.stdout, actual.stderr), (baseline.stdout, baseline.stderr))
+        self.assertEqual(set(names.read_text().splitlines()),
+                         {'ordinary::selected()', 'ordinary::Box::operator[](int)'})
+        self.assertEqual(json.loads(report.read_text()), {'entries': 2, 'normal': 2, 'unwind': 0, 'invalid': 0})
+
+    def test_registration_abi_and_reserved_initialiser_priority_refuse_before_output(self) -> None:
+        source, output = self.base / 'registry-abi.ll', self.base / 'registry-abi.o'
+        declarations = ('define void @otelc_function_register_v1(ptr %p,i64 %n){ret void}',
+                        'declare void @otelc_function_register_v1(ptr,i32)',
+                        'declare fastcc void @otelc_function_register_v1(ptr,i64)',
+                        'declare void @otelc_function_register_v1(ptr,i64) memory(none)',
+                        'declare void @otelc_function_register_v1(ptr byval(i8),i64)')
+        initialiser = ('@llvm.global_ctors = appending global [1 x {i32,ptr,ptr}] '
+                       '[{i32,ptr,ptr}{i32 0,ptr @initialise,ptr null}]\n'
+                       'define void @initialise(){ret void}\n')
+        for prefix in (*declarations, initialiser):
+            source.write_text(prefix + '\ndefine i32 @selected(){ret i32 42}\n')
+            result = self.run_command([self.bin / 'clang', '-fpass-plugin=' + str(self.library),
+                '-c', source, '-o', output], environment=self.compiler_environment('c'), success=False)
             self.assertIn(b'otelc:', result.stderr)
             self.assertFalse(output.exists())
 
