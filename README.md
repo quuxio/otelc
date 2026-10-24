@@ -32,7 +32,7 @@ The [native SDK control component](docs/native-sdk-controls.md) reuses official 
 
 The explicit [native launch candidate](docs/native-launch.md) connects original C/C++ compilation to official SDK OTLP/HTTP export, live metric controls and retained health. It uses source-qualified function identities and a generated startup object, preserving developer source. Native task/service propagation, automatic lifetimes, general build recipes and final independent language qualification remain work.
 
-The [native pre-exec gate component](docs/native-exec-gate.md) holds an owned child before application or loader-library constructors run and preserves its identity and streams across release. The versioned public native preparation/execution protocol and oteleq connection remain work.
+The [native prepared-launch candidate](docs/native-prepared.md) exposes versioned build, prepare, command, release and execution records. Its pre-exec gate holds an owned child before application or loader-library constructors run in both lanes, preserving its identity, literal arguments and streams across release. Independent oteleq integration and final language qualification remain work.
 
 ## Java example and Grafana
 
