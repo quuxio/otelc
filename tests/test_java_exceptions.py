@@ -75,6 +75,8 @@ public final class FailureApp {
 
 
 class ExceptionIntegrationTests(unittest.TestCase):
+    source = SOURCE
+
     def test_throwable_callbacks_identity_async_completion_and_live_states(self) -> None:
         capture = Capture()
         self.addCleanup(capture.close)
@@ -83,7 +85,7 @@ class ExceptionIntegrationTests(unittest.TestCase):
             classes = root / "classes"
             classes.mkdir()
             source = root / "FailureApp.java"
-            source.write_text(SOURCE)
+            source.write_text(self.source)
             subprocess.run([java.executable("javac"), "-d", str(classes), str(source)], check=True)
             manifest = root / "application.json"
             manifest.write_text(json.dumps({"schema_version": 1, "main_class": "FailureApp", "classpath": ["classes"],
@@ -149,3 +151,11 @@ class ExceptionIntegrationTests(unittest.TestCase):
                 self.assertEqual(set(attributes), {"exception.type"})
                 self.assertIn(attributes["exception.type"], {"FailureApp$Problem", "FailureApp$WrappedProblem",
                     "java.lang.RuntimeException", "java.util.concurrent.CompletionException"})
+
+
+class DirectCompletionIntegrationTests(ExceptionIntegrationTests):
+    """A top-level custom throwable must stay untouched in every live metric state."""
+
+    source = SOURCE.replace('RuntimeException error = failure(3);', 'RuntimeException error = failure(1);').replace(
+        'returned.whenComplete((value, caught) -> { caughtSame = caught == error; });',
+        'returned.handle((value, caught) -> { caughtSame = caught == error; return null; });')

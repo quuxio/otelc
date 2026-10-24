@@ -196,6 +196,93 @@ class ExtensionTests {
     clockIntervals(1_000_000, true);
   }
 
+  @Test void asynchronousCompletionErrorBeforeReturnDoesNotFormat() {
+    completionError(true);
+  }
+
+  @Test void asynchronousCompletionErrorAfterReturnDoesNotFormat() {
+    completionError(false);
+  }
+
+  @Test void completionOnAWorkerRestoresBothThreadContexts() throws Exception {
+    Context caller = Context.current();
+    int first = TRACES.getFinishedSpanItems().size();
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "workerCompletion");
+    assertSame(future, io.quux.otelc.methods.Observer.exit(call,
+        "()Ljava/util/concurrent/CompletionStage;", future, null));
+    assertSame(caller, Context.current());
+    assertEquals(first, TRACES.getFinishedSpanItems().size());
+    try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      assertTrue(executor.submit(() -> {
+        Context worker = Context.current();
+        assertTrue(future.complete(7));
+        assertSame(worker, Context.current());
+        return true;
+      }).get(5, java.util.concurrent.TimeUnit.SECONDS));
+    }
+    assertEquals(7, future.join());
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+    assertTrue(TRACES.getFinishedSpanItems().getLast().getEvents().isEmpty());
+    assertSame(caller, Context.current());
+  }
+
+  @Test void cancellationFinishesTheOriginalStageExactlyOnce() {
+    int first = TRACES.getFinishedSpanItems().size();
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "cancelledCompletion");
+    assertSame(future, io.quux.otelc.methods.Observer.exit(call,
+        "()Ljava/util/concurrent/CompletableFuture;", future, null));
+    assertTrue(future.cancel(false));
+    assertTrue(future.isCancelled());
+    assertFalse(future.complete(7));
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+    var span = TRACES.getFinishedSpanItems().getLast();
+    assertEquals(io.opentelemetry.api.trace.StatusCode.ERROR, span.getStatus().getStatusCode());
+    assertEquals(1, span.getEvents().size());
+    assertEquals("java.util.concurrent.CancellationException", span.getEvents().getFirst().getAttributes().get(
+        AttributeKey.stringKey("exception.type")));
+  }
+
+  @Test void stagesDeclaredAsObjectRetainSynchronousClassification() {
+    int first = TRACES.getFinishedSpanItems().size();
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "objectReturn");
+    assertSame(future, io.quux.otelc.methods.Observer.exit(call, "()Ljava/lang/Object;", future, null));
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+    assertTrue(future.complete(7));
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+  }
+
+  private void completionError(boolean alreadyFailed) {
+    int[] callbacks = {0};
+    RuntimeException error = new RuntimeException() {
+      private String formatted() { callbacks[0]++; throw new AssertionError("application formatter called"); }
+      @Override public String getMessage() { return formatted(); }
+      @Override public String getLocalizedMessage() { return formatted(); }
+      @Override public String toString() { return formatted(); }
+      @Override public synchronized Throwable getCause() { formatted(); return null; }
+      @Override public StackTraceElement[] getStackTrace() { formatted(); return new StackTraceElement[0]; }
+    };
+    int first = TRACES.getFinishedSpanItems().size();
+    Context previous = Context.current();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "completionError");
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    if (alreadyFailed) assertTrue(future.completeExceptionally(error));
+    assertSame(future, assertDoesNotThrow(() -> io.quux.otelc.methods.Observer.exit(call,
+        "()Ljava/util/concurrent/CompletableFuture;", future, null)));
+    if (!alreadyFailed) assertTrue(assertDoesNotThrow(() -> future.completeExceptionally(error)));
+    assertTrue(future.handle((value, caught) -> caught == error).join());
+    assertEquals(0, callbacks[0]);
+    assertSame(previous, Context.current());
+    var spans = TRACES.getFinishedSpanItems();
+    assertEquals(first + 1, spans.size());
+    var completed = spans.getLast();
+    assertEquals(io.opentelemetry.api.trace.StatusCode.ERROR, completed.getStatus().getStatusCode());
+    assertEquals(error.getClass().getName(), completed.getEvents().getFirst().getAttributes().get(
+        AttributeKey.stringKey("exception.type")));
+  }
+
   private void clockIntervals(long shift, boolean asynchronous) {
     Clock previous = TRACE_CLOCK.delegate;
     var clock = new MovingClock();
