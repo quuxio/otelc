@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -41,7 +42,7 @@ func TestOfficialTransportClonesHeadersAndEndsOnlyOnBodyCompletion(t *testing.T)
 	value, exported, detached := fixture(t)
 	request := httptest.NewRequest("GET", "http://example.test/", nil)
 	base := roundTripFunc(func(next *http.Request) (*http.Response, error) {
-		if next == request || next.Header.Get("traceparent") == "" || next.Context().Value(clientKey{}) != true {
+		if next == request || next.Header.Get("traceparent") == "" || !consumeNativeEntry(next.Context(), clientKey{}) {
 			t.Fatal("request was not cloned, propagated and guarded")
 		}
 		return response(io.NopCloser(bytes.NewBufferString("ok"))), nil
@@ -130,7 +131,7 @@ func TestServerPreservesWriterInterfacesInformationalHeadersAndClientContext(t *
 		if _, ok := w.(http.Pusher); ok {
 			t.Fatal("invented Pusher")
 		}
-		if r.Context().Value(serverKey{}) != true {
+		if !consumeNativeEntry(r.Context(), serverKey{}) {
 			t.Fatal("missing server recursion guard")
 		}
 		for _, code := range []int{103, 200, 201} {
@@ -179,11 +180,15 @@ func TestOwnedRegistrySuppressionAndDirectNativeDispatch(t *testing.T) {
 	if !ClientEnabled(request) || !ServerEnabled(request) || ClientEnabled(nil) || ServerEnabled(nil) {
 		t.Fatal("registry admission differs")
 	}
-	server := request.WithContext(context.WithValue(request.Context(), serverKey{}, true))
+	serverGuard := &atomic.Bool{}
+	serverGuard.Store(true)
+	server := request.WithContext(context.WithValue(request.Context(), serverKey{}, serverGuard))
 	if ServerEnabled(server) || !ClientEnabled(server) {
 		t.Fatal("server marker suppressed its client")
 	}
-	client := request.WithContext(context.WithValue(request.Context(), clientKey{}, true))
+	clientGuard := &atomic.Bool{}
+	clientGuard.Store(true)
+	client := request.WithContext(context.WithValue(request.Context(), clientKey{}, clientGuard))
 	if ClientEnabled(client) || !ServerEnabled(client) {
 		t.Fatal("client marker suppressed server")
 	}

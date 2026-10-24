@@ -8,14 +8,14 @@ import (
 
 // ClientEnabled guards the native entry before constructing an official wrapper.
 func ClientEnabled(request *http.Request) bool {
-	return configured.Load() != nil && request != nil && request.Context().Value(clientKey{}) == nil &&
-		!pipeline.HTTPInstrumentationSuppressed(request.Context())
+	return configured.Load() != nil && request != nil && !pipeline.HTTPInstrumentationSuppressed(request.Context()) &&
+		!consumeNativeEntry(request.Context(), clientKey{})
 }
 
 // ServerEnabled is independent of the client recursion marker.
 func ServerEnabled(request *http.Request) bool {
-	return configured.Load() != nil && request != nil && request.Context().Value(serverKey{}) == nil &&
-		!pipeline.HTTPInstrumentationSuppressed(request.Context())
+	return configured.Load() != nil && request != nil && !pipeline.HTTPInstrumentationSuppressed(request.Context()) &&
+		!consumeNativeEntry(request.Context(), serverKey{})
 }
 
 // RoundTrip is called by the compiler-generated native entry. It deliberately

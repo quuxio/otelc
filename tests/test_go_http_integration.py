@@ -170,6 +170,23 @@ class GoHTTPIntegrationTests(unittest.TestCase):
         self.assertTrue(final['failures'])
         self.assertEqual(self.finish(server, sr)['failures'], {})
 
+    def test_returned_request_context_keeps_each_native_http_operation_visible(self) -> None:
+        server, sr, ready = self.start('server', self.settings('go-http-reuse-server'))
+        client, cr, _ = self.start('client', self.settings('go-http-reuse-client'), ready['url'])
+        answer = self.exchange(client, 'reuse')
+        self.assertFalse(answer['error'])
+        self.assertEqual(answer['result']['value'], '42')
+        self.assertEqual(answer['result']['reused_value'], '42')
+        self.finish(client, cr); self.finish(server, sr)
+        for runtime in (cr, sr):
+            self.assertEqual(prepared.read(runtime / 'health.json')['http_spans'],
+                             {'observed': True, 'closed': True, 'started': '2', 'ended': '2', 'active': '0'})
+        clients = [span for span in self.spans('go-http-reuse-client') if span.kind == 3]
+        servers = [span for span in self.spans('go-http-reuse-server') if span.kind == 2]
+        self.assertEqual((len(clients), len(servers)), (2, 2))
+        self.assertEqual({(span.trace_id, span.parent_span_id) for span in servers},
+                         {(span.trace_id, span.span_id) for span in clients})
+
     def test_tracing_off_preserves_context_with_no_recorded_spans_or_invented_counters(self) -> None:
         server, sr, ready = self.start('server', self.settings('go-http-unrecorded-server', traces=False))
         client, cr, _ = self.start('client', self.settings('go-http-unrecorded-client', traces=False), ready['url'])

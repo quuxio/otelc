@@ -23,7 +23,7 @@ bin/quux-otelc --config examples/http-context.toml go \
   -- client http://127.0.0.1:REPLACE_WITH_PRINTED_PORT
 ```
 
-Enter `normal`, `child`, `error`, `cancel` or `panic` in the client. Enter `quit` to close each process. `leak` deliberately retains an unread response body: the application still returns normally, but its final instrumentation status fails with an active HTTP span. Use fresh build/runtime directories. Add `--plain` to launch the stock binary. The `child` command spawns and joins an ordinary goroutine on the server; `[context] tasks` controls its inheritance independently of HTTP propagation.
+Enter `normal`, `child`, `reuse`, `error`, `cancel` or `panic` in the client. `reuse` makes a second request with the context exposed by the first response; both operations retain their own spans. Enter `quit` to close each process. `leak` deliberately retains an unread response body: the application still returns normally, but its final instrumentation status fails with an active HTTP span. Use fresh build/runtime directories. Add `--plain` to launch the stock binary. The `child` command spawns and joins an ordinary goroutine on the server; `[context] tasks` controls its inheritance independently of HTTP propagation.
 
 The shared live commands work in another terminal:
 
@@ -37,7 +37,7 @@ bin/quux-otelc health --socket "$PWD/build/go-http-client/control.json"
 
 ## Reuse and preservation
 
-The compiler injects a guarded native entry, then the official wrapper calls the original method through a separately marked second entry. Direct injection preserves original panics: a recoverable instrumentation before-hook must not catch a panic from an original method called inside it. Client/server recursion markers are distinct, so an incoming handler can make outgoing requests with its inherited context. SDK export traffic has a private context marker; arbitrary application headers or User-Agent text cannot suppress tracing.
+The compiler injects a guarded native entry, then the official wrapper calls the original method through a separately marked second entry. The second entry consumes its single-use atomic token before application callbacks run. Returned and concurrently reused contexts cannot retain suppression; wrapper return also invalidates an unused token. Direct injection preserves original panics: a recoverable instrumentation before-hook must not catch a panic from an original method called inside it. Client/server tokens are distinct, so an incoming handler can make outgoing requests with its inherited context. SDK export traffic has a private context marker; arbitrary application headers or User-Agent text cannot suppress tracing.
 
 The wrapper uses explicit owned tracer/meter providers and W3C trace-context/baggage propagation. It never replaces application globals. Client requests are cloned before header injection. The official wrapper preserves supported response-writer interfaces, informational/final header forwarding and upgraded response-body writes. A generated dependency initialises the owned runtime before original main-module package variables; original source files remain unchanged.
 

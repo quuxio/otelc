@@ -17,6 +17,13 @@ import (
 type clientKey struct{}
 type serverKey struct{}
 
+// Only the immediate compiler-injected native entry consumes this token. The
+// application can reuse the resulting context without inheriting suppression.
+func consumeNativeEntry(ctx context.Context, key any) bool {
+	value, _ := ctx.Value(key).(*atomic.Bool)
+	return value != nil && value.CompareAndSwap(true, false)
+}
+
 // Instrumentation uses explicit owned providers and immutable parent context.
 type Instrumentation struct {
 	traces trace.TracerProvider
@@ -64,9 +71,9 @@ func (t captureTracer) Start(ctx context.Context, name string, options ...trace.
 }
 
 // RoundTrip delegates request cloning, body accounting and body completion to
-// the pinned official module. Only recursive native entry carries clientKey.
+// the pinned official module. The native entry consumes a single-use token.
 func (i *Instrumentation) RoundTrip(base http.RoundTripper, request *http.Request) (*http.Response, error) {
-	if request == nil || request.Context().Value(clientKey{}) != nil || pipeline.HTTPInstrumentationSuppressed(request.Context()) {
+	if request == nil || pipeline.HTTPInstrumentationSuppressed(request.Context()) {
 		return base.RoundTrip(request)
 	}
 	var started trace.Span
@@ -88,7 +95,10 @@ func (i *Instrumentation) RoundTrip(base http.RoundTripper, request *http.Reques
 		}
 	}()
 	native := roundTripFunc(func(next *http.Request) (*http.Response, error) {
-		return base.RoundTrip(next.WithContext(context.WithValue(next.Context(), clientKey{}, true)))
+		guard := &atomic.Bool{}
+		guard.Store(true)
+		defer guard.Store(false)
+		return base.RoundTrip(next.WithContext(context.WithValue(next.Context(), clientKey{}, guard)))
 	})
 	return otelhttp.NewTransport(native, i.options(provider)...).RoundTrip(request)
 }
@@ -101,12 +111,15 @@ func sameSpanContext(left, right trace.SpanContext) bool {
 // Its recursion marker is separate from the client marker, so a handler's
 // outgoing requests remain instrumented when they inherit the request context.
 func (i *Instrumentation) ServeHTTP(base http.Handler, writer http.ResponseWriter, request *http.Request) {
-	if request == nil || request.Context().Value(serverKey{}) != nil || pipeline.HTTPInstrumentationSuppressed(request.Context()) {
+	if request == nil || pipeline.HTTPInstrumentationSuppressed(request.Context()) {
 		base.ServeHTTP(writer, request)
 		return
 	}
 	native := http.HandlerFunc(func(w http.ResponseWriter, next *http.Request) {
-		base.ServeHTTP(w, next.WithContext(context.WithValue(next.Context(), serverKey{}, true)))
+		guard := &atomic.Bool{}
+		guard.Store(true)
+		defer guard.Store(false)
+		base.ServeHTTP(w, next.WithContext(context.WithValue(next.Context(), serverKey{}, guard)))
 	})
 	otelhttp.NewHandler(native, "HTTP server", i.options(i.traces)...).ServeHTTP(writer, request)
 }

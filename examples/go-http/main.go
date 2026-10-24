@@ -65,6 +65,19 @@ func workloadRequest(url, command string) (map[string]any, error) {
 	data, err := io.ReadAll(response.Body)
 	closeError := response.Body.Close()
 	result["value"] = string(data)
+	if command == "reuse" && err == nil && closeError == nil {
+		next, requestError := http.NewRequestWithContext(response.Request.Context(), "GET", url+"/again", nil)
+		if requestError != nil {
+			return result, requestError
+		}
+		again, requestError := transport.RoundTrip(next)
+		if requestError != nil {
+			return result, requestError
+		}
+		data, err = io.ReadAll(again.Body)
+		closeError = again.Body.Close()
+		result["reused_value"] = string(data)
+	}
 	if err == nil {
 		err = closeError
 	}
