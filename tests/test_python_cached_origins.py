@@ -81,7 +81,7 @@ class PythonCacheOptionTests(NativeInputCase):
         with tempfile.TemporaryDirectory(dir=root / 'build/native') as temporary:
             candidate = Path(temporary) / 'cache-startup-failure'
             command[command.index('-o') + 1] = str(candidate)
-            subprocess.run(command, check=True, capture_output=True)
+            subprocess.run(command, check=True)
             os.replace(candidate, target)
         self.tool = target
         entry = self.root / 'entry.py'

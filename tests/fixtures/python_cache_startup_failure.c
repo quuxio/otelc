@@ -1,4 +1,5 @@
 /* Force preceding startup stages ready; require real cache-failure cancellation. */
+#include <Python.h>
 #include <stdlib.h>
 #include "OriginEntry.h"
 #include "OriginLoader.h"
