@@ -1,4 +1,5 @@
 #include "otelc/metric_control.h"
+#include "otelc/deadline.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -19,11 +20,6 @@ Clock::time_point Deadline(Micros timeout) {
   auto available = std::chrono::duration_cast<Micros>(Clock::time_point::max() - now);
   if (timeout >= available) return Clock::time_point::max();
   return now + std::max(timeout, Micros::zero());
-}
-
-Micros Remaining(Clock::time_point deadline) {
-  if (deadline == Clock::time_point::max()) return Micros::max();
-  return std::max(std::chrono::duration_cast<Micros>(deadline - Clock::now()), Micros::zero());
 }
 
 std::unique_ptr<scope::ScopeConfigurator<metrics::MeterConfig>> Configuration(bool enabled) {
@@ -142,7 +138,9 @@ bool GatedMetricExporter::ForceFlush(Micros timeout) noexcept {
     if (!state_->status_.collection || !state_->status_.emission) return true;
     ++state_->status_.in_flight;
   }
-  bool result = delegate_->ForceFlush(Remaining(deadline));
+  bool result = detail::BeforeDeadline(deadline, [&](Micros remaining) {
+    return delegate_->ForceFlush(remaining);
+  });
   {
     std::lock_guard<std::mutex> guard(state_->mutex_);
     --state_->status_.in_flight;
@@ -166,7 +164,9 @@ bool GatedMetricExporter::Shutdown(Micros timeout) noexcept {
     if (state_->status_.closed) return true;
     ++state_->status_.in_flight;
   }
-  bool result = delegate_->Shutdown(Remaining(deadline));
+  bool result = detail::BeforeDeadline(deadline, [&](Micros remaining) {
+    return delegate_->Shutdown(remaining);
+  });
   {
     std::lock_guard<std::mutex> guard(state_->mutex_);
     --state_->status_.in_flight;
