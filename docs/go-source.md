@@ -1,6 +1,6 @@
 # Go source adapter
 
-Status: implementation in progress. The [SDK controls](go-sdk-controls.md) are delivered as a foundation. Internal compiler fixtures now connect the owned SDK/runtime, generated function/error/lifetime hooks, common-policy translation, live controls, decoded OTLP and health. The general source/module builder, public build/launch commands, broader integration, paired benchmarks and independent oteleq qualification remain work. `plan` continues to report Go as remaining.
+Status: implementation in progress. The [SDK controls](go-sdk-controls.md) are delivered as a foundation. Internal compiler fixtures connect the owned SDK/runtime, generated function/error/lifetime hooks, common-policy translation, live controls, decoded OTLP and health. A policy-driven private source/module builder is now an internal candidate. Public build/launch commands, broader integration, paired benchmarks and independent oteleq qualification remain work. `plan` continues to report Go as remaining.
 
 ## Upstream compiler and context reuse
 
@@ -82,4 +82,20 @@ PYTHONPATH=tests .venv/bin/python -m unittest -v \
 
 The compiler/runtime fixture uses an ordinary interactive application. Four plain/instrumented process pairs cover every initial collection/emission combination and then change all four states in the same instrumented PID. It compares complete application output, failed/panicking release behaviour and formatter counts, checks actual raw metric/span receipt and lifetime construction links, and validates live/final health through the common Python clients. Original/private application sources, the original module and private SDK are checked unchanged. Compiler intermediates stay in an owned temporary directory and are removed with the fixture.
 
-This is an internal exact-toolchain integration, not general source selection or a public Go launch recipe. The policy-aware source/module builder, immutable build products and compiler-free prepared commands, dependency/build preservation, official HTTP integration, broader allocation/release shapes, equivalent benchmarks/Collector/Grafana, full gates, independent review and oteleq admission remain required. SDK and control implementation does not close the Go language gap on its own.
+This is an internal exact-toolchain integration. Public immutable build products and compiler-free prepared commands, dependency/build qualification, official HTTP integration, broader allocation/release shapes, equivalent benchmarks/Collector/Grafana, final full gates, independent review and oteleq admission remain required. SDK and control implementation does not close the Go language gap on its own.
+
+## Policy-driven private source builds
+
+The internal `go_source` inspector uses the pinned `golang.org/x/tools/go/packages` loader with the selected Go compiler. Its separate tooling module keeps that parser dependency out of application modules. It records exact parser input bytes, compiler-selected packages, real type identities, named/unnamed result expressions and error nilability. Inspection does not execute application initialisers. Function identities use `module/package.Function` and `module/package.Type.Method`; lifetime identities use `module/package.Type`. Common source globs use paths relative to the original module root.
+
+`go_build.build_project` copies checked original inputs to a private tree, resolves the common selectors and generates rules for the official weaver. Source exclusion takes precedence over function, allocation and release selection. Lifetime selection does not add function spans for otherwise excluded constructors or release methods. Typed `new(T)` and `&T{...}` expressions are wrapped only in the private copy, including nested expressions and package initialisers. The original files have no telemetry imports or hooks. Pointer-receiver release methods require no arguments and either no result or one declared error-compatible result. Selected unsupported bindings fail preparation instead of becoming successful omissions.
+
+The candidate retains actual stock and woven binaries, compiler/weaver/bundle identities, original and SDK inputs, resolved selections, module graphs and command results. Adding the SDK may add dependencies, but cannot upgrade, replace or remove an existing module resolution, change the Go language version, or change toolchain/GODEBUG defaults. An actual older `x/sys` dependency fixture proves that an SDK-induced upgrade is refused before either application binary is compiled. Initial metric flags do not change compile-time selection identity; a second launch can use the same woven binary with metrics off.
+
+```sh
+PYTHONPATH=tests .venv/bin/python -m unittest -v test_go_source test_go_build
+```
+
+These tests exercise an ordinary multi-package application, imported aliases, a generic function, named error returns, independent function/lifetime selection, automatic allocation/release spans, construction links, complete stdout/stderr and untouched original source/module files. Inspector tests also cover concrete/interface/value error results, type aliases, generic receivers and storage-address refusals. The source inspector and Python builder/resolver each have an independent 80% coverage floor.
+
+This remains a native single-module candidate with the fixed Go compiler. Workspaces, vendor trees, local module replacements, generated Cgo application files and pre-existing instrumentation need separate profiles. Addresses of existing storage, tiny objects, generic lifetime types, value-object storage, reflective/external allocations and arbitrary release signatures remain unsupported. The compiler-selected original module is the current source scope; dependencies and whole-program source closure are not established. `source_complete=false` stays explicit. Public prepared execution, original-build-system integration, full provider qualification and final protected delivery remain open.
