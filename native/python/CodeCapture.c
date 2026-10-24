@@ -4,6 +4,7 @@
 #include <opcode.h>
 #include "InputJournal.h"
 #include "NativeEncoder.h"
+#include "OriginEntry.h"
 
 #include <stdint.h>
 #include <limits.h>
@@ -251,6 +252,11 @@ static PyObject *observe(PyObject *module, PyObject *arguments) {
     if (result) {
         cache[available].failed = 1;
         Py_RETURN_NONE; /* Writer already records its admission/IO loss. */
+    }
+    if (otelc_py_origin_sdk_join(code, identity, (int)offset)) {
+        cache[available].failed = 1;
+        if (PyErr_Occurred()) return NULL;
+        Py_RETURN_NONE; /* Origin capture retains its own failure evidence. */
     }
     return identity_result(identity);
 }

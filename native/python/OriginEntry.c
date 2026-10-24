@@ -26,6 +26,8 @@ typedef struct {
     size_t depth;
     size_t root;
     int executed;
+    int offset;
+    uint64_t sdk;
 } OriginCode;
 
 static OriginCode codes[CODE_LIMIT];
@@ -119,6 +121,63 @@ static int catalogue(PyObject *code, const uint64_t *edges, size_t depth, size_t
     return 0;
 }
 
+static void release_tool(void);
+
+static int execution(size_t index, int offset) {
+    OriginCode *slot = &codes[index];
+    if (slot->executed) return 0;
+    unsigned char edges[EDGE_LIMIT * 8];
+    for (size_t edge = 0; edge < slot->depth; ++edge) {
+        for (size_t byte = 0; byte < 8; ++byte) {
+            edges[edge * 8 + byte] = (unsigned char)(slot->edges[edge] >> (56 - byte * 8));
+        }
+    }
+    uint64_t fields[] = {index + 1, slot->root + 1, (uint64_t)offset, PY_VERSION_HEX, slot->depth, 0};
+    if (otelc_py_journal_origin(6, root_paths[slot->root], edges, slot->depth * 8, fields, 6)) {
+        lost = 1; /* The raw writer already counted this failure. */
+        return -1;
+    }
+    slot->executed = 1;
+    slot->offset = offset;
+    return 0;
+}
+
+int otelc_py_origin_sdk_join(PyObject *code, uint64_t sdk, int offset) {
+    /* Journal-1 code capture has no origin observer and keeps its old contract. */
+    if (!installed) return 0;
+    if (!ready || lost || !same_owner()) return -1;
+    PyObject *saved = PyErr_GetRaisedException();
+    if (!sdk || offset < 0 || !own_tool()) goto failed;
+    for (size_t index = 0; index < code_count; ++index) {
+        OriginCode *slot = &codes[index];
+        PyObject *actual = referent(slot->weak);
+        int same = actual == code;
+        Py_XDECREF(actual);
+        if (!same) continue;
+        if (slot->executed && slot->offset != offset) goto failed;
+        if (slot->sdk) {
+            if (slot->sdk != sdk) goto failed;
+            PyErr_SetRaisedException(saved);
+            return 0;
+        }
+        /* SDK and native monitoring tools may run in either order. The caller
+           has authenticated this same code/RESUME; publish once before joining. */
+        if (execution(index, offset)) goto failed;
+        uint64_t fields[] = {sdk, index + 1, (uint64_t)offset, 0, 0, 0};
+        if (otelc_py_journal_origin(7, root_paths[slot->root], NULL, 0, fields, 6)) {
+            lost = 1; /* The raw writer already counted this failure. */
+            goto failed;
+        }
+        slot->sdk = sdk;
+        PyErr_SetRaisedException(saved);
+        return 0;
+    }
+failed:
+    release_tool();
+    (void)failure(saved);
+    return -1;
+}
+
 static PyObject *started(PyObject *unused, PyObject *arguments) {
     (void)unused;
     if (!same_owner() || lost) Py_RETURN_NONE;
@@ -147,20 +206,7 @@ static PyObject *started(PyObject *unused, PyObject *arguments) {
         int same = existing == code;
         Py_XDECREF(existing);
         if (!same) continue;
-        if (!slot->executed) {
-            unsigned char edges[EDGE_LIMIT * 8];
-            for (size_t edge = 0; edge < slot->depth; ++edge) {
-                for (size_t byte = 0; byte < 8; ++byte) {
-                    edges[edge * 8 + byte] = (unsigned char)(slot->edges[edge] >> (56 - byte * 8));
-                }
-            }
-            slot->executed = 1;
-            uint64_t fields[] = {index + 1, slot->root + 1, (uint64_t)offset, PY_VERSION_HEX, slot->depth, 0};
-            if (otelc_py_journal_origin(6, root_paths[slot->root], edges, slot->depth * 8, fields, 6)) {
-                lost = 1; /* The raw writer already counted this failure. */
-                goto failed;
-            }
-        }
+        if (execution(index, (int)offset)) goto failed;
         PyErr_SetRaisedException(saved);
         /* This is always a local event. No global VM events are enabled. */
         return Py_NewRef(monitor[OTELC_MONITOR_DISABLE]);
@@ -384,6 +430,10 @@ int otelc_py_origin_entry_install(void) { return 0; }
 int otelc_py_origin_entry_ready(int optimization) { (void)optimization; return -1; }
 int otelc_py_origin_entry_active(void) { return 0; }
 void otelc_py_origin_entry_cancel(void) { }
+int otelc_py_origin_sdk_join(PyObject *code, uint64_t sdk, int offset) {
+    (void)code; (void)sdk; (void)offset;
+    return 0;
+}
 int otelc_py_origin_module(PyObject *code, const char *path, uint64_t sequence,
                             uint64_t loader, unsigned flags, int optimization) {
     (void)code; (void)path; (void)sequence; (void)loader; (void)flags; (void)optimization;

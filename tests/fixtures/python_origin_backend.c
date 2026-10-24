@@ -63,6 +63,7 @@ int main(void) {
             otelc_py_origin_entry_active()) return 1;
     otelc_py_origin_entry_read(NULL, NULL, 0, 0);
     otelc_py_origin_entry_cancel();
+    if (otelc_py_origin_sdk_join(NULL, 0, 0)) return 2;
     if (otelc_py_origin_module(NULL, NULL, 0, 0, 0, 0) != -1 ||
             otelc_py_origin_local_callback(NULL, 0, 0, NULL) != -1 ||
             otelc_py_origin_loader_ready() != -1 || otelc_py_origin_loader_active() ||

@@ -58,7 +58,7 @@ def check() -> dict:
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
                         'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder',
                         'test_python_origin_writer', 'test_python_fileio_inputs', 'test_python_origin_pins',
-                        'test_python_entry_origins', 'test_python_loader_origins', '-v'],
+                        'test_python_entry_origins', 'test_python_loader_origins', 'test_python_origin_sdk_joins', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:
