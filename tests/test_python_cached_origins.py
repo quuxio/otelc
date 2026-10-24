@@ -1,5 +1,6 @@
 """Actual cache reads bind original unmarshalling and loader returns, not recompilation."""
 from __future__ import annotations
+import ctypes
 import json
 import marshal
 import os
@@ -7,11 +8,35 @@ from pathlib import Path
 import py_compile
 import subprocess
 import sys
+import unittest
 
 from ci import build_python_inputs as tooling
 from otelc import python_origin_journal as journal
 from python_input_support import NativeInputCase
 from test_java_integration import Capture
+
+
+class UnavailablePythonCacheOriginTests(unittest.TestCase):
+    def test_disabled_native_image_cannot_activate_or_create_cache_origins(self) -> None:
+        tool = tooling.build(coverage=bool(os.environ.get('OTELC_NATIVE_COVERAGE')))
+        metadata = json.loads((tool.parent / 'build.json').read_bytes())
+        self.assertFalse(metadata['inputs']['origin_chain']['available'])
+        library = ctypes.PyDLL(str(tool.parent / metadata['library']))
+        active = library.otelc_py_origin_cache_active
+        ready = library.otelc_py_origin_cache_ready
+        cancel = library.otelc_py_origin_cache_cancel
+        active.argtypes = ready.argtypes = cancel.argtypes = []
+        cancel.restype = None
+        cache_input = library.otelc_py_origin_loader_cache_input
+        cache_input.argtypes = [ctypes.c_void_p]
+        cache_return = library.otelc_py_origin_loader_cache_return
+        cache_return.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        self.assertEqual(active(), 0)
+        self.assertEqual(ready(), -1)
+        self.assertEqual(cache_input(None), 0)
+        self.assertEqual(cache_return(None, None), -1)
+        cancel()
+        self.assertEqual(active(), 0)
 
 
 class PythonCachedOriginTests(NativeInputCase):
