@@ -26,12 +26,17 @@ static void checked(PyStatus status, PyConfig *config) {
 }
 
 int main(int argc, char **argv) {
-    int loader_origins = argc > 1 && !strcmp(argv[1], "--origin-loader");
+    int rooted = argc > 1 && !strcmp(argv[1], "--origin-loader-root");
+    if (rooted && argc < 3) return 64;
+    const char *root = rooted ? argv[2] : NULL;
+    int loader_origins = rooted || (argc > 1 && !strcmp(argv[1], "--origin-loader"));
     int entry_origins = loader_origins || (argc > 1 && !strcmp(argv[1], "--origin-entry"));
     int origins = entry_origins || (argc > 1 && !strcmp(argv[1], "--origin-observer"));
-    if (origins) { --argc; ++argv; }
+    int options = rooted ? 2 : (origins ? 1 : 0);
+    argc -= options; argv += options;
     /* driver inherited-journal-fd selected-python original-argv0 [native args] */
     if (argc < 5 || strcmp(argv[2], OTELC_PY_SELECTED_EXECUTABLE)) return 64;
+    if (root && otelc_py_origin_loader_root(root)) return 64;
     char *end;
     errno = 0;
     long descriptor = strtol(argv[1], &end, 10);

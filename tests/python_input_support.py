@@ -41,14 +41,17 @@ class NativeInputCase(unittest.TestCase):
         self.number = 0
 
     def launch(self, arguments: list[str], *, environment: dict | None = None,
-               origin_observer: bool = False, entry_origins: bool = False, loader_origins: bool = False
+               origin_observer: bool = False, entry_origins: bool = False, loader_origins: bool = False,
+               origin_root: Path | None = None
                ) -> tuple[int, bytes, bytes, Path, int]:
         self.number += 1
         path = self.root / f'input-{self.number}.journal'
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             options = []
-            if loader_origins:
+            if origin_root is not None:
+                options = ['--origin-loader-root', str(origin_root)]
+            elif loader_origins:
                 options = ['--origin-loader']
             elif entry_origins:
                 options = ['--origin-entry']

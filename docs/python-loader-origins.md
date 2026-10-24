@@ -36,3 +36,11 @@ Cached/sourceless bytecode, custom loaders, arbitrary dynamic compilation, other
 ## Acceptance still required
 
 The native component has an independent 80% line floor. Tests exercise repeated and concurrent original reads, exact descriptors, interpreter optimisation levels, source encoding cookies, equal-byte unrelated compilations, substituted reads/compilers, cache refusal, original syntax errors, weak object/code cleanup, existing builtin dictionary keys and failure before compilation. The separate [SDK join component](python-origin-sdk-joins.md) connects authenticated selected starts to this catalogue. These tests do not establish universal preservation. Independent review, the full repository gate, required hosted checks, both-lane supervisor integration, public journal-2 negotiation and frozen-provider oteleq qualification remain separate acceptance requirements.
+
+## Optional application-root boundary
+
+The private driver also accepts `--origin-loader-root /absolute/application/root` in place of `--origin-loader`. Tooling derives this directory from the common launch's application root; developers do not maintain another language-specific policy or modify source. The original whole-loader contributor profile remains unchanged when no root is supplied.
+
+The directory must exist and is resolved once. A pinned `get_code` frame's actual `source_path` is resolved for the boundary check without calling loader properties or application path methods. Loader transactions outside that root are left alone, including cached standard-library imports. A sibling with the same name prefix remains outside; a source symlink uses its actual destination. The selected native entry remains separately captured. Raw input records retain their existing scope; this option bounds loader-origin transactions.
+
+Cached code inside the application root remains unsupported and marks capture incomplete. Missing or unclassifiable paths cannot become verified capture. A selected SDK code still requires actual weak catalogue membership: ignoring an outside loader does not allow its newly compiled code to claim an inside origin. Keep the root and complete native command with the launch identity. This boundary does not qualify public preparation, complete dependency closure or a new source-complete capability.

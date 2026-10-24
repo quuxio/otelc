@@ -1,4 +1,5 @@
 /* Bind an actual ordinary source read to its compiler and loader returns. */
+#define _POSIX_C_SOURCE 200809L
 #include <Python.h>
 #include <opcode.h>
 #include "InputJournal.h"
@@ -9,6 +10,8 @@
 
 #if OTELC_ORIGIN_CHAIN_AVAILABLE
 #include <string.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 extern const PyConfig *_Py_GetConfig(void);
@@ -32,7 +35,38 @@ static vectorcallfunc original_compile;
 static PyInterpreterState *owner;
 static pid_t owner_pid;
 static int active;
+static char *application_root;
 static PyObject *compile_call(PyObject *callable, PyObject *const *args, size_t count, PyObject *names);
+
+int otelc_py_origin_loader_root(const char *path) {
+    if (active || owner || application_root || !path || path[0] != '/' ||
+            strlen(path) > OTELC_PY_PATH_LIMIT) return -1;
+    struct stat info;
+    if (stat(path, &info) || !S_ISDIR(info.st_mode)) return -1;
+    application_root = realpath(path, NULL);
+    return application_root ? 0 : -1;
+}
+
+static int in_scope(PyFrameObject *frame) {
+    if (!application_root) return 1;
+    /* Read the pinned get_code frame's actual source_path, without calling
+       loader properties or application path conversion methods. */
+    PyObject *source = PyFrame_GetVarString(frame, "source_path");
+    PyObject *bytes = source && PyUnicode_CheckExact(source) ? PyUnicode_EncodeFSDefault(source) : NULL;
+    Py_XDECREF(source);
+    if (!bytes) return -1;
+    Py_ssize_t size = PyBytes_GET_SIZE(bytes);
+    int valid = size > 0 && size <= OTELC_PY_PATH_LIMIT &&
+        !memchr(PyBytes_AS_STRING(bytes), 0, (size_t)size);
+    char *canonical = valid ? realpath(PyBytes_AS_STRING(bytes), NULL) : NULL;
+    Py_DECREF(bytes);
+    if (!canonical) return -1;
+    size_t length = strlen(application_root);
+    int inside = !strcmp(application_root, "/") ||
+        (!strncmp(canonical, application_root, length) && canonical[length] == '/');
+    free(canonical);
+    return inside;
+}
 
 static int same_owner(void) {
     return active && getpid() == owner_pid &&
@@ -155,6 +189,9 @@ int otelc_py_origin_loader_read(PyObject *path, PyObject *bytes, uint64_t sequen
         PyErr_SetRaisedException(saved);
         return 0;
     }
+    int scope = in_scope(frame);
+    if (scope < 0) { Py_DECREF(frame); return fail(saved, 0); }
+    if (!scope) { Py_DECREF(frame); PyErr_SetRaisedException(saved); return 0; }
     int source = PyBytes_CheckExact(path) && PyBytes_GET_SIZE(path) >= 3 &&
         !memcmp(PyBytes_AS_STRING(path) + PyBytes_GET_SIZE(path) - 3, ".py", 3);
     if (!source) { Py_DECREF(frame); PyErr_SetRaisedException(saved); return 0; }
@@ -207,10 +244,14 @@ static PyObject *compile_call(PyObject *callable, PyObject *const *args, size_t 
     PyFrameObject *frame = source ? PyFrame_GetBack(source) : NULL;
     int context = frame_is(helper, helpers[3]) && frame_is(source, helpers[1]) && frame_is(frame, helpers[0]);
     Pending *slot = context ? find(frame) : NULL;
-    Py_XDECREF(source); Py_XDECREF(frame);
-    if (!context) return original_compile(callable, args, count, names);
     PyObject *saved = PyErr_GetRaisedException();
-    if (!slot || slot->compiled || otelc_py_origin_pins_ready() || !arguments_match(slot, args, count, names)) {
+    int scope = context ? in_scope(frame) : 1;
+    Py_XDECREF(source); Py_XDECREF(frame);
+    if (!context || !scope) {
+        PyErr_SetRaisedException(saved);
+        return original_compile(callable, args, count, names);
+    }
+    if (scope < 0 || !slot || slot->compiled || otelc_py_origin_pins_ready() || !arguments_match(slot, args, count, names)) {
         if (fail(saved, 0)) return NULL;
         return original_compile(callable, args, count, names);
     }
@@ -248,6 +289,9 @@ static PyObject *returned(PyObject *unwind, PyObject *arguments) {
     Py_XDECREF(bytes);
     if (!terminal) goto failed;
     Pending *slot = find(frame);
+    int scope = in_scope(frame);
+    if (scope < 0 || !slot) goto failed;
+    if (!scope) { clear(slot); PyErr_SetRaisedException(saved); Py_RETURN_NONE; }
     PyObject *root = slot && slot->root ? referent(slot->root) : NULL;
     int valid = root && root == result && slot->compiled;
     Py_XDECREF(root);
@@ -294,6 +338,7 @@ int otelc_py_origin_loader_ready(void) {
 
 int otelc_py_origin_loader_active(void) { return active; }
 #else
+int otelc_py_origin_loader_root(const char *path) { (void)path; return -1; }
 int otelc_py_origin_loader_ready(void) { return -1; }
 int otelc_py_origin_loader_active(void) { return 0; }
 int otelc_py_origin_loader_start(PyObject *code) { (void)code; return 0; }

@@ -69,6 +69,7 @@ int main(void) {
             otelc_py_origin_loader_ready() != -1 || otelc_py_origin_loader_active() ||
             otelc_py_origin_loader_start(NULL) || otelc_py_origin_loader_read(NULL, NULL, 0)) return 2;
     otelc_py_origin_loader_cancel();
+    if (otelc_py_origin_loader_root(NULL) != -1) return 2;
     puts("unavailable");
     return 0;
 }
