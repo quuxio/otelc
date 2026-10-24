@@ -43,7 +43,7 @@ var __otelcTraces=func()*sdktrace.TracerProvider{
 var __otelcProbes=func()*probe.Recorder {
  meter:=__otelcControls.MeterProvider(__otelcMetrics,noop.NewMeterProvider(),func(string)bool{return true}).Meter(pipeline.Scope)
  p,e:=probe.New(meter,__otelcTraces.Tracer(pipeline.Scope),probe.Options{
- Functions:[]string{"workload","NewObject","Close","child"},Lifetimes:[]probe.Lifetime{{Name:"Object",Resource:true}},
+ Functions:[]string{"workload","child"},Lifetimes:[]probe.Lifetime{{Name:"Object",Resource:true}},
  MaxActive:128,MaxLive:128,Collecting:__otelcControls.CollectionEnabled,
  Parent:official.GetSpanFromGLS,Detach:official.DetachSpanFromGLS})
  if e!=nil{panic(e)};return p
@@ -93,7 +93,7 @@ factory:
   do:
     - inject_code:
         raw: |
-          __otelcFactory := __otelcProbes.Start(1)
+          __otelcFactory := __otelcProbes.Watch()
           defer func(){if __otelcFactory.End(false){__otelcTrackObject(_unnamedRetVal0)}}()
 release:
   target: main
@@ -103,7 +103,7 @@ release:
   do:
     - inject_code:
         raw: |
-          __otelcRelease := __otelcProbes.Start(2)
+          __otelcRelease := __otelcProbes.Watch()
           defer func(){__otelcReleaseObject(o,__otelcRelease.End(_unnamedRetVal0!=nil))}()
 child:
   target: main
@@ -111,7 +111,7 @@ child:
     func: child
   do:
     - inject_code:
-        raw: 'defer __otelcProbes.Start(3).End(false)'
+        raw: 'defer __otelcProbes.Start(1).End(false)'
 '''
 
 
@@ -191,8 +191,13 @@ import (
                         self.assertEqual(state['GCObserved'], 1)
                         self.assertEqual(state['Released'], int(mode != 'panic'))
                         self.assertEqual(state['OpenResources'], int(mode == 'panic'))
+                        self.assertEqual(state['ObserverActive'], 0)
+                        self.assertEqual(state['ObserverLoss'], 0)
+                        self.assertEqual(state['ObserverStarts'], state['ObserverEnds'])
+                        self.assertEqual(state['FunctionEnds'], 1 if mode == 'panic' else 2)
                         if sampling == 'on':
                             workload = next(s for s in data['Spans'] if s['Name'] == 'workload')
+                            self.assertFalse(any(s['Name'] in ('NewObject', 'Close') for s in data['Spans']))
                             for span in data['Spans']:
                                 if span['Name'] == 'child':
                                     self.assertEqual(span['Parent'], workload['SpanID'])
@@ -211,7 +216,7 @@ import (
                             self.assertEqual(data['Metrics']['otelc.lifetime.admitted'], 2)
                             self.assertEqual(data['Metrics']['otelc.lifetime.completed'], 2 if mode != 'panic' else 1)
                             self.assertEqual(data['Metrics'].get('otelc.lifetime.incomplete', 0), int(mode == 'panic'))
-                            self.assertEqual(data['Metrics'].get('otelc.function.errors', 0), 0 if mode == 'normal' else 2)
+                            self.assertEqual(data['Metrics'].get('otelc.function.errors', 0), int(mode == 'panic'))
                         receipts.append({'collection': collection, 'sampling': sampling, 'mode': mode, 'health': state,
                                          'span_count': len(data['Spans']), 'output': baseline.decode()})
             self.assertEqual((original / 'App.go').read_bytes(), source)

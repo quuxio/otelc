@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	api "go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -84,6 +85,40 @@ func check(t *testing.T, err error) {
 	}
 }
 
+func TestMetricCollectionOffSuppressesCachedSnapshotsAndFinalDrain(t *testing.T) {
+	ctx := context.Background()
+	controls := metriccontrol.New(true, true)
+	sink := &metricSink{}
+	p, err := NewMetrics(controls, sink, resource.Empty(), 0, time.Second)
+	check(t, err)
+	meter := p.Provider.Meter(Scope)
+	counter, err := meter.Int64Counter("calls")
+	check(t, err)
+	counter.Add(ctx, 7)
+	check(t, p.Flush(ctx))
+	before := p.Health().Attempts
+	controls.SetCollection(false)
+	check(t, p.Flush(ctx))
+	if p.Health().Attempts != before {
+		t.Fatal("collection-off exported a stale snapshot")
+	}
+	controls.SetCollection(true)
+	_, err = meter.Int64ObservableCounter("disable-during-collection", api.WithInt64Callback(func(ctx context.Context, result api.Int64Observer) error {
+		controls.SetCollection(false)
+		result.Observe(99)
+		return nil
+	}))
+	check(t, err)
+	check(t, p.Flush(ctx))
+	if p.Health().Attempts != before {
+		t.Fatal("disabled callback exported prior cached data")
+	}
+	check(t, p.Shutdown(ctx))
+	if p.Health().Attempts != before || sink.closed.Load() != 1 {
+		t.Fatal("shutdown bypassed collection-off")
+	}
+}
+
 func TestMetricsRetainMeasurementsAcrossEveryInitialStateAndRetryFailure(t *testing.T) {
 	ctx := context.Background()
 	for _, collection := range []bool{false, true} {
@@ -97,7 +132,7 @@ func TestMetricsRetainMeasurementsAcrossEveryInitialStateAndRetryFailure(t *test
 				check(t, err)
 				counter.Add(ctx, 5)
 				err = p.Flush(ctx)
-				if emission != errors.Is(err, rejected) {
+				if (emission && collection) != errors.Is(err, rejected) {
 					t.Fatal("export error was suppressed", err)
 				}
 				controls.SetCollection(true)
@@ -110,6 +145,12 @@ func TestMetricsRetainMeasurementsAcrossEveryInitialStateAndRetryFailure(t *test
 				check(t, p.Flush(ctx))
 				controls.SetCollection(false)
 				counter.Add(ctx, 100)
+				beforeOff := p.Health().Attempts
+				check(t, p.Flush(ctx))
+				if p.Health().Attempts != beforeOff {
+					t.Fatal("disabled collection exported old snapshots")
+				}
+				controls.SetCollection(true)
 				check(t, p.Flush(ctx))
 				want := int64(7)
 				if collection {

@@ -78,9 +78,15 @@ func NewMetrics(controls *metriccontrol.Controls, exporter sdk.Exporter, res *re
 }
 
 func (m *Metrics) flush(ctx context.Context) error {
+	if !m.Controls.CollectionEnabled() {
+		return nil
+	}
 	data := &metricdata.ResourceMetrics{}
 	if err := m.reader.Collect(ctx, data); err != nil {
 		return err
+	}
+	if !m.Controls.CollectionEnabled() {
+		return nil
 	}
 	return m.exporter.Export(ctx, data)
 }

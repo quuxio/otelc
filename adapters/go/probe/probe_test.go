@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
@@ -320,5 +321,32 @@ func TestInvalidHistogramBoundariesFailBeforeSDKCalls(t *testing.T) {
 		if _, err := New(metricnoop.NewMeterProvider().Meter("fixture"), tracenoop.NewTracerProvider().Tracer("fixture"), o); err == nil {
 			t.Fatalf("invalid histogram accepted: %v", boundaries)
 		}
+	}
+}
+
+type applicationParent struct {
+	tracenoop.Span
+	context trace.SpanContext
+	changes atomic.Uint64
+}
+
+func (p *applicationParent) SpanContext() trace.SpanContext      { return p.context }
+func (p *applicationParent) End(...trace.SpanEndOption)          { p.changes.Add(1) }
+func (p *applicationParent) SetStatus(codes.Code, string)        { p.changes.Add(1) }
+func (p *applicationParent) SetAttributes(...attribute.KeyValue) { p.changes.Add(1) }
+
+func TestTracingOffDoesNotEndOrMutateApplicationParent(t *testing.T) {
+	parent := &applicationParent{context: trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled, Remote: true})}
+	p, err := New(metricnoop.NewMeterProvider().Meter("fixture"), tracenoop.NewTracerProvider().Tracer("fixture"), Options{
+		Functions: []string{"selected"}, MaxActive: 1, MaxLive: 1, Collecting: func() bool { return false },
+		Parent: func() trace.Span { return parent }, Detach: func(trace.Span) bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	catch(func() { panicking(p, 42) })
+	if parent.changes.Load() != 0 {
+		t.Fatal("disabled tracing ended or mutated the application's parent span")
 	}
 }

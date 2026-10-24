@@ -43,11 +43,11 @@ go-upstream:
 
 go-check:
 	mkdir -p build
-	cd adapters/go && test -z "$$(gofmt -l metriccontrol/*.go pipeline/*.go probe/*.go)"
+	cd adapters/go && test -z "$$(gofmt -l metriccontrol/*.go pipeline/*.go probe/*.go runtime/*.go)"
 	cd adapters/go && GOWORK=off $(GO) vet -mod=readonly ./...
 	cd adapters/go && GOWORK=off $(GO) test -mod=readonly -race -count=1 -coverprofile="$(CURDIR)/build/go-coverage.out" ./...
 	cd adapters/go && $(GO) tool cover -func="$(CURDIR)/build/go-coverage.out" | awk '/^total:/ {gsub("%", "", $$3); print; found=1; if ($$3 < 80) exit 1} END {if (!found) exit 1}'
-	awk 'NR>1 {split($$1, p, ":"); total[p[1]]+=$$2; if ($$3>0) hit[p[1]]+=$$2} END {for (file in total) {files++; percent=100*hit[file]/total[file]; printf "%s: %.2f%% statements\n", file, percent; if (percent<80) failed=1} if (files!=10 || failed) exit 1}' build/go-coverage.out
+	awk 'NR>1 {split($$1, p, ":"); total[p[1]]+=$$2; if ($$3>0) hit[p[1]]+=$$2} END {for (file in total) {files++; percent=100*hit[file]/total[file]; printf "%s: %.2f%% statements\n", file, percent; if (percent<80) failed=1} if (files!=15 || failed) exit 1}' build/go-coverage.out
 	sed 's|^io\.quux\.otelc/go/|adapters/go/|' build/go-coverage.out > build/go-sonar-coverage.out
 
 java-build:
@@ -81,6 +81,8 @@ test: java-build node-observer node-http go-upstream
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_journal.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_execution.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_context_bundle.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_health.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_runtime_config.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/build_go_upstream.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 

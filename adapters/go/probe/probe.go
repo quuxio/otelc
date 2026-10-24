@@ -19,8 +19,8 @@ import (
 
 // Lifetime selects a resolved concrete pointer type, not arbitrary runtime names.
 type Lifetime struct {
-	Name     string
-	Resource bool
+	Name     string `json:"name"`
+	Resource bool   `json:"resource"`
 }
 
 // Options contains resolved selection and owned context callbacks. Generated
@@ -39,6 +39,7 @@ type Options struct {
 // Health keeps unobserved lifetimes and bounded observer failures visible.
 type Health struct {
 	FunctionStarts, FunctionEnds, FunctionActive, FunctionLoss uint64
+	ObserverStarts, ObserverEnds, ObserverActive, ObserverLoss uint64
 	UnwindUnknown, ObjectsObserved, GCObserved, Released       uint64
 	LiveObjects, OpenResources, LifetimeLoss, DuplicateObjects uint64
 	Closed                                                     bool
@@ -62,6 +63,10 @@ type Recorder struct {
 	active           atomic.Uint64
 	lost             atomic.Uint64
 	unknown          atomic.Uint64
+	observerStarts   atomic.Uint64
+	observerEnds     atomic.Uint64
+	observerActive   atomic.Uint64
+	observerLoss     atomic.Uint64
 	mu               sync.Mutex
 	closed           bool
 	objects          map[any]*lifetime
@@ -76,7 +81,8 @@ type Recorder struct {
 
 func validName(name string) bool { return name != "" && len(name) <= 4096 }
 
-func (o Options) validate() error {
+// Validate checks resolved bindings before any SDK or runtime starts.
+func (o Options) Validate() error {
 	if o.MaxActive <= 0 || o.MaxActive > 512 || o.MaxLive <= 0 || o.MaxLive > 1_000_000 || o.Collecting == nil || o.Parent == nil || o.Detach == nil ||
 		len(o.Functions) > 4096 || len(o.Lifetimes) > 4096 || len(o.Boundaries) > 128 {
 		return errors.New("invalid resolved Go probe settings")
@@ -110,7 +116,7 @@ func New(meter metric.Meter, tracer trace.Tracer, options Options) (*Recorder, e
 	if meter == nil || tracer == nil {
 		return nil, errors.New("missing owned Go probe SDK")
 	}
-	if err := options.validate(); err != nil {
+	if err := options.Validate(); err != nil {
 		return nil, err
 	}
 	options.Functions = append([]string(nil), options.Functions...)
@@ -166,7 +172,9 @@ func New(meter metric.Meter, tracer trace.Tracer, options Options) (*Recorder, e
 func (p *Recorder) parent() context.Context {
 	ctx := context.Background()
 	if parent := p.options.Parent(); parent != nil {
-		ctx = trace.ContextWithSpan(ctx, parent)
+		// The API no-op tracer may return an existing non-recording parent
+		// directly. Never give it an application-owned span to end or mutate.
+		ctx = trace.ContextWithSpanContext(ctx, parent.SpanContext())
 	}
 	return ctx
 }
@@ -192,7 +200,7 @@ func (p *Recorder) Start(id int) *Invocation {
 		p.mu.Unlock()
 		return nil
 	}
-	if id < 0 || id >= len(p.options.Functions) || p.active.Load() >= uint64(p.options.MaxActive) {
+	if id < 0 || id >= len(p.options.Functions) || p.active.Load()+p.observerActive.Load() >= uint64(p.options.MaxActive) {
 		p.lost.Add(1)
 		p.mu.Unlock()
 		return nil
@@ -260,6 +268,7 @@ func (p *Recorder) Snapshot() Health {
 		}
 	}
 	return Health{FunctionStarts: p.starts.Load(), FunctionEnds: p.ends.Load(), FunctionActive: p.active.Load(),
+		ObserverStarts: p.observerStarts.Load(), ObserverEnds: p.observerEnds.Load(), ObserverActive: p.observerActive.Load(), ObserverLoss: p.observerLoss.Load(),
 		FunctionLoss: p.lost.Load(), UnwindUnknown: p.unknown.Load(), ObjectsObserved: p.observed,
 		GCObserved: p.collected, Released: p.releases, LiveObjects: uint64(len(p.objects)) + p.abandoned,
 		OpenResources: resources, LifetimeLoss: p.lifeLost, DuplicateObjects: p.duplicates, Closed: p.closed}

@@ -9,7 +9,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from otelc import python_health
+from otelc import go_health, python_health
 from otelc.python_sdk_io import decode
 
 MAX_REPORT = 65536
@@ -59,6 +59,8 @@ def validate(value: Any) -> dict[str, Any]:
     """Require the public report shape; consumers must assess its actual evidence."""
     if type(value) is dict and value.get('schema_version') == 2:
         return python_health.validate(value)
+    if type(value) is dict and value.get('schema_version') == 3:
+        return go_health.validate(value)
     _identity(value)
     lifecycle = value.get("lifecycle")
     outcomes = ("not_started", "pending", "succeeded", "failed", "timed_out", "unavailable")
@@ -91,7 +93,7 @@ def read(path: Path) -> dict[str, Any]:
     if len(data) > MAX_REPORT:
         raise ValueError("oversized runtime health report")
     value = decode(data)
-    if value.get('schema_version') != 2 and len(data) > 4096:
+    if value.get('schema_version') not in (2, 3) and len(data) > 4096:
         raise ValueError('oversized version-one runtime health report')
     return validate(value)
 
