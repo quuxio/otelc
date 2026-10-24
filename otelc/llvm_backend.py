@@ -23,6 +23,7 @@ HEADER = ROOT / 'native/llvm/function_abi.h'
 MANIFEST = 'llvm-plugin.json'
 PROFILE = 'llvm22-itanium-v1'
 REGISTERED_PROFILE = 'llvm22-itanium-registered-v1'
+SOURCE_PROFILE = 'llvm22-itanium-source-v1'
 
 
 def identity(path: Path) -> dict[str, Any]:
@@ -83,7 +84,7 @@ def discover(config: Path | None = None) -> dict[str, Any]:
             'ldflags': shlex.split(query(config, '--ldflags', '--libs', 'core', 'passes', '--system-libs'))}
 
 
-def environment(policy: Policy, language: str) -> dict[str, str]:
+def environment(policy: Policy, language: str, *, source_root: Path | None = None) -> dict[str, str]:
     """Translate common function globs; compiler selection does not control metrics."""
     if language not in ('c', 'cpp') or language not in policy.data['languages']:
         raise ValueError('LLVM function component requires an enabled C/C++ language')
@@ -93,6 +94,12 @@ def environment(policy: Policy, language: str) -> dict[str, str]:
                   OTELC_READ_ANNOTATIONS='0')
     if language == 'cpp':
         values['OTELC_LLVM_CPP'] = '1'
+    if source_root is not None:
+        if not source_root.is_dir() or source_root.resolve(strict=True) != source_root or source_root == Path('/'):
+            raise ValueError('LLVM source profile requires a canonical application root')
+        values.update(OTELC_SOURCE_ROOT=str(source_root),
+                      OTELC_SOURCE_INCLUDE=json.dumps(policy.data['sources']['include']),
+                      OTELC_SOURCE_EXCLUDE=json.dumps(policy.data['sources']['exclude']))
     return values
 
 
@@ -109,10 +116,12 @@ class Plugin:
 
 
 def build(output: Path, *, config: Path | None = None, coverage: bool = False,
-          function_registry: bool = False) -> Plugin:
+          function_registry: bool = False, source_aware: bool = False) -> Plugin:
     """Build a fresh policy-neutral plugin and bind the actual inputs/product."""
-    if type(coverage) is not bool or type(function_registry) is not bool:
+    if type(coverage) is not bool or type(function_registry) is not bool or type(source_aware) is not bool:
         raise ValueError('LLVM coverage and function registry selection must be boolean')
+    if source_aware and not function_registry:
+        raise ValueError('LLVM source profile requires function registration')
     tools = discover(config)
     source = identity(SOURCE)
     header = identity(HEADER)
@@ -125,6 +134,8 @@ def build(output: Path, *, config: Path | None = None, coverage: bool = False,
         command.extend(['-fprofile-instr-generate', '-fcoverage-mapping'])
     if function_registry:
         command.append('-DOTELC_FUNCTION_REGISTRY_V1=1')
+    if source_aware:
+        command.append('-DOTELC_SOURCE_PROFILE_V1=1')
     result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=180)
     (output / 'build.stdout').write_bytes(result.stdout)
     (output / 'build.stderr').write_bytes(result.stderr)
@@ -136,7 +147,7 @@ def build(output: Path, *, config: Path | None = None, coverage: bool = False,
     if identity(SOURCE) != source or identity(HEADER) != header or not unchanged(tools):
         raise ValueError('LLVM source or tooling changed during compilation')
     value = {'schema_version': 1, 'kind': 'otelc.llvm-plugin',
-             'profile': REGISTERED_PROFILE if function_registry else PROFILE,
+             'profile': SOURCE_PROFILE if source_aware else REGISTERED_PROFILE if function_registry else PROFILE,
              'source': source, 'headers': [header], 'toolchain': tools, 'plugin': identity(plugin),
              'evidence': {name: identity(output / name) for name in
                           ('command.json', 'compile_commands.json', 'build.stdout', 'build.stderr')},
@@ -183,8 +194,11 @@ def main(arguments: list[str] | None = None) -> None:
                         help='installed LLVM 22 llvm-config executable')
     parser.add_argument('--function-registry', action='store_true',
                         help='explicit ABI2 profile: register selected function addresses and names before initialisers')
+    parser.add_argument('--source-aware', action='store_true',
+                        help='explicit source profile: require -g, source selections and stable source-qualified identities')
     options = parser.parse_args(arguments)
-    plugin = build(options.output, config=options.llvm_config, function_registry=options.function_registry)
+    plugin = build(options.output, config=options.llvm_config,
+                   function_registry=options.function_registry or options.source_aware, source_aware=options.source_aware)
     print(json.dumps(verify(plugin), sort_keys=True, indent=2))
 
 

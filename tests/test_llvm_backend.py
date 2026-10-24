@@ -79,6 +79,22 @@ class LLVMBackendTests(unittest.TestCase):
         view['plugin']['sha256'] = 'changed'
         self.assertNotEqual(view, backend.verify(plugin))
 
+    def test_source_profile_is_explicit_and_uses_the_common_source_selection(self) -> None:
+        with self.assertRaisesRegex(ValueError, 'registration'):
+            backend.build(self.root / 'invalid-source', config=self.config, source_aware=True)
+        plugin = backend.build(self.root / 'source-profile', config=self.config,
+                               function_registry=True, source_aware=True)
+        self.assertEqual((backend.verify(plugin)['profile'], plugin.manifest()['probe_abi']),
+                         (backend.SOURCE_PROFILE, 'otelc.function.v2'))
+        self.assertIn('-DOTELC_SOURCE_PROFILE_V1=1', self.compilation)
+        policy = Policy.parse({'schema_version': 3, 'languages': ['c'],
+                              'sources': {'include': ['**/?.c'], 'exclude': ['vendor/**']}})
+        selected = backend.environment(policy, 'c', source_root=self.root)
+        self.assertEqual(selected['OTELC_SOURCE_ROOT'], str(self.root))
+        self.assertEqual(json.loads(selected['OTELC_SOURCE_INCLUDE']), ['**/?.c'])
+        self.assertEqual(json.loads(selected['OTELC_SOURCE_EXCLUDE']), ['vendor/**'])
+        self.assertNotIn('OTELC_SOURCE_ROOT', backend.environment(policy, 'c'))
+
     def test_build_command_verifies_before_printing_and_refuses_existing_output(self) -> None:
         output = self.root / 'command-output'
         arguments = ['--output', str(output), '--llvm-config', str(self.config)]
