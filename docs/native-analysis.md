@@ -10,6 +10,8 @@ The LLVM builder retains `compile_commands.json` with the actual compiler argv, 
 
 The Sonar CI job sets `OTELC_CPP_ANALYSIS=1` through both compilation and scanning. This keeps the fresh SDK dependency headers and build directories present at the paths used by the compiler. Other check jobs use normal temporary-directory cleanup. An analysis run retains this additional scratch only for that runner's lifetime; a manually selected local analysis run needs the same context until its scan finishes.
 
+CI pins both `CC` and `CXX` to that LLVM installation. Native Python compilation also honours `OTELC_LLVM_BIN` when no explicit `CC` is supplied, so the compiler and coverage merger do not silently come from different installations. An explicit operator `CC` still takes precedence.
+
 ## Exact coverage
 
 Actual `llvm-cov export -format=lcov` reports retain every covered and uncovered executable line. The collector checks the two exact source identities, LCOV and database identities, source names and line totals. LLVM's aggregate summary and physical line entries can have different denominators in the same export. The collector checks the aggregate totals against the producer's LLVM JSON summary and uses only the physical `DA` entries for Sonar's line-by-line data. Both the existing component summary floor and the physical-line report must independently reach 80%. Missing, repeated, foreign, stale or inconsistent records fail rather than becoming an empty or apparently complete report.

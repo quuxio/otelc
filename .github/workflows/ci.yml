@@ -15,6 +15,7 @@ jobs:
     name: Documentation and tooling
     runs-on: ubuntu-24.04
     env:
+      CC: /usr/lib/llvm-22/bin/clang
       CXX: /usr/lib/llvm-22/bin/clang++
       OTELC_LLVM_BIN: /usr/lib/llvm-22/bin
     steps:
@@ -42,6 +43,7 @@ jobs:
     name: Native macOS ARM64 and 80% coverage
     runs-on: macos-26
     env:
+      CC: /opt/homebrew/opt/llvm@22/bin/clang
       CXX: /opt/homebrew/opt/llvm@22/bin/clang++
       OTELC_LLVM_BIN: /opt/homebrew/opt/llvm@22/bin
     steps:
@@ -69,6 +71,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     env:
+      CC: /usr/lib/llvm-22/bin/clang
       CXX: /usr/lib/llvm-22/bin/clang++
       OTELC_LLVM_BIN: /usr/lib/llvm-22/bin
       OTELC_CPP_ANALYSIS: '1'
