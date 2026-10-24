@@ -6,6 +6,7 @@
 #include "OriginPins.h"
 #include "OriginEntry.h"
 #include "OriginLoader.h"
+#include "OriginCache.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -26,10 +27,13 @@ static void checked(PyStatus status, PyConfig *config) {
 }
 
 int main(int argc, char **argv) {
-    int rooted = argc > 1 && !strcmp(argv[1], "--origin-loader-root");
+    int cache_origins = argc > 1 && (!strcmp(argv[1], "--origin-loader-caches") ||
+                                     !strcmp(argv[1], "--origin-loader-caches-root"));
+    int rooted = argc > 1 && (!strcmp(argv[1], "--origin-loader-root") ||
+                              !strcmp(argv[1], "--origin-loader-caches-root"));
     if (rooted && argc < 3) return 64;
     const char *root = rooted ? argv[2] : NULL;
-    int loader_origins = rooted || (argc > 1 && !strcmp(argv[1], "--origin-loader"));
+    int loader_origins = rooted || cache_origins || (argc > 1 && !strcmp(argv[1], "--origin-loader"));
     int entry_origins = loader_origins || (argc > 1 && !strcmp(argv[1], "--origin-entry"));
     int origins = entry_origins || (argc > 1 && !strcmp(argv[1], "--origin-observer"));
     int options = rooted ? 2 : (origins ? 1 : 0);
@@ -41,9 +45,10 @@ int main(int argc, char **argv) {
     errno = 0;
     long descriptor = strtol(argv[1], &end, 10);
     if (errno || end == argv[1] || *end || descriptor < 0 || descriptor > INT_MAX ||
-            otelc_py_journal_open_version((int)descriptor, entry_origins ? 2 : 1)) return 64;
+            otelc_py_journal_open_version((int)descriptor, cache_origins ? 3 : (entry_origins ? 2 : 1))) return 64;
     if (atexit(process_exit)) return 78;
     if (entry_origins && otelc_py_origin_monitor_enable()) return 78;
+    if (cache_origins && otelc_py_origin_cache_enable()) return 78;
     if (origins && otelc_py_origin_pins_install()) return 78;
     if (entry_origins && otelc_py_origin_entry_install()) return 78;
     if (otelc_py_imports_install()) return 78;
@@ -82,6 +87,12 @@ int main(int argc, char **argv) {
     }
     if (loader_origins && entry_ready && otelc_py_origin_loader_ready()) {
         otelc_py_journal_capture_failed();
+        otelc_py_origin_entry_cancel();
+        PyErr_Clear();
+    }
+    if (cache_origins && entry_ready && otelc_py_origin_cache_ready()) {
+        otelc_py_journal_capture_failed();
+        otelc_py_origin_loader_cancel();
         otelc_py_origin_entry_cancel();
         PyErr_Clear();
     }

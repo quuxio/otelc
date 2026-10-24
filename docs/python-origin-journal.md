@@ -8,7 +8,7 @@ The intended observer must join an actual read transaction, the pinned compiler'
 
 ## Explicit version selection
 
-The C writer accepts version 1 or 2 through `otelc_py_journal_open_version`; its existing `otelc_py_journal_open` entry always selects 1. Invalid versions refuse ownership of the descriptor. Origin kinds are refused, with a capture failure, in version 1. Readers select one closed version explicitly and refuse mixed versions. There is no automatic fallback.
+The C writer accepts versions 1, 2 or explicit [cache-origin version 3](python-cached-origins.md) through `otelc_py_journal_open_version`; its existing `otelc_py_journal_open` entry always selects 1. Invalid versions refuse ownership of the descriptor. Origin kinds are refused, with a capture failure, in version 1. Readers select one closed version explicitly and refuse mixed versions. There is no automatic fallback.
 
 `otelc.python_origin_journal.decode(data, expected_pid=pid)` validates retained version-two bytes. `read(path, expected_pid=pid)` also requires an owned, bounded, non-followed 0600 regular file. The caller must first wait for the owning process and final SDK drain. The reader never compiles, unmarshals or executes retained code.
 

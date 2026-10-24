@@ -1,4 +1,4 @@
-"""Present bounded journal-2 capture without claiming whole-program provenance."""
+"""Present explicitly selected origin capture without claiming whole-program provenance."""
 from __future__ import annotations
 
 import os
@@ -11,9 +11,9 @@ from otelc.python_input_journal import SourceInput
 
 
 def read(path: Path, *, expected_pid: int, entry: dict[str, Any],
-         root: Path, plain: bool) -> dict[str, Any]:
+         root: Path, plain: bool, version: int = 2) -> dict[str, Any]:
     """Bind consumed entry and selected SDK joins to independently prepared intent."""
-    value = origins.read(path, expected_pid=expected_pid)
+    value = origins.read(path, expected_pid=expected_pid, version=version)
     failures = []
     if not value.capture_complete:
         failures.append('native_capture')
@@ -41,7 +41,7 @@ def read(path: Path, *, expected_pid: int, entry: dict[str, Any],
             'codes': [{'id': item.identity, 'path_hex': item.path.hex(), 'sha256': item.sha256,
                        'offset': item.offset, 'python_version': item.python_version,
                        'descriptor_version': item.descriptor_version} for item in value.codes],
-            'origins': {'schema_version': 2, 'scope_root': str(root),
+            'origins': {'schema_version': version, 'scope_root': str(root),
                         'root_ids': [item.identity for item in value.roots],
                         'execution_ids': [item.identity for item in value.executions],
                         'sdk_joins': [list(item) for item in value.sdk_joins], 'failures': failures}}

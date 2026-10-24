@@ -78,7 +78,7 @@ static int record(unsigned char kind, const char *path, size_t path_size,
 
 int otelc_py_journal_open_version(int descriptor, unsigned version) {
     struct stat metadata;
-    if (version != 1 && version != 2) return -1;
+    if (version != 1 && version != 2 && version != 3) return -1;
     int flags = fcntl(descriptor, F_GETFL);
     if (flags < 0 || (flags & O_ACCMODE) == O_RDONLY || (flags & O_APPEND) ||
             fstat(descriptor, &metadata) || !S_ISREG(metadata.st_mode) ||
@@ -174,7 +174,7 @@ int otelc_py_journal_origin(unsigned kind, const char *path, const unsigned char
     integer(metadata, (uint64_t)getpid());
     for (size_t index = 0; index < field_count; ++index) integer(metadata + 8 * (index + 1), fields[index]);
     pthread_mutex_lock(&journal_lock);
-    int result = journal_version == 2
+    int result = (journal_version == 2 || journal_version == 3)
         ? record((unsigned char)kind, path, path_size, metadata, 8 * (field_count + 1), bytes, length) : -1;
     if (result) ++capture_failures;
     else {

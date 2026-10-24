@@ -52,7 +52,7 @@ class PythonInputCoverageTests(unittest.TestCase):
         for name, summary in result['sources'].items():
             self.assertGreater(summary['lines']['count'], 0)
             self.assertGreaterEqual(summary['lines']['percent'], 80)
-            if name not in ('OriginChain.c', 'OriginEntry.c', 'OriginLoader.c') or result['origin_chain_available']:
+            if name not in ('OriginChain.c', 'OriginEntry.c', 'OriginLoader.c', 'OriginCache.c') or result['origin_chain_available']:
                 self.assertGreater(summary['branches']['count'], 0)
             else:
                 self.assertEqual(summary['branches']['count'], 0)
