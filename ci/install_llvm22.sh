@@ -28,6 +28,6 @@ sudo install -m 0644 "$llvm_key" /usr/share/keyrings/otelc-llvm.asc
 printf '%s\n' 'deb [signed-by=/usr/share/keyrings/otelc-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-22 main' \
   | sudo tee /etc/apt/sources.list.d/otelc-llvm22.list >/dev/null
 sudo apt-get update
-sudo apt-get install --yes --no-install-recommends clang-22 llvm-22-dev libclang-rt-22-dev
+sudo apt-get install --yes --no-install-recommends clang-22 llvm-22-dev libclang-rt-22-dev cmake ninja-build
 /usr/lib/llvm-22/bin/llvm-config --version
 /usr/lib/llvm-22/bin/clang --version

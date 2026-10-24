@@ -8,11 +8,11 @@ NPM_CACHE ?= $(CURDIR)/build/npm-cache
 BENCHMARK_LANGUAGE ?= java
 LLVM_OUTPUT ?= build/llvm-plugin
 
-.PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
+.PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
 
 help:
-	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint and Java/Node/Python/Go tests with component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'llvm-plugin Build the LLVM 22 function-hook component in a new directory' 'llvm-check  Check real C/C++/IR compilation and 80% native/Python coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
+	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint, adapter tests and native compiler/SDK component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'llvm-plugin Build the LLVM 22 function-hook component in a new directory' 'llvm-check  Check real C/C++/IR compilation and 80% native/Python coverage' 'native-check Check official C++ SDK metric controls and 80% component coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
 setup:
 	python3 -m venv .venv
@@ -48,6 +48,12 @@ llvm-check:
 	$(PYTHON) -m coverage run --data-file=build/llvm-python.coverage --source=otelc.llvm_backend -m unittest discover -s tests -p 'test_llvm*.py' -v
 	$(PYTHON) -m coverage report --data-file=build/llvm-python.coverage --fail-under=80
 
+native-check:
+	mkdir -p build
+	$(PYTHON) -m coverage run --data-file=build/native-tooling.coverage --source=ci.check_native_controls -m unittest discover -s tests -p test_native_controls_coverage.py -v
+	$(PYTHON) -m coverage run --append --data-file=build/native-tooling.coverage --source=ci.check_native_controls -m ci.check_native_controls
+	$(PYTHON) -m coverage report --data-file=build/native-tooling.coverage --fail-under=80
+
 go-check:
 	mkdir -p build
 	cd adapters/go && test -z "$$(gofmt -l metriccontrol/*.go)"
@@ -79,9 +85,10 @@ lint:
 	ci/markdownlint/node_modules/.bin/markdownlint '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore '**/target/**' --ignore 'build/**'
 	$(PYTHON) -m compileall -q otelc ci tests
 
-test: java-build node-observer node-http
+test: java-build node-observer node-http native-check
 	mkdir -p build
 	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
+	$(PYTHON) -m coverage combine --append --keep build/native-tooling.coverage
 	$(PYTHON) -m coverage report --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_encoder.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_origin_chain.py' --fail-under=80

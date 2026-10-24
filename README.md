@@ -28,6 +28,8 @@ The [Go SDK controls component](docs/go-sdk-controls.md) adds independent live g
 
 The [LLVM compiler component](docs/llvm-backend.md) is a candidate for original C/C++ compilation and a separate ordinary IR example. It preserves tested exception cleanup and applies common function selection; native SDK export, live controls and lifetime instrumentation remain work.
 
+The [native SDK control component](docs/native-sdk-controls.md) reuses official C++ SDK meter configuration and filtering for live collection, with a separate emission delegate. Native application launch, OTLP integration and complete C/C++ lifetime support remain work.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
