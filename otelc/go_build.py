@@ -8,7 +8,7 @@ import subprocess
 from typing import Any
 
 from ci import build_go_upstream as tooling
-from otelc import go_build_tags, go_context_bundle, go_http_bundle, go_source
+from otelc import go_build_tags, go_context_bundle, go_http_bundle, go_prepared_tools, go_source
 from otelc.config import Policy
 
 SOURCE_SUFFIXES = frozenset(('.go', '.s', '.S', '.h', '.syso', '.c', '.cc', '.cpp', '.cxx', '.m', '.mm', '.f', '.f90'))
@@ -204,9 +204,14 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
 
 
 def build_project(root: Path, target: str, policy: Policy, output: Path,
-                  tools: dict[str, Any], *, build_tags: tuple[str, ...] = ()) -> dict[str, Any]:
+                  tools: dict[str, Any], *, build_tags: tuple[str, ...] = (),
+                  prepared_tools: go_prepared_tools.PreparedTools | None = None) -> dict[str, Any]:
     """Produce both immutable binaries; launching is a separate compiler-free API."""
     tags = go_build_tags.canonical(build_tags)
+    if prepared_tools is not None:
+        if type(prepared_tools) is not go_prepared_tools.PreparedTools:
+            raise ValueError('Go prepared tooling requires its caller-held binding')
+        prepared_tools.verify(tools)
     root, output = root.absolute(), output.resolve()
     if root.resolve(strict=True) != root or output.is_relative_to(root):
         raise ValueError('Go build requires a canonical root and external output')
@@ -281,6 +286,8 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
              *flags, '-o', str(instrumented), target], private)
     if inputs(root) != original or inputs(sdk) != sdk_inputs:
         raise ValueError('Go original application or private SDK changed during compilation')
+    if prepared_tools is not None:
+        prepared_tools.verify(tools)
     receipt = {'schema_version': 5 if tags else 4, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
                'runtime_protocols': {'config': 2, 'health': 4},
                'selection': selection, 'inputs': original, 'sdk_inputs': sdk_inputs,

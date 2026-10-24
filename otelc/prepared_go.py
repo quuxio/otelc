@@ -29,13 +29,15 @@ BUILD_FIELDS = {'schema_version', 'kind', 'root', 'target', 'selection', 'inputs
 REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'policy', 'arguments', 'plain', 'launch_id'}
 
 
-def protocols(*, build_tags: bool = False) -> dict[str, Any]:
+def protocols(*, build_tags: bool = False, prepared_tools: bool = False) -> dict[str, Any]:
     """Describe formats without compiling or claiming provider qualification."""
     value = {'schema_version': 1, 'kind': 'otelc.go.protocols', 'profile': PROFILE,
             'build': 4, 'config': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
             'execution': 1, 'health': 4, 'embedded_sdk': True, 'source_complete': False}
     if build_tags:
         value.update(build=5, inspection=2)
+    if prepared_tools:
+        value['prepared_tools'] = 1
     return value
 
 

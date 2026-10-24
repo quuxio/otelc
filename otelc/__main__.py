@@ -20,7 +20,7 @@ from typing import Any
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java, witness
 from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe
-from otelc import go_benchmark, go_build, prepared_go
+from otelc import go_benchmark, go_build, go_prepared_tools, prepared_go
 from ci import build_go_upstream
 from otelc.config import LANGUAGES, Policy
 
@@ -52,6 +52,7 @@ def main() -> int:
     commands.add_parser("plan")
     go_protocols = commands.add_parser('go-protocols', help='describe candidate Go build/prepared formats without compiling')
     go_protocols.add_argument('--build-tags', action='store_true', help='describe the explicit tagged build profile')
+    go_protocols.add_argument('--prepared-tools', action='store_true', help='describe fixed installed tooling reuse')
     go_build_parser = commands.add_parser('go-build', help='candidate: build checked stock and instrumented Go binaries')
     go_build_parser.add_argument('--root', type=Path, default=Path.cwd())
     go_build_parser.add_argument('--target', default='.', help='one relative main package, such as ./cmd/app')
@@ -59,6 +60,8 @@ def main() -> int:
     go_build_parser.add_argument('--go', default='go', help='base compiler used to select the pinned native toolchain')
     go_build_parser.add_argument('--build-tag', action='append', default=[], metavar='NAME',
                                  help='explicit literal Go build tag; repeat for multiple tags')
+    go_build_parser.add_argument('--prepared-tools', action='store_true',
+                                 help='reuse fixed installed tooling; requires its exact recorded --go compiler')
     go_launch = commands.add_parser('go', help='candidate: launch an existing Go build without compiling')
     go_launch.add_argument('--build', type=Path, required=True)
     go_launch.add_argument('--runtime', type=Path, required=True)
@@ -121,13 +124,16 @@ def main() -> int:
             print(json.dumps(value, indent=2))
             return 0
         if args.command == 'go-protocols':
-            print(json.dumps(prepared_go.protocols(build_tags=args.build_tags), indent=2))
+            print(json.dumps(prepared_go.protocols(build_tags=args.build_tags,
+                                                   prepared_tools=args.prepared_tools), indent=2))
             return 0
         policy = Policy.load(args.config)
         if args.command == 'go-build':
-            tools = build_go_upstream.build(args.go, build_go_upstream.ROOT / 'build/go-upstream')
+            installed = build_go_upstream.ROOT / 'build/go-upstream'
+            binding = go_prepared_tools.prepare(args.go, installed) if args.prepared_tools else None
+            tools = binding.toolchain() if binding is not None else build_go_upstream.build(args.go, installed)
             result = go_build.build_project(args.root, args.target, policy, args.output, tools,
-                                            build_tags=tuple(args.build_tag))
+                                            build_tags=tuple(args.build_tag), prepared_tools=binding)
             print(json.dumps({'schema_version': 3, 'kind': 'otelc.go.build-result',
                               'profile': prepared_go.PROFILE, 'build': str(args.output.resolve() / 'build.json'),
                               'plain': result['plain'], 'instrumented': result['instrumented'],
