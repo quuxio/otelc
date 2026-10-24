@@ -10,8 +10,27 @@ import xml.etree.ElementTree as ET
 from otelc import llvm_backend
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION = ('native/llvm/OtelcPass.cpp', 'adapters/native/src/metric_control.cpp')
+PRODUCTION = ('native/llvm/OtelcPass.cpp', 'adapters/native/src/metric_control.cpp',
+              'adapters/native/src/function_runtime.cpp')
 TEST = 'adapters/native/tests/metric_control_test.cpp'
+TESTS = (TEST, 'adapters/native/tests/function_runtime_test.cpp',
+         'adapters/native/tests/fixtures/functions.c', 'adapters/native/tests/fixtures/functions.cpp')
+
+
+def lcov_records(text: str, expected: set[Path]) -> dict[Path, str]:
+    """Separate the complete exact source denominator before checking each floor."""
+    records, current = {}, []
+    for line in text.splitlines():
+        current.append(line)
+        if line == 'end_of_record':
+            names = [Path(row[3:]) for row in current if row.startswith('SF:')]
+            if len(names) != 1 or names[0] not in expected or names[0] in records:
+                raise ValueError('native LCOV contains a foreign or duplicated source')
+            records[names[0]] = '\n'.join(current) + '\n'
+            current = []
+    if any(row.strip() for row in current) or set(records) != expected:
+        raise ValueError('native LCOV must cover every complete implementation record')
+    return records
 
 
 def add_line_record(raw: str, lines: dict[int, bool]) -> None:
@@ -111,25 +130,28 @@ def generate(root: Path = ROOT) -> None:
         checked_artifact(header, Path(header['path']))
     for row in native['source_inputs']:
         checked_artifact(row, Path(row['path']))
-    native_source = llvm_backend.identity(root / PRODUCTION[1])
-    if native_source not in native['source_inputs']:
+    if any(llvm_backend.identity(root / relative) not in native['source_inputs'] for relative in PRODUCTION[1:]):
         raise ValueError('native SDK coverage omitted its exact implementation input')
+    checked_artifact(native['lcov'], Path(native['lcov']['path']))
+    native_records = lcov_records(Path(native['lcov']['path']).read_text(), {root / path for path in PRODUCTION[1:]})
     document = ET.Element('coverage', version='1')
     databases = []
-    for relative, record in zip(PRODUCTION, (llvm, native), strict=True):
+    for relative, record in zip(PRODUCTION, (llvm, native, native), strict=True):
         source = root / relative
         lcov = Path(record['lcov']['path'])
         database = Path(record['compilation_database']['path'])
         checked_artifact(record['lcov'], lcov)
         checked_artifact(record['compilation_database'], database)
-        databases.append(database)
+        if database not in databases:
+            databases.append(database)
         file = ET.SubElement(document, 'file', path=relative)
         summary = record['line_coverage'] if relative == PRODUCTION[0] else record['line_coverage'][str(source)]
-        for number, covered in sorted(lcov_lines(lcov.read_text(), source, summary=summary).items()):
+        text = lcov.read_text() if relative == PRODUCTION[0] else native_records[source]
+        for number, covered in sorted(lcov_lines(text, source, summary=summary).items()):
             ET.SubElement(file, 'lineToCover', lineNumber=str(number), covered=str(covered).lower())
     ET.ElementTree(document).write(output / 'native-sonar-coverage.xml', encoding='utf-8', xml_declaration=True)
     if os.environ.get('OTELC_CPP_ANALYSIS') == '1':
-        entries = compilation_database(databases, {root / path for path in (*PRODUCTION, TEST)})
+        entries = compilation_database(databases, {root / path for path in (*PRODUCTION, *TESTS)})
         (output / 'native-compile-commands.json').write_text(json.dumps(entries, indent=2) + '\n')
 
 
