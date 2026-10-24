@@ -35,6 +35,8 @@ def digest(path: Path) -> dict[str, str]:
 def compiler() -> str:
     """Use the same installed LLVM family as the existing native observer gate."""
     selected = os.environ.get('CC')
+    directory = os.environ.get('OTELC_LLVM_BIN')
+    selected = selected or (str(Path(directory) / 'clang') if directory else None)
     homebrew = Path('/opt/homebrew/opt/llvm@22/bin/clang')
     selected = selected or (str(homebrew) if sys.platform == 'darwin' and homebrew.is_file() else shutil.which('clang'))
     if not selected:

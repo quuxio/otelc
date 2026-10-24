@@ -17,6 +17,23 @@ from ci import build_python_inputs as tooling
 
 
 class PythonInputBuildTests(unittest.TestCase):
+    def test_selected_llvm_directory_controls_c_compilation_without_overriding_explicit_cc(self) -> None:
+        selected = '/selected/llvm-22/bin/clang'
+        with mock.patch.dict(os.environ, {'CC': '', 'OTELC_LLVM_BIN': '/selected/llvm-22/bin'}), \
+                mock.patch.object(tooling.sys, 'platform', 'linux'), \
+                mock.patch.object(tooling.shutil, 'which', side_effect=lambda value:
+                                  selected if value == selected else '/runner/old/bin/clang'):
+            self.assertEqual(tooling.compiler(), selected)
+        with mock.patch.dict(os.environ, {'CC': '/operator/bin/clang', 'OTELC_LLVM_BIN': '/selected/llvm-22/bin'}), \
+                mock.patch.object(tooling.shutil, 'which', return_value='/operator/bin/clang') as lookup:
+            self.assertEqual(tooling.compiler(), '/operator/bin/clang')
+            lookup.assert_called_once_with('/operator/bin/clang')
+        with mock.patch.dict(os.environ, {'CC': '', 'OTELC_LLVM_BIN': '/missing/llvm'}), \
+                mock.patch.object(tooling.shutil, 'which', return_value=None) as lookup, \
+                self.assertRaisesRegex(ValueError, 'one installed'):
+            tooling.compiler()
+        lookup.assert_called_once_with('/missing/llvm/clang')
+
     def test_initial_executable_probe_is_isolated_and_records_real_file_identity(self) -> None:
         with tempfile.TemporaryDirectory(dir='/tmp') as temporary:
             root = Path(temporary)
@@ -115,7 +132,7 @@ class PythonInputBuildTests(unittest.TestCase):
                 mock.patch.object(tooling.shutil, 'which', return_value=None):
             with self.assertRaisesRegex(ValueError, 'one installed'):
                 tooling.compiler()
-        with mock.patch.dict(os.environ, {'CC': ''}), \
+        with mock.patch.dict(os.environ, {'CC': '', 'OTELC_LLVM_BIN': ''}), \
                 mock.patch.object(Path, 'is_file', return_value=False), \
                 mock.patch.object(tooling.shutil, 'which', return_value=None):
             with self.assertRaisesRegex(ValueError, 'Clang is required'):
