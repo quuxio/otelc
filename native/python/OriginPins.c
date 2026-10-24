@@ -10,6 +10,7 @@
 #define FUNCTION_COUNT 4U
 
 static PyObject *functions[HELPER_COUNT], *codes[FUNCTION_COUNT];
+static PyObject *source_loader, *source_loader_mro;
 static PyInterpreterState *owner;
 static pid_t owner_pid;
 static int installed;
@@ -82,6 +83,12 @@ static int audit(const char *event, PyObject *arguments, void *unused) {
         for (unsigned index = 0; index < FUNCTION_COUNT; ++index) {
             codes[index] = Py_NewRef(PyFunction_GetCode(values[index]));
         }
+        PyObject *external = named_value(PyImport_GetModuleDict(), "_frozen_importlib_external");
+        PyObject *type = module_member(external, "SourceFileLoader");
+        if (type && PyType_Check(type) && ((PyTypeObject *)type)->tp_mro) {
+            source_loader = Py_NewRef(type);
+            source_loader_mro = Py_NewRef(((PyTypeObject *)type)->tp_mro);
+        }
         if (monitor_requested) {
             for (unsigned index = 0; index < OTELC_MONITOR_METHODS; ++index) {
                 monitor_functions[index] = Py_NewRef(monitor[index]);
@@ -134,4 +141,28 @@ int otelc_py_origin_monitor_enable(void) {
 PyObject *otelc_py_origin_monitor_value(unsigned index) {
     if (!monitor_requested || index >= OTELC_MONITOR_METHODS || otelc_py_origin_pins_ready()) return NULL;
     return monitor_functions[index];
+}
+
+PyObject *otelc_py_origin_helper_value(unsigned index) {
+    return index < HELPER_COUNT && !otelc_py_origin_pins_ready() ? functions[index] : NULL;
+}
+
+PyObject *otelc_py_origin_loader_type(void) {
+    if (!source_loader || otelc_py_origin_pins_ready()) return NULL;
+    PyObject *external = named_value(PyImport_GetModuleDict(), "_frozen_importlib_external");
+    if (module_member(external, "SourceFileLoader") != source_loader ||
+            ((PyTypeObject *)source_loader)->tp_mro != source_loader_mro ||
+            !PyTuple_CheckExact(source_loader_mro)) return NULL;
+    const char *names[] = {"get_code", "source_to_code", "get_data"};
+    for (unsigned index = 0; index < 3; ++index) {
+        PyObject *actual = NULL;
+        for (Py_ssize_t base = 0; base < PyTuple_GET_SIZE(source_loader_mro); ++base) {
+            PyObject *type = PyTuple_GET_ITEM(source_loader_mro, base);
+            if (!PyType_Check(type)) return NULL;
+            actual = named_value(((PyTypeObject *)type)->tp_dict, names[index]);
+            if (actual) break;
+        }
+        if (actual != functions[index]) return NULL;
+    }
+    return source_loader;
 }

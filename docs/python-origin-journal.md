@@ -48,7 +48,7 @@ PYTHONPATH=tests .venv/bin/python -m unittest \
 make python-inputs-check
 ```
 
-The reader has an explicit 80% line floor in `make test`, in addition to the existing overall Python and per-file native gates. The explicit native-entry profile adds checked compiler returns and weak code membership for source-file entries. Live loader transactions, both-lane supervisor wiring, SDK joins and independent oteleq admission remain work. Custom loaders, arbitrary dynamic compilation and whole-program closure remain separate capabilities.
+The reader has an explicit 80% line floor in `make test`, in addition to the existing overall Python and per-file native gates. The explicit native-entry profile adds checked compiler returns and weak code membership for source-file entries. A separate optional [source-loader profile](python-loader-origins.md) connects actual source reads, original compiler returns and genuine local loader returns. Both-lane supervisor wiring, SDK joins and independent oteleq admission remain work. Bytecode/custom loaders, arbitrary dynamic compilation and whole-program closure remain separate capabilities.
 
 ## Pre-startup helper guard
 

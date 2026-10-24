@@ -7,6 +7,7 @@
 #include "OriginEntry.h"
 #include "OriginPins.h"
 #include "OriginChain.h"
+#include "OriginLoader.h"
 
 #include <string.h>
 #include <unistd.h>
@@ -23,11 +24,17 @@ typedef struct {
     PyObject *weak;
     uint64_t edges[EDGE_LIMIT];
     size_t depth;
+    size_t root;
     int executed;
 } OriginCode;
 
 static OriginCode codes[CODE_LIMIT];
 static size_t code_count;
+static char *root_paths[CODE_LIMIT];
+static size_t root_count, root_path_bytes;
+static PyObject *helper_codes[4];
+static int helper_events[4];
+static size_t helper_count;
 static uint64_t input_sequence;
 static char *input_path;
 static PyInterpreterState *owner;
@@ -79,7 +86,7 @@ static int own_tool(void) {
     return same;
 }
 
-static int catalogue(PyObject *code, const uint64_t *edges, size_t depth) {
+static int catalogue(PyObject *code, const uint64_t *edges, size_t depth, size_t root) {
     for (size_t index = 0; index < code_count; ++index) {
         PyObject *existing = referent(codes[index].weak);
         int same = existing == code;
@@ -92,6 +99,7 @@ static int catalogue(PyObject *code, const uint64_t *edges, size_t depth) {
     OriginCode *slot = &codes[code_count++];
     slot->weak = weak;
     slot->depth = depth;
+    slot->root = root;
     memcpy(slot->edges, edges, depth * sizeof(*edges));
     if (!own_tool()) return -1;
     PyObject *result = PyObject_CallFunction(monitor[OTELC_MONITOR_LOCAL], "iOi", tool, code, 1);
@@ -106,14 +114,14 @@ static int catalogue(PyObject *code, const uint64_t *edges, size_t depth) {
         uint64_t next[EDGE_LIMIT];
         memcpy(next, edges, depth * sizeof(*edges));
         next[depth] = (uint64_t)index;
-        if (catalogue(child, next, depth + 1)) return -1;
+        if (catalogue(child, next, depth + 1, root)) return -1;
     }
     return 0;
 }
 
 static PyObject *started(PyObject *unused, PyObject *arguments) {
     (void)unused;
-    if (!same_owner() || lost || !consumed) Py_RETURN_NONE;
+    if (!same_owner() || lost) Py_RETURN_NONE;
     PyObject *saved = PyErr_GetRaisedException();
     PyObject *code, *position;
     if (!PyArg_UnpackTuple(arguments, "origin_start", 2, 2, &code, &position) ||
@@ -130,6 +138,9 @@ static PyObject *started(PyObject *unused, PyObject *arguments) {
     valid = offset < PyBytes_GET_SIZE(bytes) && (unsigned char)PyBytes_AS_STRING(bytes)[offset] == RESUME;
     Py_DECREF(bytes);
     if (!valid) goto failed;
+    int helper = otelc_py_origin_loader_start(code);
+    if (helper < 0) goto failed;
+    if (helper) { PyErr_SetRaisedException(saved); Py_RETURN_NONE; }
     for (size_t index = 0; index < code_count; ++index) {
         OriginCode *slot = &codes[index];
         PyObject *existing = referent(slot->weak);
@@ -144,8 +155,8 @@ static PyObject *started(PyObject *unused, PyObject *arguments) {
                 }
             }
             slot->executed = 1;
-            uint64_t fields[] = {index + 1, 1, (uint64_t)offset, PY_VERSION_HEX, slot->depth, 0};
-            if (otelc_py_journal_origin(6, input_path, edges, slot->depth * 8, fields, 6)) {
+            uint64_t fields[] = {index + 1, slot->root + 1, (uint64_t)offset, PY_VERSION_HEX, slot->depth, 0};
+            if (otelc_py_journal_origin(6, root_paths[slot->root], edges, slot->depth * 8, fields, 6)) {
                 lost = 1; /* The raw writer already counted this failure. */
                 goto failed;
             }
@@ -160,6 +171,7 @@ failed:
 }
 
 static void release_tool(void) {
+    otelc_py_origin_loader_cancel();
     if (tool < 0) return;
     PyObject *saved = PyErr_GetRaisedException();
     if (!own_tool()) {
@@ -177,6 +189,16 @@ static void release_tool(void) {
             PyErr_Clear();
         }
     }
+    for (size_t index = 0; index < helper_count; ++index) {
+        PyObject *value = PyObject_CallFunction(monitor[OTELC_MONITOR_LOCAL], "iOi", tool, helper_codes[index], 0);
+        Py_XDECREF(value);
+        PyErr_Clear();
+        value = PyObject_CallFunction(monitor[OTELC_MONITOR_CALLBACK], "iiO", tool, helper_events[index], Py_None);
+        Py_XDECREF(value);
+        PyErr_Clear();
+        Py_CLEAR(helper_codes[index]);
+    }
+    helper_count = 0;
     /* 3.12 free_tool_id does not unregister callbacks or local events. */
     PyObject *value = PyObject_CallFunction(monitor[OTELC_MONITOR_CALLBACK], "iiO", tool, 1, Py_None);
     Py_XDECREF(value);
@@ -263,6 +285,64 @@ failed:
     (void)failure(saved);
 }
 
+static int publish_root(PyObject *code, const char *path, uint64_t sequence,
+                        uint64_t loader, unsigned flags, int optimize, unsigned route) {
+    size_t length = strlen(path);
+    if (root_count == CODE_LIMIT || length + 1 > OTELC_PY_JOURNAL_LIMIT - root_path_bytes) return -1;
+    char *retained = strdup(path);
+    if (!retained) return -1;
+    PyObject *payload = otelc_py_native_encode(code);
+    if (!payload) { free(retained); return -1; }
+    uint64_t fields[] = {root_count + 1, root_count + 1, loader, sequence, route,
+                         PY_VERSION_HEX, 2, flags, (uint64_t)optimize};
+    int result = otelc_py_journal_origin(5, path,
+        (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), fields, 9);
+    Py_DECREF(payload);
+    if (result) {
+        free(retained);
+        lost = 1; /* The raw writer already counted this failure. */
+        return -1;
+    }
+    size_t root = root_count++;
+    root_paths[root] = retained;
+    root_path_bytes += length + 1;
+    uint64_t edges[EDGE_LIMIT] = {0};
+    return catalogue(code, edges, 0, root);
+}
+
+int otelc_py_origin_module(PyObject *code, const char *path, uint64_t sequence,
+                            uint64_t loader, unsigned flags, int optimize) {
+    if (!ready || lost || !same_owner()) return -1;
+    PyObject *saved = PyErr_GetRaisedException();
+    PyObject *encoded = PyCode_Check(code) ? PyUnicode_EncodeFSDefault(((PyCodeObject *)code)->co_filename) : NULL;
+    int valid = encoded && sequence && loader && flags <= INT32_MAX && optimize >= 0 && optimize <= 2 &&
+        (size_t)PyBytes_GET_SIZE(encoded) == strlen(path) && !memcmp(PyBytes_AS_STRING(encoded), path, strlen(path)) &&
+        !otelc_py_origin_pins_ready() && own_tool();
+    Py_XDECREF(encoded);
+    if (!valid || publish_root(code, path, sequence, loader, flags, optimize, 2)) {
+        release_tool();
+        (void)failure(saved);
+        return -1;
+    }
+    PyErr_SetRaisedException(saved);
+    return 0;
+}
+
+int otelc_py_origin_local_callback(PyObject *code, int event, int events, PyObject *callback) {
+    if (!ready || lost || !same_owner() || !PyCode_Check(code) || !own_tool() || helper_count == 4) return -1;
+    PyObject *previous = PyObject_CallFunction(monitor[OTELC_MONITOR_CALLBACK], "iiO", tool, event, callback);
+    if (!previous) return -1;
+    int empty = previous == Py_None;
+    Py_DECREF(previous);
+    if (!empty || !own_tool()) return -1;
+    helper_codes[helper_count] = Py_NewRef(code);
+    helper_events[helper_count++] = event;
+    PyObject *result = PyObject_CallFunction(monitor[OTELC_MONITOR_LOCAL], "iOi", tool, code, events);
+    if (!result) return -1;
+    Py_DECREF(result);
+    return own_tool() ? 0 : -1;
+}
+
 static int audit(const char *event, PyObject *arguments, void *unused) {
     (void)unused;
     if (strcmp(event, "exec") || !ready || lost || consumed || busy || !input_sequence ||
@@ -276,20 +356,9 @@ static int audit(const char *event, PyObject *arguments, void *unused) {
     if (!path || (size_t)PyBytes_GET_SIZE(path) != strlen(input_path) ||
             memcmp(PyBytes_AS_STRING(path), input_path, strlen(input_path)) ||
             _Py_GetConfig()->optimization_level != optimization || otelc_py_origin_pins_ready() || !own_tool()) goto failed;
-    PyObject *payload = otelc_py_native_encode(code);
-    if (!payload) goto failed;
     /* The checked native file path initialises compiler input flags to zero;
        future bits merged by compilation belong to the returned descriptor. */
-    uint64_t fields[] = {1, 1, 0, input_sequence, 1, PY_VERSION_HEX, 2, 0, (uint64_t)optimization};
-    int result = otelc_py_journal_origin(5, input_path,
-        (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), fields, 9);
-    Py_DECREF(payload);
-    if (result) {
-        lost = 1; /* The raw writer already counted this failure. */
-        goto failed;
-    }
-    uint64_t edges[EDGE_LIMIT] = {0};
-    if (catalogue(code, edges, 0)) goto failed;
+    if (publish_root(code, input_path, input_sequence, 0, 0, optimization, 1)) goto failed;
     consumed = 1;
     busy = 0;
     Py_DECREF(path);
@@ -315,6 +384,15 @@ int otelc_py_origin_entry_install(void) { return 0; }
 int otelc_py_origin_entry_ready(int optimization) { (void)optimization; return -1; }
 int otelc_py_origin_entry_active(void) { return 0; }
 void otelc_py_origin_entry_cancel(void) { }
+int otelc_py_origin_module(PyObject *code, const char *path, uint64_t sequence,
+                            uint64_t loader, unsigned flags, int optimization) {
+    (void)code; (void)path; (void)sequence; (void)loader; (void)flags; (void)optimization;
+    return -1;
+}
+int otelc_py_origin_local_callback(PyObject *code, int event, int events, PyObject *callback) {
+    (void)code; (void)event; (void)events; (void)callback;
+    return -1;
+}
 void otelc_py_origin_entry_read(const char *path, const unsigned char *bytes,
                                size_t length, uint64_t sequence) {
     (void)path; (void)bytes; (void)length; (void)sequence;

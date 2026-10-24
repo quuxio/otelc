@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "OriginChain.c"
+#include "OriginLoader.h"
 
 #if OTELC_ORIGIN_CHAIN_AVAILABLE
 typedef union {
@@ -62,6 +63,11 @@ int main(void) {
             otelc_py_origin_entry_active()) return 1;
     otelc_py_origin_entry_read(NULL, NULL, 0, 0);
     otelc_py_origin_entry_cancel();
+    if (otelc_py_origin_module(NULL, NULL, 0, 0, 0, 0) != -1 ||
+            otelc_py_origin_local_callback(NULL, 0, 0, NULL) != -1 ||
+            otelc_py_origin_loader_ready() != -1 || otelc_py_origin_loader_active() ||
+            otelc_py_origin_loader_start(NULL) || otelc_py_origin_loader_read(NULL, NULL, 0)) return 2;
+    otelc_py_origin_loader_cancel();
     puts("unavailable");
     return 0;
 }

@@ -3,6 +3,7 @@
 #include <Python.h>
 #include "InputJournal.h"
 #include "FileIOCapture.h"
+#include "OriginLoader.h"
 
 #include <limits.h>
 #include <string.h>
@@ -178,8 +179,18 @@ static PyObject *file_read(PyObject *method, PyObject *const *arguments,
     }
     if (capture) {
         if (payload && PyBytes_CheckExact(payload)) {
-            (void)otelc_py_journal_import(PyBytes_AS_STRING(path),
-                (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), &info);
+            if (otelc_py_origin_loader_active()) {
+                uint64_t sequence = 0;
+                (void)otelc_py_journal_import_event(PyBytes_AS_STRING(path),
+                    (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), &info, &sequence);
+                if (otelc_py_origin_loader_read(path, payload, sequence)) {
+                    Py_DECREF(path); Py_DECREF(payload);
+                    return NULL;
+                }
+            } else {
+                (void)otelc_py_journal_import(PyBytes_AS_STRING(path),
+                    (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), &info);
+            }
         } else otelc_py_journal_capture_failed();
     }
     Py_XDECREF(path);

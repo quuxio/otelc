@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <Python.h>
 
 /* The driver owns one interpreter lifetime. Normal journal-1 launches never
    install this explicit, SDK-independent source-entry observer. */
@@ -12,6 +13,10 @@ int otelc_py_origin_entry_active(void);
 void otelc_py_origin_entry_cancel(void);
 void otelc_py_origin_entry_read(const char *path, const unsigned char *bytes,
                                size_t length, uint64_t sequence);
+/* Shared private catalogue and local monitor for checked loader transactions. */
+int otelc_py_origin_module(PyObject *code, const char *path, uint64_t sequence,
+                            uint64_t loader, unsigned flags, int optimization);
+int otelc_py_origin_local_callback(PyObject *code, int event, int events, PyObject *callback);
 
 int otelc_py_origin_chain_ready(void);
 int otelc_py_origin_chain_matches(void);

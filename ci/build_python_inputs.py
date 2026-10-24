@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'InputJournal.h',
            'NativeMain.c', 'NativeEncoder.c', 'NativeEncoder.h',
            'FileIOCapture.c', 'FileIOCapture.h', 'OriginPins.c', 'OriginPins.h',
-           'OriginChain.c', 'OriginEntry.c', 'OriginEntry.h')
+           'OriginChain.c', 'OriginEntry.c', 'OriginEntry.h', 'OriginLoader.c', 'OriginLoader.h')
 
 
 def digest(path: Path) -> dict[str, str]:
@@ -161,7 +161,7 @@ def build(directory: Path | None = None, *, coverage: bool = False, origin_entry
                      str(sources / 'EntryCapture.c'), str(sources / 'ImportCapture.c'),
                      str(sources / 'InputJournal.c'), str(sources / 'NativeEncoder.c'),
                      str(sources / 'FileIOCapture.c'), str(sources / 'OriginPins.c'),
-                     str(sources / 'OriginChain.c'), str(sources / 'OriginEntry.c'),
+                     str(sources / 'OriginChain.c'), str(sources / 'OriginEntry.c'), str(sources / 'OriginLoader.c'),
                      '-I', str(candidate),
                      '-o', str(candidate / library), *options],
                     [selected, str(sources / 'NativeMain.c'), str(candidate / library),

@@ -13,7 +13,8 @@ from ci import build_python_inputs as tooling
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE_SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'NativeMain.c',
-                  'NativeEncoder.c', 'FileIOCapture.c', 'OriginPins.c', 'OriginChain.c', 'OriginEntry.c')
+                  'NativeEncoder.c', 'FileIOCapture.c', 'OriginPins.c', 'OriginChain.c', 'OriginEntry.c',
+                  'OriginLoader.c')
 
 
 def export_command(llvm: Path, objects: list[Path], profile: Path, architecture: str) -> list[str]:
@@ -57,7 +58,7 @@ def check() -> dict:
         subprocess.run([sys.executable, '-m', 'unittest', 'test_python_native_inputs',
                         'test_python_import_inputs', 'test_python_code_inputs', 'test_python_native_encoder',
                         'test_python_origin_writer', 'test_python_fileio_inputs', 'test_python_origin_pins',
-                        'test_python_entry_origins', '-v'],
+                        'test_python_entry_origins', 'test_python_loader_origins', '-v'],
                        cwd=ROOT, env=environment, check=True)
         profiles = list(directory.glob('*.profraw'))
         if not profiles:

@@ -15,5 +15,7 @@ enum otelc_py_monitor_method {
 };
 int otelc_py_origin_monitor_enable(void);
 PyObject *otelc_py_origin_monitor_value(unsigned index);
+PyObject *otelc_py_origin_helper_value(unsigned index);
+PyObject *otelc_py_origin_loader_type(void);
 
 #endif
