@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -31,7 +32,7 @@ type Options struct {
 	MaxActive  int
 	MaxLive    int
 	Collecting func() bool
-	Parent     func() trace.Span
+	Parent     func(context.Context) context.Context
 	Detach     func(trace.Span) bool
 	Boundaries []float64
 }
@@ -170,13 +171,11 @@ func New(meter metric.Meter, tracer trace.Tracer, options Options) (*Recorder, e
 }
 
 func (p *Recorder) parent() context.Context {
-	ctx := context.Background()
-	if parent := p.options.Parent(); parent != nil {
-		// The API no-op tracer may return an existing non-recording parent
-		// directly. Never give it an application-owned span to end or mutate.
-		ctx = trace.ContextWithSpanContext(ctx, parent.SpanContext())
-	}
-	return ctx
+	parent := p.options.Parent(context.Background())
+	// Never pass an application-owned span to a no-op tracer which could
+	// return it directly. Keep only immutable telemetry, with no app values.
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.SpanContextFromContext(parent))
+	return baggage.ContextWithBaggage(ctx, baggage.FromContext(parent))
 }
 
 // Invocation is created by generated entry code and completed by a defer.

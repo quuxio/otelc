@@ -1,6 +1,7 @@
 package httptrace
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ func TestReturnedRequestContextDoesNotSuppressTheNextClientOperation(t *testing.
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	defer func() { _ = provider.Shutdown(t.Context()) }()
 	// This ordinary component provider has no implicit compiler context to detach.
-	value, err := New(provider, noop.NewMeterProvider(), func() trace.Span { return nil }, func(trace.Span) bool { return false })
+	value, err := New(provider, noop.NewMeterProvider(), func(ctx context.Context) context.Context { return ctx }, func(trace.Span) bool { return false })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -141,7 +141,7 @@ class PreparedGoTests(unittest.TestCase):
         path = self.build / 'build.json'
         original = path.read_bytes()
         try:
-            for field, replacement in (('schema_version', 2),
+            for field, replacement in (('schema_version', 2), ('schema_version', 3),
                     ('runtime_protocols', {'config': 1, 'health': 3}),
                     ('runtime_protocols', {'config': True, 'health': 4})):
                 changed = json.loads(original)
@@ -149,7 +149,7 @@ class PreparedGoTests(unittest.TestCase):
                 path.write_text(json.dumps(changed))
                 directory = self.runtime(field + str(replacement))
                 with patch('subprocess.Popen', side_effect=AssertionError('no process may start')):
-                    with self.assertRaisesRegex(ValueError, 'build schema3'):
+                    with self.assertRaisesRegex(ValueError, 'build schema4'):
                         prepared.prepare(self.current, directory, build_directory=self.build)
                 self.assertFalse(directory.exists())
         finally:

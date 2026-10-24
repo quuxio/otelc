@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -149,7 +150,7 @@ func TestOutputExclusivityAtomicHealthAndInvalidPaths(t *testing.T) {
 	if err := privateDirectory(alias); err == nil {
 		t.Fatal("directory symlink accepted")
 	}
-	if _, err := New(configuration("http://127.0.0.1:1"), directory, func() trace.Span { return nil }, func(trace.Span) bool { return true }); err == nil {
+	if _, err := New(configuration("http://127.0.0.1:1"), directory, func(ctx context.Context) context.Context { return ctx }, func(trace.Span) bool { return true }); err == nil {
 		t.Fatal("existing runtime output accepted")
 	}
 }

@@ -90,9 +90,9 @@ def allocate(source: bytes, rows: list[dict[str, Any]], prefix: str) -> bytes:
 def runtime_factory(prefix: str, selection_sha256: str, http: bool) -> str:
     """Use one initializer body for direct helpers and eager HTTP bootstrap."""
     configure = (f' if err:={prefix}httptrace.Configure(value.TracerProvider(),value.Metrics.Provider,'
-                 f'{prefix}official.GetSpanFromGLS,{prefix}official.DetachSpanFromGLS);err!=nil{{panic(err)}}\n') if http else ''
+                 f'{prefix}official.ContextWithImplicitTelemetry,{prefix}official.DetachSpanFromGLS);err!=nil{{panic(err)}}\n') if http else ''
     return f'''var {prefix}Runtime = func()*{prefix}owned.Runtime {{
- value,err:={prefix}owned.FromEnvironment({prefix}official.GetSpanFromGLS,{prefix}official.DetachSpanFromGLS)
+ value,err:={prefix}owned.FromEnvironment({prefix}official.ContextWithImplicitTelemetry,{prefix}official.DetachSpanFromGLS)
  if err!=nil{{panic(err)}}
  if value.Config.SelectionSHA256!={json.dumps(selection_sha256)}{{panic("Go runtime differs from compiled selection")}}
 {configure}\
@@ -276,7 +276,7 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
              '-mod=readonly', '-o', str(instrumented), target], private)
     if inputs(root) != original or inputs(sdk) != sdk_inputs:
         raise ValueError('Go original application or private SDK changed during compilation')
-    receipt = {'schema_version': 3, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
+    receipt = {'schema_version': 4, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
                'runtime_protocols': {'config': 2, 'health': 4},
                'selection': selection, 'inputs': original, 'sdk_inputs': sdk_inputs,
                'launch_inputs': {name: original[name] for name in

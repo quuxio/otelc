@@ -27,7 +27,7 @@ import (
  "io.quux.otelc/go/probe"
 )
 var __otelcOwned=func()*owned.Runtime{
- r,err:=owned.FromEnvironment(official.GetSpanFromGLS,official.DetachSpanFromGLS)
+ r,err:=owned.FromEnvironment(official.ContextWithImplicitTelemetry,official.DetachSpanFromGLS)
  if err!=nil{panic(err)};return r
 }()
 var __otelcProbes=__otelcOwned.Probes

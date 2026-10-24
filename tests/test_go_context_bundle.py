@@ -16,6 +16,15 @@ import (
  "sync/atomic"
  "go.opentelemetry.io/otel/trace"
 )
+type spanWrapper struct {
+ span trace.Span
+ prev *spanWrapper
+ ended *atomic.Bool
+}
+func (tc *traceContext) add(span trace.Span) {
+ wrapper := &spanWrapper{span, tc.sw, stateForSpan(span)}
+ _ = wrapper
+}
 func (tc *traceContext) Clone() interface{} {
  last := tc.tail()
  if last == nil { return &traceContext{nil, 0, nil} }
@@ -77,7 +86,7 @@ class GoContextBundleTests(unittest.TestCase):
         self.assertIs(value['tasks'], True)
         source = (self.output / bundle.TRACE_OUTPUT / 'otel_trace_context.go').read_bytes()
         self.assertIn(b'trace.SpanFromContext(trace.ContextWithSpanContext(context.Background(), last.SpanContext()))', source)
-        self.assertIn(b'sw := &spanWrapper{inherited, nil, &atomic.Bool{}}', source)
+        self.assertIn(b'sw := &spanWrapper{inherited, nil, &atomic.Bool{}, tc.sw.telemetry}', source)
         self.assertNotIn(b'tc.sw.ended', source)
         self.assertEqual((self.output / 'instrumentation/runtime/otelc.yaml').read_bytes(), RULES)
         self.assertNotIn('pkg/runtime/setup.go', value['files'])
@@ -89,7 +98,7 @@ class GoContextBundleTests(unittest.TestCase):
         self.assertEqual(value['detached_spans'], 'explicit-non-ending-unlink-v1')
         self.assertIn(b'func DetachSpanFromGLS', (self.output / 'pkg/runtime/trace_context.go').read_bytes())
         self.assertEqual((self.output / bundle.TRACE_OUTPUT / 'otelc_detached_span.go').read_bytes(), bundle.DETACH_SOURCE)
-        self.assertTrue((self.output / bundle.TRACE_OUTPUT / 'otelc.yaml').read_bytes().endswith(bundle.DETACH_RULE))
+        self.assertTrue((self.output / bundle.TRACE_OUTPUT / 'otelc.yaml').read_bytes().find(bundle.DETACH_RULE) >= 0)
         self.assertFalse((self.root / 'outside.go').exists())
         self.assertEqual(bundle.verify(self.bundle, self.output, tasks=True), value)
         self.assertEqual(self.bundle.read_bytes(), before)
@@ -100,7 +109,8 @@ class GoContextBundleTests(unittest.TestCase):
     def test_disabled_tasks_keep_local_span_hooks_and_original_clone(self) -> None:
         value = bundle.prepare(self.bundle, self.output, tasks=False)
         self.assertIs(value['tasks'], False)
-        self.assertEqual((self.output / bundle.TRACE_OUTPUT / 'otel_trace_context.go').read_bytes(), CLONE)
+        self.assertIn(b'&spanWrapper{last, nil, tc.sw.ended, tc.sw.telemetry}',
+                      (self.output / bundle.TRACE_OUTPUT / 'otel_trace_context.go').read_bytes())
         rules = (self.output / 'instrumentation/runtime/otelc.yaml').read_bytes()
         self.assertIn(b'add_gls_field:', rules)
         self.assertIn(b'gls_linker:', rules)

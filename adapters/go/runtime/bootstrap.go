@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"os"
 	"sync"
@@ -20,11 +21,11 @@ var ownedRuntime loader
 // FromEnvironment is used only by private compiler-generated package helpers.
 // The first import initialises one SDK; subsequent instrumented packages share
 // its providers/control endpoint rather than install a provider per package.
-func FromEnvironment(parent func() trace.Span, detach func(trace.Span) bool) (*Runtime, error) {
+func FromEnvironment(parent func(context.Context) context.Context, detach func(trace.Span) bool) (*Runtime, error) {
 	return ownedRuntime.get(os.Getenv("OTELC_GO_RUNTIME"), os.Getenv("OTELC_GO_CONFIG_SHA256"), parent, detach)
 }
 
-func (l *loader) get(directory, digest string, parent func() trace.Span, detach func(trace.Span) bool) (*Runtime, error) {
+func (l *loader) get(directory, digest string, parent func(context.Context) context.Context, detach func(trace.Span) bool) (*Runtime, error) {
 	l.once.Do(func() {
 		l.directory, l.digest = directory, digest
 		var config Config

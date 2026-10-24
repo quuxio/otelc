@@ -26,7 +26,7 @@ func fixture(t *testing.T) (*Instrumentation, *tracetest.InMemoryExporter, *[]tr
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithoutPanicRecording())
 	t.Cleanup(func() { provider.Shutdown(context.Background()); configured.Store(nil) })
 	detached := []trace.SpanContext{}
-	value, err := New(provider, metricnoop.NewMeterProvider(), func() trace.Span { return nil },
+	value, err := New(provider, metricnoop.NewMeterProvider(), func(ctx context.Context) context.Context { return ctx },
 		func(span trace.Span) bool { detached = append(detached, span.SpanContext()); return true })
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +225,7 @@ func TestNoopProviderNeverDetachesExistingParentAndExplicitParentIsPropagated(t 
 	value, _, detached := fixture(t)
 	_, parent := value.traces.Tracer("test").Start(context.Background(), "parent")
 	defer parent.End()
-	value.parent = func() trace.Span { return parent }
+	value.parent = func(ctx context.Context) context.Context { return trace.ContextWithSpan(ctx, parent) }
 	for _, provider := range []trace.TracerProvider{noop.NewTracerProvider(), value.traces} {
 		value.traces = provider
 		result, err := value.RoundTrip(roundTripFunc(func(r *http.Request) (*http.Response, error) {

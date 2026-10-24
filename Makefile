@@ -89,6 +89,7 @@ test: java-build node-observer node-http go-upstream
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_journal.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_execution.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_context_bundle.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_telemetry_bundle.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_health.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_runtime_config.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_source.py' --fail-under=80

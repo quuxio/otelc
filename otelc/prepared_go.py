@@ -31,7 +31,7 @@ REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'poli
 def protocols() -> dict[str, Any]:
     """Describe formats without compiling or claiming provider qualification."""
     return {'schema_version': 1, 'kind': 'otelc.go.protocols', 'profile': PROFILE,
-            'build': 3, 'config': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
+            'build': 4, 'config': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
             'execution': 1, 'health': 4, 'embedded_sdk': True, 'source_complete': False}
 
 
@@ -77,10 +77,10 @@ def verify_build(directory: Path, policy: Policy) -> dict[str, Any]:
     from otelc.python_sdk_io import decode
     value = decode(raw)
     if (set(value) != BUILD_FIELDS or type(value['schema_version']) is not int
-            or value['schema_version'] != 3 or value['kind'] != 'otelc.go-source-build'
+            or value['schema_version'] != 4 or value['kind'] != 'otelc.go-source-build'
             or not same(value['runtime_protocols'], {'config': 2, 'health': 4})
             or value['source_complete'] is not False):
-        raise ValueError('Go prepared profile requires build schema3 with config2/health4')
+        raise ValueError('Go prepared profile requires build schema4 with config2/health4')
     root = Path(value['root'])
     if not root.is_absolute() or root.resolve(strict=True) != root:
         raise ValueError('Go build original root is not canonical')

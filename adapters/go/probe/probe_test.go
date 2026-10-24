@@ -38,7 +38,7 @@ func newHarness(t *testing.T, collection bool, change func(*Options)) *harness {
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(tp), sdktrace.WithoutPanicRecording())
 	options := Options{Functions: []string{"selected", "child"}, Lifetimes: []Lifetime{{"Object", true}, {"Plain", false}},
 		MaxActive: 64, MaxLive: 64, Collecting: c.CollectionEnabled,
-		Parent: func() trace.Span { return nil }, Detach: func(trace.Span) bool { return true }, Boundaries: []float64{.001, .01}}
+		Parent: func(ctx context.Context) context.Context { return ctx }, Detach: func(trace.Span) bool { return true }, Boundaries: []float64{.001, .01}}
 	if change != nil {
 		change(&options)
 	}
@@ -242,7 +242,7 @@ func TestConcurrentStartEndAndCloseAreBounded(t *testing.T) {
 
 func TestValidationAndCopiedBindings(t *testing.T) {
 	base := Options{Functions: []string{"one"}, Lifetimes: []Lifetime{{"T", true}}, MaxActive: 1, MaxLive: 1,
-		Collecting: func() bool { return true }, Parent: func() trace.Span { return nil }, Detach: func(trace.Span) bool { return true }}
+		Collecting: func() bool { return true }, Parent: func(ctx context.Context) context.Context { return ctx }, Detach: func(trace.Span) bool { return true }}
 	meter := metricnoop.NewMeterProvider().Meter("fixture")
 	tracer := tracenoop.NewTracerProvider().Tracer("fixture")
 	for _, change := range []func(*Options){func(o *Options) { o.MaxActive = 0 }, func(o *Options) { o.MaxLive = 0 }, func(o *Options) { o.Collecting = nil }, func(o *Options) { o.Parent = nil }, func(o *Options) { o.Detach = nil }, func(o *Options) { o.Functions = []string{""} }, func(o *Options) { o.Functions = []string{"x", "x"} }, func(o *Options) { o.Lifetimes = []Lifetime{{"", false}} }, func(o *Options) { o.Lifetimes = []Lifetime{{"T", true}, {"T", true}} }} {
@@ -307,7 +307,7 @@ func (m *errMeter) Int64ObservableGauge(name string, opts ...metric.Int64Observa
 func TestInstrumentConstructionFailure(t *testing.T) {
 	for n := 1; n <= 9; n++ {
 		m := &errMeter{Meter: metricnoop.NewMeterProvider().Meter("fixture"), target: n}
-		_, err := New(m, tracenoop.NewTracerProvider().Tracer("fixture"), Options{MaxActive: 1, MaxLive: 1, Collecting: func() bool { return true }, Parent: func() trace.Span { return nil }, Detach: func(trace.Span) bool { return true }})
+		_, err := New(m, tracenoop.NewTracerProvider().Tracer("fixture"), Options{MaxActive: 1, MaxLive: 1, Collecting: func() bool { return true }, Parent: func(ctx context.Context) context.Context { return ctx }, Detach: func(trace.Span) bool { return true }})
 		if err != context.Canceled {
 			t.Fatalf("instrument%d err%v", n, err)
 		}
@@ -317,7 +317,7 @@ func TestInstrumentConstructionFailure(t *testing.T) {
 func TestInvalidHistogramBoundariesFailBeforeSDKCalls(t *testing.T) {
 	for _, boundaries := range [][]float64{{0}, {-1}, {1, 1}, {2, 1}, {math.NaN()}, {math.Inf(1)}} {
 		o := Options{MaxActive: 1, MaxLive: 1, Collecting: func() bool { return true },
-			Parent: func() trace.Span { return nil }, Detach: func(trace.Span) bool { return true }, Boundaries: boundaries}
+			Parent: func(ctx context.Context) context.Context { return ctx }, Detach: func(trace.Span) bool { return true }, Boundaries: boundaries}
 		if _, err := New(metricnoop.NewMeterProvider().Meter("fixture"), tracenoop.NewTracerProvider().Tracer("fixture"), o); err == nil {
 			t.Fatalf("invalid histogram accepted: %v", boundaries)
 		}
@@ -340,7 +340,7 @@ func TestTracingOffDoesNotEndOrMutateApplicationParent(t *testing.T) {
 		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled, Remote: true})}
 	p, err := New(metricnoop.NewMeterProvider().Meter("fixture"), tracenoop.NewTracerProvider().Tracer("fixture"), Options{
 		Functions: []string{"selected"}, MaxActive: 1, MaxLive: 1, Collecting: func() bool { return false },
-		Parent: func() trace.Span { return parent }, Detach: func(trace.Span) bool { return true }})
+		Parent: func(ctx context.Context) context.Context { return trace.ContextWithSpan(ctx, parent) }, Detach: func(trace.Span) bool { return true }})
 	if err != nil {
 		t.Fatal(err)
 	}

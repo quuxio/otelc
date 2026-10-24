@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,7 +25,7 @@ func TestEnvironmentBootstrapSharesOneOwnedSDKAndPinsBinding(t *testing.T) {
 	digest := configFile(t, directory, data)
 	t.Setenv("OTELC_GO_RUNTIME", directory)
 	t.Setenv("OTELC_GO_CONFIG_SHA256", digest)
-	parent := func() trace.Span { return nil }
+	parent := func(ctx context.Context) context.Context { return ctx }
 	detach := func(trace.Span) bool { return true }
 	first, err := FromEnvironment(parent, detach)
 	if err != nil {

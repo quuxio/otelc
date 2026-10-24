@@ -96,7 +96,7 @@ func configuration(endpoint string) Config {
 
 func startRuntime(t *testing.T, c Config) *Runtime {
 	t.Helper()
-	r, err := New(c, privateTemp(t), func() trace.Span { return nil }, func(trace.Span) bool { return true })
+	r, err := New(c, privateTemp(t), func(ctx context.Context) context.Context { return ctx }, func(trace.Span) bool { return true })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestRuntimeConfigurationFailureAndAmbientSDKRefusal(t *testing.T) {
 	for _, change := range []func(*Config){func(c *Config) { c.SchemaVersion = 1 }, func(c *Config) { c.ServiceName = "" }, func(c *Config) { c.ServiceName = "bad\n" }, func(c *Config) { c.PolicySHA256 = "bad" }, func(c *Config) { c.SampleRatio = 2 }, func(c *Config) { c.IntervalMS = 0 }, func(c *Config) { c.MaxLive = 0 }, func(c *Config) { c.Endpoint = "invalid" }} {
 		cfg := configuration("http://127.0.0.1:1")
 		change(&cfg)
-		if r, err := New(cfg, privateTemp(t), func() trace.Span { return nil }, func(trace.Span) bool { return true }); err == nil {
+		if r, err := New(cfg, privateTemp(t), func(ctx context.Context) context.Context { return ctx }, func(trace.Span) bool { return true }); err == nil {
 			r.Close()
 			t.Fatal("invalid config accepted")
 		}
@@ -306,7 +306,7 @@ func TestRuntimeConfigurationFailureAndAmbientSDKRefusal(t *testing.T) {
 	if RejectAmbient() == nil {
 		t.Fatal("ambient SDK options accepted")
 	}
-	if _, err := New(configuration("http://127.0.0.1:1"), privateTemp(t), func() trace.Span { return nil }, func(trace.Span) bool { return true }); err == nil {
+	if _, err := New(configuration("http://127.0.0.1:1"), privateTemp(t), func(ctx context.Context) context.Context { return ctx }, func(trace.Span) bool { return true }); err == nil {
 		t.Fatal("created SDK with ambient options")
 	}
 }

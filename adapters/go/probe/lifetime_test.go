@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"runtime"
 	"testing"
 	"time"
@@ -187,7 +188,7 @@ func TestPanickingReleaseWithNilErrorReturnDoesNotCompleteResource(t *testing.T)
 func TestWeakObserverWorksWithTracingDisabled(t *testing.T) {
 	p, err := New(noop.NewMeterProvider().Meter("fixture"), tracenoop.NewTracerProvider().Tracer("fixture"),
 		Options{Lifetimes: []Lifetime{{"Object", true}}, MaxActive: 1, MaxLive: 1,
-			Collecting: func() bool { return true }, Parent: func() trace.Span { return nil },
+			Collecting: func() bool { return true }, Parent: func(ctx context.Context) context.Context { return ctx },
 			Detach: func(trace.Span) bool { t.Fatal("no-op span required detachment"); return false }})
 	if err != nil {
 		t.Fatal(err)

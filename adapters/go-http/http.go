@@ -28,12 +28,12 @@ func consumeNativeEntry(ctx context.Context, key any) bool {
 type Instrumentation struct {
 	traces trace.TracerProvider
 	meters metric.MeterProvider
-	parent func() trace.Span
+	parent func(context.Context) context.Context
 	detach func(trace.Span) bool
 }
 
 // New never replaces an application's global provider or propagator.
-func New(traces trace.TracerProvider, meters metric.MeterProvider, parent func() trace.Span,
+func New(traces trace.TracerProvider, meters metric.MeterProvider, parent func(context.Context) context.Context,
 	detach func(trace.Span) bool) (*Instrumentation, error) {
 	if traces == nil || meters == nil || parent == nil || detach == nil {
 		return nil, errors.New("HTTP instrumentation requires owned providers and context callbacks")
@@ -77,11 +77,9 @@ func (i *Instrumentation) RoundTrip(base http.RoundTripper, request *http.Reques
 		return base.RoundTrip(request)
 	}
 	var started trace.Span
-	parent := i.parent()
 	input := trace.SpanFromContext(request.Context()).SpanContext()
-	if !input.IsValid() && parent != nil && parent.SpanContext().IsValid() {
-		request = request.WithContext(trace.ContextWithSpanContext(request.Context(), parent.SpanContext()))
-	}
+	request = request.WithContext(i.parent(request.Context()))
+	parent := trace.SpanContextFromContext(request.Context())
 	provider := captureProvider{TracerProvider: i.traces, started: func(span trace.Span) { started = span }}
 	defer func() {
 		// A noop tracer may return the caller's existing span. Detach only a
@@ -89,7 +87,7 @@ func (i *Instrumentation) RoundTrip(base http.RoundTripper, request *http.Reques
 		if started != nil {
 			value := started.SpanContext()
 			if value.IsValid() && !sameSpanContext(value, input) &&
-				(parent == nil || !sameSpanContext(value, parent.SpanContext())) {
+				!sameSpanContext(value, parent) {
 				i.detach(started)
 			}
 		}
@@ -127,7 +125,7 @@ func (i *Instrumentation) ServeHTTP(base http.Handler, writer http.ResponseWrite
 var configured atomic.Pointer[Instrumentation]
 
 // Configure is called only from private generated helpers after SDK creation.
-func Configure(traces trace.TracerProvider, meters metric.MeterProvider, parent func() trace.Span,
+func Configure(traces trace.TracerProvider, meters metric.MeterProvider, parent func(context.Context) context.Context,
 	detach func(trace.Span) bool) error {
 	value, err := New(traces, meters, parent, detach)
 	if err == nil {

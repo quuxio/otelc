@@ -66,10 +66,10 @@ func (c Config) validate() error {
 			return errors.New("invalid Go SDK timing budget")
 		}
 	}
-	return c.probeOptions(func() trace.Span { return nil }, func(trace.Span) bool { return true }).Validate()
+	return c.probeOptions(func(ctx context.Context) context.Context { return ctx }, func(trace.Span) bool { return true }).Validate()
 }
 
-func (c Config) probeOptions(parent func() trace.Span, detach func(trace.Span) bool) probe.Options {
+func (c Config) probeOptions(parent func(context.Context) context.Context, detach func(trace.Span) bool) probe.Options {
 	return probe.Options{Functions: c.Functions, Lifetimes: c.Lifetimes, MaxActive: 512, MaxLive: c.MaxLive,
 		Collecting: func() bool { return false }, Parent: parent, Detach: detach, Boundaries: c.Boundaries}
 }
@@ -115,7 +115,7 @@ func RejectAmbient() error {
 
 // New starts an owned pipeline in an existing private launch directory. Context
 // callbacks come from the pinned official compiler bridge, not application code.
-func New(config Config, directory string, parent func() trace.Span, detach func(trace.Span) bool) (*Runtime, error) {
+func New(config Config, directory string, parent func(context.Context) context.Context, detach func(trace.Span) bool) (*Runtime, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
@@ -152,7 +152,7 @@ func New(config Config, directory string, parent func() trace.Span, detach func(
 	return r, nil
 }
 
-func (r *Runtime) attach(parent func() trace.Span, detach func(trace.Span) bool) error {
+func (r *Runtime) attach(parent func(context.Context) context.Context, detach func(trace.Span) bool) error {
 	c := r.Config
 	res := resource.NewSchemaless(attribute.String("service.name", c.ServiceName),
 		attribute.String("telemetry.sdk.language", "go"), attribute.String("telemetry.sdk.name", "opentelemetry"),

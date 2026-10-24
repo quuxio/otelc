@@ -8,6 +8,8 @@ from pathlib import Path
 import tarfile
 from typing import Any
 
+from otelc import go_telemetry_bundle
+
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_MODULE = 'go.opentelemetry.io/otelc'
 UPSTREAM_VERSION = 'v1.0.1'
@@ -160,13 +162,15 @@ def _generated(original: dict[str, bytes], tasks: bool) -> dict[str, bytes]:
             _unnamedRetVal0.otel_baggage_container = nil;
           }()
 '''
+    go_telemetry_bundle.extend(result)
     result['pkg/runtime/go.mod'] = BRIDGE_MODULE
     result['LICENSE.upstream'] = (ROOT / 'licenses/Apache-2.0-opentelemetry.txt').read_bytes()
     result['NOTICE.upstream'] = (
         'Selected context source from the OpenTelemetry Authors, Apache-2.0.\n'
         f'{UPSTREAM_MODULE}@{UPSTREAM_VERSION}, commit {UPSTREAM_COMMIT}.\n'
         'SDK/context storage and hooks are reused; SDK initialisation is excluded.\n'
-        'The generated Clone captures immutable inherited SpanContext when tasks are enabled.\n'
+        'The generated Clone captures immutable inherited span context and baggage when tasks are enabled.\n'
+        'Frames retain telemetry metadata only; explicit baggage clearing is preserved.\n'
         'The goroutine hook resets context without inheritance when tasks are disabled.\n'
         'The generated SDK extension can detach an owned lifetime span without ending it.\n'
     ).encode('ascii')
@@ -180,6 +184,7 @@ def _manifest(original: dict[str, bytes], generated: dict[str, bytes], tasks: bo
         'module_sum': MODULE_SUM, 'module_go_sum': MODULE_GO_SUM,
         'bundle_sha256': BUNDLE_SHA256, 'tasks': tasks,
         'detached_spans': 'explicit-non-ending-unlink-v1',
+        'telemetry_context': 'span-and-baggage-v1',
         'input_files': {name: digest(data) for name, data in original.items()},
         'files': {name: digest(data) for name, data in generated.items()},
         'scope': 'generated context hooks only; not Go adapter or provider admission',

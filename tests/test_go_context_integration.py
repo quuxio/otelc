@@ -24,6 +24,7 @@ import (
  "runtime"
  "sync"
  "time"
+ "go.opentelemetry.io/otel/baggage"
  "go.opentelemetry.io/otel/trace"
  sdk "go.opentelemetry.io/otel/sdk/trace"
  "go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -44,6 +45,7 @@ var __otelcProvider = func()*sdk.TracerProvider {
 type __otelcRow struct { Name,TraceID,SpanID,Parent string }
 var __otelcLock sync.Mutex
 var __otelcStarts=[]__otelcRow{}
+var __otelcBaggage=[]string{}
 var __otelcLives=[]trace.Span{}
 var __otelcDetached=[]bool{}
 func init() {
@@ -58,11 +60,12 @@ func init() {
  }
 }
 func __otelcStart(name string) func() {
- ctx:=context.Background()
- if parent:=official.GetSpanFromGLS();parent!=nil {ctx=trace.ContextWithSpan(ctx,parent)}
+ ctx:=official.ContextWithImplicitTelemetry(context.Background())
+ if name=="workload" {b,err:=baggage.Parse("tenant=parent");if err!=nil{panic(err)};ctx=baggage.ContextWithBaggage(ctx,b)}
  _,span:=__otelcProvider.Tracer("io.quux.otelc.go.context-fixture").Start(ctx,name)
  __otelcLock.Lock()
  __otelcStarts=append(__otelcStarts,__otelcRow{name,span.SpanContext().TraceID().String(),span.SpanContext().SpanID().String(),trace.SpanContextFromContext(ctx).SpanID().String()})
+ __otelcBaggage=append(__otelcBaggage,baggage.FromContext(ctx).String())
  __otelcLock.Unlock()
  if os.Getenv("OTELC_DETACHED_LIFETIME_PROBE")=="1" {
   _,life:=__otelcProvider.Tracer("io.quux.otelc.go.context-fixture.lifetime").Start(trace.ContextWithSpan(ctx,span),"lifetime:"+name)
@@ -82,7 +85,7 @@ func __otelcShutdown() {
  if err:=__otelcProvider.ForceFlush(context.Background());err!=nil {panic(err)}
  rows:=[]__otelcRow{}
  for _,span:=range __otelcExporter.GetSpans(){rows=append(rows,__otelcRow{span.Name,span.SpanContext.TraceID().String(),span.SpanContext.SpanID().String(),span.Parent.SpanID().String()})}
- data,err:=json.Marshal(struct{Spans,Starts []__otelcRow;Detached []bool}{rows,__otelcStarts,__otelcDetached});if err!=nil {panic(err)}
+ data,err:=json.Marshal(struct{Spans,Starts []__otelcRow;Detached []bool;Baggage []string}{rows,__otelcStarts,__otelcDetached,__otelcBaggage});if err!=nil {panic(err)}
  if err=os.WriteFile(os.Getenv("OTELC_CONTEXT_REPORT"),data,0600);err!=nil {panic(err)}
  if err=__otelcProvider.Shutdown(context.Background());err!=nil {panic(err)}
 }
@@ -225,6 +228,7 @@ import (
                     recorded = json.loads(report.read_bytes())
                     spans, starts = recorded['Spans'], recorded['Starts']
                     self.assertEqual(len(starts), 2)
+                    self.assertEqual(recorded['Baggage'], ['tenant=parent', 'tenant=parent' if tasks else ''])
                     self.assertEqual(recorded['Detached'], [True, True] if detached else [])
                     self.assertEqual(len(spans), 0 if unsampled else 4 if detached else 2)
                     by_name = {row['Name']: row for row in starts}

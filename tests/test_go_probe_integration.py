@@ -45,7 +45,7 @@ var __otelcProbes=func()*probe.Recorder {
  p,e:=probe.New(meter,__otelcTraces.Tracer(pipeline.Scope),probe.Options{
  Functions:[]string{"workload","child"},Lifetimes:[]probe.Lifetime{{Name:"Object",Resource:true}},
  MaxActive:128,MaxLive:128,Collecting:__otelcControls.CollectionEnabled,
- Parent:official.GetSpanFromGLS,Detach:official.DetachSpanFromGLS})
+ Parent:official.ContextWithImplicitTelemetry,Detach:official.DetachSpanFromGLS})
  if e!=nil{panic(e)};return p
 }()
 type __otelcLink struct{TraceID,SpanID string}
