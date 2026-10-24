@@ -57,6 +57,19 @@ public final class Observer {
     // Resolve only this return type. Reflecting a Method resolves unrelated declarations too.
     Class<?> returnType = MethodType.fromMethodDescriptorString(
         "()" + descriptor.substring(descriptor.indexOf(')') + 1), call.request().owner().getClassLoader()).returnType();
+    if (CompletionStage.class.isAssignableFrom(returnType) && result instanceof CompletionStage<?> stage) {
+      // A failed whenComplete-derived stage asks the JDK to format the original
+      // throwable. Resolve our discarded observer stage normally instead.
+      stage.handle((value, failure) -> {
+        try { INSTRUMENTER.end(call.context(), call.request(), null, failure); }
+        catch (Throwable ignored) {
+          // Keep the advice's failure boundary in asynchronous callbacks too;
+          // a discarded failed stage can otherwise call application formatters.
+        }
+        return null;
+      });
+      return result;
+    }
     Object observed = AsyncOperationEndSupport.create(INSTRUMENTER, Void.class, returnType)
         .asyncEnd(call.context(), call.request(), result, error);
     // Stage completion callbacks are installed eagerly; the application keeps its original future.
