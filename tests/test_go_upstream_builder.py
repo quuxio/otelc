@@ -71,6 +71,22 @@ class GoUpstreamBuilderTests(unittest.TestCase):
         self.assertIn('require go.opentelemetry.io/otelc v1.0.1', (self.output / 'verify/go.mod').read_text())
         self.assertTrue(any(args[1:3] == ['mod', 'verify'] for args, _, _ in self.commands))
         self.assertEqual([env['GOTOOLCHAIN'] for _, _, env in self.commands], ['go1.27.3', *(['local'] * (len(self.commands) - 1))])
+        for _, _, env in self.commands[1:]:
+            self.assertEqual(env['PATH'].split(os.pathsep)[0], str(self.compiler.parent))
+            self.assertEqual(env['GOROOT'], str(self.compiler.parent.parent))
+
+    def test_nested_compiler_path_and_root_match_the_held_selected_executable(self) -> None:
+        tools = {'go': str(self.compiler), 'go_sha256': context.digest(self.compiler.read_bytes())}
+        with mock.patch.dict(os.environ, {'PATH': '/foreign/bin', 'GOROOT': '/foreign/root'}, clear=True):
+            env = tooling.compiler_environment(tools, self.output)
+        self.assertEqual(env['PATH'], str(self.compiler.parent) + os.pathsep + '/foreign/bin')
+        self.assertEqual(env['GOROOT'], str(self.compiler.parent.parent))
+        self.assertEqual(env['GOTOOLCHAIN'], 'local')
+        self.compiler.write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError, 'identity changed'):
+            tooling.compiler_environment(tools, self.output)
+        with self.assertRaisesRegex(ValueError, 'identity changed'):
+            tooling.compiler_environment({'go': 'relative/go', 'go_sha256': '0' * 64}, self.output)
 
     def test_wrong_compiler_platform_module_or_asset_refuses_before_install(self) -> None:
         for field, bad in (('GOVERSION', 'go1.27.2'), ('GOOS', 'darwin'), ('GOARCH', 'arm64')):

@@ -38,6 +38,70 @@ go 1.26.0
 
 require go.opentelemetry.io/otel/trace v1.47.0
 '''
+DETACH_BRIDGE = b'''
+// Generated otelc bridge: remove an owned lifetime span from implicit context
+// without ending it or changing its captured parent.
+var detachSpanFunc = func(trace.Span) bool { return false }
+
+func RegisterDetachSpanFunc(f func(trace.Span) bool) { detachSpanFunc = f }
+func DetachSpanFromGLS(span trace.Span) bool { return detachSpanFunc(span) }
+'''
+DETACH_RULE = b'''
+otelc_detached_lifetime_context:
+  target: go.opentelemetry.io/otel/sdk/trace
+  version: "v1.44.0"
+  do:
+    - add_file:
+        file: otelc_detached_span.go
+        path: "go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace"
+'''
+DETACH_SOURCE = b'''//go:build ignore
+
+// Generated otelc context extension; see NOTICE.upstream.
+package trace
+
+import (
+ "runtime"
+ _ "unsafe"
+ api "go.opentelemetry.io/otel/trace"
+)
+
+//go:linkname otelcRegisterDetachSpanFunc go.opentelemetry.io/otelc/pkg/runtime.RegisterDetachSpanFunc
+func otelcRegisterDetachSpanFunc(func(api.Span) bool)
+
+func init() { otelcRegisterDetachSpanFunc(otelcDetachSpan) }
+
+func otelcDetachSpan(span api.Span) bool {
+ if span == nil { return false }
+ sc := span.SpanContext()
+ if !sc.IsValid() { return false }
+ value := runtime.GetTraceContextFromGLS()
+ if value == nil { return false }
+ tc := value.(*traceContext)
+ for address := &tc.sw; *address != nil; address = &(*address).prev {
+  current := *address
+  other := current.span.SpanContext()
+  if sc.TraceID() == other.TraceID() && sc.SpanID() == other.SpanID() {
+   *address = current.prev
+   tc.n--
+   if current.prev == nil {
+    tc.lcs = nil
+    for remaining := tc.sw; remaining != nil; remaining = remaining.prev {
+     tc.lcs = remaining.span
+    }
+   }
+   // A detached span no longer needs implicit-propagation state. Retaining
+   // every open lifetime here would consume the shared SDK context budget.
+   // Remove the entry without marking the lifetime span or wrapper ended.
+   spanStates.Lock()
+   delete(spanStates.states, spanKey{sc.TraceID(), sc.SpanID()})
+   spanStates.Unlock()
+   return true
+  }
+ }
+ return false
+}
+'''
 
 
 def digest(value: bytes) -> str:
@@ -65,6 +129,9 @@ def _members(data: bytes) -> dict[str, bytes]:
 
 def _generated(original: dict[str, bytes], tasks: bool) -> dict[str, bytes]:
     result = {INPUTS[name]: data for name, data in original.items()}
+    result['pkg/runtime/trace_context.go'] += DETACH_BRIDGE
+    result[TRACE_OUTPUT + 'otelc.yaml'] += DETACH_RULE
+    result[TRACE_OUTPUT + 'otelc_detached_span.go'] = DETACH_SOURCE
     if tasks:
         path = TRACE_OUTPUT + 'otel_trace_context.go'
         old = b'sw := &spanWrapper{last, nil, tc.sw.ended}'
@@ -101,6 +168,7 @@ def _generated(original: dict[str, bytes], tasks: bool) -> dict[str, bytes]:
         'SDK/context storage and hooks are reused; SDK initialisation is excluded.\n'
         'The generated Clone captures immutable inherited SpanContext when tasks are enabled.\n'
         'The goroutine hook resets context without inheritance when tasks are disabled.\n'
+        'The generated SDK extension can detach an owned lifetime span without ending it.\n'
     ).encode('ascii')
     return result
 
@@ -111,6 +179,7 @@ def _manifest(original: dict[str, bytes], generated: dict[str, bytes], tasks: bo
         'upstream_version': UPSTREAM_VERSION, 'upstream_commit': UPSTREAM_COMMIT,
         'module_sum': MODULE_SUM, 'module_go_sum': MODULE_GO_SUM,
         'bundle_sha256': BUNDLE_SHA256, 'tasks': tasks,
+        'detached_spans': 'explicit-non-ending-unlink-v1',
         'input_files': {name: digest(data) for name, data in original.items()},
         'files': {name: digest(data) for name, data in generated.items()},
         'scope': 'generated context hooks only; not Go adapter or provider admission',

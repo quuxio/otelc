@@ -28,6 +28,17 @@ def environment(output: Path) -> dict[str, str]:
     return value
 
 
+def compiler_environment(toolchain: dict[str, Any], output: Path) -> dict[str, str]:
+    """Pin the upstream wrapper's nested `go` command as well as direct calls."""
+    compiler = Path(toolchain['go'])
+    if not compiler.is_absolute() or context.digest(compiler.read_bytes()) != toolchain['go_sha256']:
+        raise ValueError('selected Go compiler identity changed')
+    value = environment(output)
+    value.update(GOTOOLCHAIN='local', GOROOT=str(compiler.parent.parent),
+                 PATH=str(compiler.parent) + os.pathsep + value.get('PATH', ''))
+    return value
+
+
 def command(arguments: list[str], *, directory: Path, env: dict[str, str]) -> bytes:
     """Retain subprocess errors while using argv without a shell."""
     result = subprocess.run(arguments, cwd=directory, env=env, check=False,
@@ -52,7 +63,8 @@ def build(go: str, output: Path) -> dict[str, Any]:
             or observed.get('GOARCH') != observed.get('GOHOSTARCH')):
         raise ValueError('Go source profile requires native Go1.27.3')
     compiler = Path(observed['GOROOT']) / 'bin/go'
-    env['GOTOOLCHAIN'] = 'local'
+    env.update(GOTOOLCHAIN='local', GOROOT=str(compiler.parent.parent),
+               PATH=str(compiler.parent) + os.pathsep + env.get('PATH', ''))
     module = json.loads(command([str(compiler), 'mod', 'download', '-json',
                                  context.UPSTREAM_MODULE + '@' + context.UPSTREAM_VERSION],
                                 directory=output, env=env))

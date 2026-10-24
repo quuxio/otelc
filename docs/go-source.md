@@ -6,6 +6,8 @@ Status: implementation in progress. The [SDK controls](go-sdk-controls.md) are d
 
 `make go-upstream` builds the official `go.opentelemetry.io/otelc` compiler wrapper at version 1.0.1 using Go 1.27.3. It verifies the module and go.mod checksums, embedded instrumentation bundle, executable build metadata and reported tool version. Compiler, executable and bundle identities are retained in `build/go-upstream/toolchain.json`. These are tooling inputs, not evidence that a particular application was instrumented.
 
+The build environment pins `GOROOT`, `GOTOOLCHAIN=local` and the selected compiler's directory at the start of `PATH`. The wrapper runs a nested `go` command, so passing an absolute compiler to the stock build alone is insufficient. Every compiler fixture independently checks that nested `go env` reports the same Go version and root before building.
+
 The context preparer copies a fixed subset of the official runtime and SDK trace hooks into an owned private build. Original application source and modules are preserved. It reuses the upstream goroutine-local context storage and span hooks; it does not parse goroutine IDs from stack text. Only the context bridge is included from the upstream runtime package. Its separate SDK/logging/signal initialisation is excluded so that the common-policy runtime can own those pipelines.
 
 The shared `context.tasks` switch controls automatic goroutine inheritance. Disabled inheritance still resets the added runtime fields when a goroutine is created: Go can reuse goroutine structures, so omitting that reset can retain unrelated old context. Enabled inheritance applies a small, explicit generated-source correction to upstream `Clone`: it captures immutable parent span context rather than sharing the parent's ended flag. A child released after its parent finishes therefore retains the captured causal parent. Copied upstream files, generated modifications and their separate hashes are recorded; verification reproduces their bytes from the pinned original bundle.
@@ -20,7 +22,11 @@ PYTHONPATH=tests .venv/bin/python -m unittest -v \
 
 The actual compiler tests build ordinary source with the pinned upstream tool and original sources with stock Go. Both return the same value. They check immediate/delayed children, disabled task inheritance and reuse of goroutines containing unended diagnostic context. The generated hooks use the candidate owned trace processor with the official SDK and an in-memory exporter. Its private SDK copy and original inputs are checked after compilation and execution. Generated hooks import telemetry tooling; the original fixture does not.
 
-These checks establish the declared context/tooling behaviour only. They do not establish public Go launching, metrics integration, HTTP/framework propagation, resource/object lifetime completeness, whole-program source provenance or language admission. Lifetime spans must not become implicit parents of unrelated work; that isolation remains part of the runtime integration tests to implement.
+These checks establish the declared context/tooling behaviour only. They do not establish public Go launching, metrics integration, HTTP/framework propagation, resource/object lifetime completeness, whole-program source provenance or language admission.
+
+The generated context bridge also has an explicit non-ending detach operation for owned lifetime spans. It removes only that span's implicit frame and shared propagation-state entry, restores the previous local root and leaves the SDK span open with its captured parent. Later functions/tasks therefore keep their function parent while a lifetime span remains open. Both recording and non-recording spans are checked with the actual compiler; disabling task inheritance still prevents automatic parent capture.
+
+The helper's entire algorithm is also compiled against real SDK spans with fixture TLS/link endpoints. The component test requires 80% statement coverage and checks invalid/missing spans, middle/root/head removal, repeated removal, retained open spans and propagation-state cleanup. The separate compiler tests check the actual TLS/hooks/tasks integration. This is lifetime-context infrastructure; automatic object tracking and GC/release boundaries remain runtime work.
 
 ## Owned SDK export scheduling
 
