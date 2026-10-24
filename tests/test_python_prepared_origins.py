@@ -23,8 +23,26 @@ from test_java_integration import Capture
 PROFILE = 'python-native-origins-v2'
 
 
+class PreparedOriginAvailabilityTests(unittest.TestCase):
+    def test_unavailable_image_skips_both_lane_test_before_prepare(self) -> None:
+        subject = PreparedPythonOriginTests(
+            'test_unchanged_entry_fresh_import_and_stdlib_have_origins_in_both_lanes')
+        result = unittest.TestResult()
+        with mock.patch.object(tooling, 'toolchain', return_value=(
+                {'origin_chain': {'available': False}}, [])), \
+                mock.patch.object(subject, 'prepare', wraps=subject.prepare) as prepare:
+            subject.run(result)
+        self.assertEqual(result.failures, [])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.skipped), 1)
+        prepare.assert_not_called()
+
+
 class PreparedPythonOriginTests(unittest.TestCase):
     def setUp(self) -> None:
+        inputs, _ = tooling.toolchain(origin_entry=True)
+        if not inputs['origin_chain']['available']:
+            self.skipTest('the selected native source image is unavailable')
         environment = mock.patch.dict(os.environ, {'PYTHONDONTWRITEBYTECODE': '1'})
         environment.start()
         self.addCleanup(environment.stop)
@@ -46,9 +64,6 @@ class PreparedPythonOriginTests(unittest.TestCase):
         self.counter = 0
 
     def prepare(self, *, plain: bool = False) -> tuple[Path, dict]:
-        inputs, _ = tooling.toolchain(origin_entry=True)
-        if not inputs['origin_chain']['available']:
-            self.skipTest('the selected native source image is unavailable')
         self.counter += 1
         runtime = self.root / f'runtime-{self.counter}'
         result = prepared.prepare(self.policy, runtime, root=self.app,
