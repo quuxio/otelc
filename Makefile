@@ -7,8 +7,9 @@ NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
 BENCHMARK_LANGUAGE ?= java
 LLVM_OUTPUT ?= build/llvm-plugin
+NATIVE_LAUNCH_OUTPUT ?= build/native-launch-sdk
 
-.PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
+.PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check native-launch-sdk java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
 
 help:
@@ -53,6 +54,10 @@ native-check:
 	$(PYTHON) -m coverage run --data-file=build/native-tooling.coverage --source=ci.check_native_controls -m unittest discover -s tests -p test_native_controls_coverage.py -v
 	$(PYTHON) -m coverage run --append --data-file=build/native-tooling.coverage --source=ci.check_native_controls -m ci.check_native_controls
 	$(PYTHON) -m coverage report --data-file=build/native-tooling.coverage --fail-under=80
+
+native-launch-sdk:
+	mkdir -p build
+	$(PYTHON) -m otelc.native_launch --output "$(NATIVE_LAUNCH_OUTPUT)"
 
 go-check:
 	mkdir -p build
