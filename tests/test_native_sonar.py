@@ -55,7 +55,7 @@ class NativeSonarTests(unittest.TestCase):
                 'arguments': ['/compiler with spaces/clang++', '-c', str(source)]}
 
     def write_records(self) -> None:
-        for name, value in (('llvm-pass-registry-coverage-identity.json', self.llvm),
+        for name, value in (('llvm-pass-source-coverage-identity.json', self.llvm),
                             ('native-control-coverage.json', self.native)):
             (self.output / name).write_text(json.dumps(value))
 

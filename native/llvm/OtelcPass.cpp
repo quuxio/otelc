@@ -11,13 +11,17 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <cstdlib>
 #include <cstddef>
+#include <algorithm>
 static_assert(sizeof(otelc_function_descriptor_v1) == 2 * sizeof(void *));
 static_assert(offsetof(otelc_function_descriptor_v1, name) == sizeof(void *));
 using namespace llvm;
@@ -54,6 +58,85 @@ SmallVector<std::string> patterns(const char *Key) {
   }
   return Result;
 }
+#ifdef OTELC_SOURCE_PROFILE_V1
+// Same slash-aware *, **, **/ and Unicode ? semantics as the common policy.
+// A small NFA avoids recursive/exponential wildcard backtracking.
+bool sourceMatches(StringRef Pattern, StringRef Name) {
+  enum Kind { Literal, Any, Star, Globstar, Directory, DirectoryBody };
+  struct Token { Kind kind; std::string text; };
+  SmallVector<Token> Tokens;
+  for (size_t P = 0; P < Pattern.size();) {
+    if (Pattern.substr(P).starts_with("**/")) {
+      Tokens.push_back({Directory, ""}); Tokens.push_back({DirectoryBody, ""}); P += 3;
+    } else if (Pattern.substr(P).starts_with("**")) { Tokens.push_back({Globstar, ""}); P += 2; }
+    else if (Pattern[P] == '*') { Tokens.push_back({Star, ""}); ++P; }
+    else if (Pattern[P] == '?') { Tokens.push_back({Any, ""}); ++P; }
+    else { auto End = nextCharacter(Pattern, P); Tokens.push_back({Literal, Pattern.slice(P, End).str()}); P = End; }
+  }
+  SmallVector<unsigned char> States(Tokens.size() + 1, 0), Next(States.size(), 0);
+  States[0] = 1;
+  auto Closure = [&] {
+    for (size_t I = 0; I < Tokens.size(); ++I) if (States[I]) {
+      if (Tokens[I].kind == Star || Tokens[I].kind == Globstar) States[I + 1] = 1;
+      else if (Tokens[I].kind == Directory) States[I + 2] = 1;
+    }
+  };
+  for (size_t N = 0; N < Name.size();) {
+    Closure();
+    std::fill(Next.begin(), Next.end(), 0);
+    auto End = nextCharacter(Name, N);
+    auto Character = Name.slice(N, End);
+    for (size_t I = 0; I < Tokens.size(); ++I) if (States[I]) {
+      auto Kind = Tokens[I].kind;
+      if (Kind == Literal && Character == Tokens[I].text) Next[I + 1] = 1;
+      else if (Kind == Any && Character != "/") Next[I + 1] = 1;
+      else if (Kind == Star && Character != "/") Next[I] = 1;
+      else if (Kind == Globstar) Next[I] = 1;
+      else if (Kind == Directory || Kind == DirectoryBody) {
+        Next[Kind == Directory ? I + 1 : I] = 1;
+        if (Character == "/") Next[Kind == Directory ? I + 2 : I + 1] = 1;
+      }
+    }
+    States.swap(Next); N = End;
+  }
+  Closure();
+  return States.back();
+}
+
+struct SourcePolicy {
+  std::string Root;
+  SmallVector<std::string> Include = patterns("OTELC_SOURCE_INCLUDE"), Exclude = patterns("OTELC_SOURCE_EXCLUDE");
+  SourcePolicy(Module &M) {
+    const char *Value = std::getenv("OTELC_SOURCE_ROOT");
+    if (!Value || !sys::path::is_absolute(Value)) report_fatal_error("otelc: source profile requires an absolute source root");
+    SmallString<256> Normal(Value);
+    sys::path::remove_dots(Normal, true);
+    Root = Normal.str().str();
+    if (!M.getNamedMetadata("llvm.dbg.cu")) report_fatal_error("otelc: source profile requires compiler debug metadata (-g)");
+  }
+  std::string selectedFile(Function &F) const {
+    auto *Scope = F.getSubprogram();
+    // Compiler-generated helpers without a source definition are not application
+    // declarations. The public source profile never claims whole-source proof.
+    if (!Scope || Scope->isArtificial() || !Scope->getFile()) return "";
+    auto *File = Scope->getFile();
+    SmallString<256> Path(File->getFilename());
+    if (!sys::path::is_absolute(Path)) {
+      Path = File->getDirectory(); sys::path::append(Path, File->getFilename());
+    }
+    sys::path::remove_dots(Path, true);
+    SmallString<256> Canonical;
+    if (sys::fs::real_path(Path, Canonical)) return "";
+    StringRef Relative(Canonical);
+    StringRef Prefix(Root);
+    if (!Relative.consume_front(Prefix) || !Relative.consume_front("/") || Relative.empty()) return "";
+    bool Selected = false;
+    for (const auto &Pattern : Include) Selected |= sourceMatches(Pattern, Relative);
+    for (const auto &Pattern : Exclude) if (sourceMatches(Pattern, Relative)) Selected = false;
+    return Selected ? Relative.str() : "";
+  }
+};
+#endif
 // Clang supplies semantic annotation metadata after preprocessing and parsing.
 // Preserve unrelated annotations and never scan source text for attribute spelling.
 DenseMap<Function *, unsigned> annotations(Module &M) {
@@ -76,7 +159,8 @@ DenseMap<Function *, unsigned> annotations(Module &M) {
   return Result;
 }
 #ifdef OTELC_FUNCTION_REGISTRY_V1
-void registerFunctions(Module &M, ArrayRef<Function *> Functions, FunctionCallee Register) {
+void registerFunctions(Module &M, ArrayRef<Function *> Functions, FunctionCallee Register,
+                       const DenseMap<Function *, std::string> &Labels) {
   if (Functions.empty()) return;
   if (auto *Ctors = M.getNamedGlobal("llvm.global_ctors"); Ctors && Ctors->hasInitializer()) {
     for (auto &Operand : Ctors->getInitializer()->operands()) {
@@ -90,7 +174,7 @@ void registerFunctions(Module &M, ArrayRef<Function *> Functions, FunctionCallee
   auto *Descriptor = StructType::get(Ptr, Ptr);
   SmallVector<Constant *> Records;
   for (auto *F : Functions) {
-    auto *Text = ConstantDataArray::getString(C, llvm::demangle(F->getName().str()), true);
+    auto *Text = ConstantDataArray::getString(C, Labels.lookup(F), true);
     auto *Name = new GlobalVariable(M, Text->getType(), true, GlobalValue::PrivateLinkage,
                                     Text, "otelc.function.name");
     Name->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
@@ -156,7 +240,11 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
     auto Includes=patterns("OTELC_FUNCTION_INCLUDE");
     auto Excludes=patterns("OTELC_FUNCTION_EXCLUDE");
     auto Annotations = annotations(M);
+#ifdef OTELC_SOURCE_PROFILE_V1
+    SourcePolicy Sources(M);
+#endif
     SmallVector<Function *> Functions;
+    DenseMap<Function *, std::string> Labels;
     for (auto &F : M) {
       if (F.isDeclaration() || F.hasFnAttribute("no-instrument-function"))
         continue;
@@ -167,6 +255,13 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
       if (Annotations.lookup(&F) == 3) errs() << "otelc: otelc.exclude overrides otelc.instrument on " << Name << "\n";
       if (Annotations.lookup(&F) & 2) Selected = false;
       if(!Selected) continue;
+      std::string Label = Name;
+#ifdef OTELC_SOURCE_PROFILE_V1
+      auto File = Sources.selectedFile(F);
+      if (File.empty()) continue;
+      Label = File + "::" + Name;
+      if (Label.size() > 4096) report_fatal_error("otelc: source function identity exceeds the native name budget");
+#endif
       if (F.hasPersonalityFn()) {
         auto *P = dyn_cast<Function>(F.getPersonalityFn()->stripPointerCasts());
         if (!P || (P->getName() != "__gxx_personality_v0" && P->getName() != "__gcc_personality_v0"))
@@ -182,6 +277,7 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
         }
       }
       Functions.push_back(&F);
+      Labels[&F] = std::move(Label);
     }
     SmallVector<Constant *> Inventory, AnnotatedInventory;
     for (auto *F : Functions) {
@@ -231,7 +327,7 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
     Retain(Inventory, "otelc.inventory", Darwin ? "__DATA,__otelc" : ".otelc");
     Retain(AnnotatedInventory, "otelc.annotations", Darwin ? "__DATA,__otela" : ".otela");
 #ifdef OTELC_FUNCTION_REGISTRY_V1
-    registerFunctions(M, Functions, Register);
+    registerFunctions(M, Functions, Register, Labels);
 #endif
     M.getOrInsertNamedMetadata("otelc.instrumented");
     if (verifyModule(M, &errs())) report_fatal_error("otelc: invalid instrumented module");
