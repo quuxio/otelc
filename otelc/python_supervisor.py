@@ -135,10 +135,11 @@ class Owner:
         """Bind consumed script bytes to prepared input; modules stay unavailable."""
         path = self.directory / 'python-inputs.journal'
         try:
-            if self.original['profile'] == recipe.ORIGIN_PROFILE:
+            if recipe.version(self.original['profile']) >= 2:
                 from otelc import python_origin_execution as origin_execution
                 self.entry = origin_execution.read(path, expected_pid=self.application.pid,
-                    entry=self.prepared['entry'], root=Path(self.plan['cwd']), plain=self.original['plain'])
+                    entry=self.prepared['entry'], root=Path(self.plan['cwd']), plain=self.original['plain'],
+                    version=recipe.version(self.original['profile']))
                 if self.entry['phase'] != 'complete':
                     self.failures['entry'] = 'unverified'
                 return

@@ -35,13 +35,14 @@ def protocols(*, profile: str = recipe.INPUT_PROFILE) -> dict[str, Any]:
     result = {'schema_version': selected, 'kind': 'otelc.python.protocols',
             'request': selected, 'plan': selected, 'prepared': selected, 'command': selected,
             'execution': selected,
-            'journal': {'schema_version': selected, 'record_kinds': list(range(1, 8 if selected == 2 else 5))},
+            'journal': {'schema_version': selected, 'record_kinds': list(range(1, 8 if selected >= 2 else 5))},
             'code': {'written': 2, 'readable': [2]},
             'health': 2, 'sdk': 1, 'code_comparisons': 1,
             'source_complete': False}
-    if selected == 2:
+    if selected >= 2:
         result['profile'] = profile
-        result['origin_scope'] = 'native-entry-and-application-root-source-loaders'
+        result['origin_scope'] = ('native-entry-and-application-root-source-and-cache-loaders' if selected == 3
+                                  else 'native-entry-and-application-root-source-loaders')
         # The separate post-run comparison API currently accepts journal 1.
         result['code_comparisons'] = None
     return result
@@ -55,8 +56,8 @@ def digest(value: dict[str, Any]) -> str:
 def native_tool(profile: str = recipe.INPUT_PROFILE) -> Path:
     """Recompute the fixed tool namespace and verify existing native products."""
     recipe.version(profile)
-    inputs, flags = tooling.toolchain(origin_entry=profile == recipe.ORIGIN_PROFILE)
-    if profile == recipe.ORIGIN_PROFILE and not inputs['origin_chain']['available']:
+    inputs, flags = tooling.toolchain(origin_entry=recipe.version(profile) >= 2)
+    if recipe.version(profile) >= 2 and not inputs['origin_chain']['available']:
         raise ValueError('native Python origins are unavailable for the selected image')
     inputs.update(flags=flags, coverage=False)
     key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
@@ -96,7 +97,7 @@ def prepare(policy: Policy, runtime: Path | str, *, root: Path | str,
                               arguments=arguments, plain=plain, profile=profile)
     plan = recipe.resolve_plan(original)
     recipe.verify(original, plan)
-    tooling.build(origin_entry=profile == recipe.ORIGIN_PROFILE)
+    tooling.build(origin_entry=recipe.version(profile) >= 2)
     prepared = manifest(original, plan)
     files.write(directory / REQUEST, original)
     files.write(directory / PLAN, plan)

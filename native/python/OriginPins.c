@@ -15,6 +15,8 @@ static PyInterpreterState *owner;
 static pid_t owner_pid;
 static int installed;
 static int monitor_requested;
+static int cache_requested;
+static PyObject *cache_functions[3], *cache_code;
 static PyObject *monitor_functions[OTELC_MONITOR_METHODS];
 static const char *monitor_names[] = {
     "get_tool", "use_tool_id", "register_callback", "set_local_events", "free_tool_id", "DISABLE"
@@ -69,6 +71,19 @@ static int monitor_current(PyObject *values[OTELC_MONITOR_METHODS]) {
     return 1;
 }
 
+static int cache_current(PyObject *values[3]) {
+    PyObject *modules = PyImport_GetModuleDict();
+    PyObject *external = named_value(modules, "_frozen_importlib_external");
+    PyObject *marshal = named_value(modules, "marshal");
+    PyObject *imp = named_value(modules, "_imp");
+    if (module_member(external, "marshal") != marshal || module_member(external, "_imp") != imp) return 0;
+    values[0] = module_member(external, "_compile_bytecode");
+    values[1] = module_member(marshal, "loads");
+    values[2] = module_member(imp, "_fix_co_filename");
+    return values[0] && PyFunction_Check(values[0]) && values[1] && PyCFunction_Check(values[1]) &&
+        values[2] && PyCFunction_Check(values[2]);
+}
+
 static int audit(const char *event, PyObject *arguments, void *unused) {
     (void)arguments;
     (void)unused;
@@ -78,7 +93,9 @@ static int audit(const char *event, PyObject *arguments, void *unused) {
     PyObject *saved = PyErr_GetRaisedException();
     PyObject *values[HELPER_COUNT];
     PyObject *monitor[OTELC_MONITOR_METHODS];
-    if (current(values) && (!monitor_requested || monitor_current(monitor))) {
+    PyObject *cached[3];
+    if (current(values) && (!monitor_requested || monitor_current(monitor)) &&
+            (!cache_requested || cache_current(cached))) {
         for (unsigned index = 0; index < HELPER_COUNT; ++index) functions[index] = Py_NewRef(values[index]);
         for (unsigned index = 0; index < FUNCTION_COUNT; ++index) {
             codes[index] = Py_NewRef(PyFunction_GetCode(values[index]));
@@ -93,6 +110,10 @@ static int audit(const char *event, PyObject *arguments, void *unused) {
             for (unsigned index = 0; index < OTELC_MONITOR_METHODS; ++index) {
                 monitor_functions[index] = Py_NewRef(monitor[index]);
             }
+        }
+        if (cache_requested) {
+            for (unsigned index = 0; index < 3; ++index) cache_functions[index] = Py_NewRef(cached[index]);
+            cache_code = Py_NewRef(PyFunction_GetCode(cached[0]));
         }
         owner = PyThreadState_GetInterpreter(PyThreadState_Get());
     }
@@ -126,6 +147,12 @@ int otelc_py_origin_pins_ready(void) {
             valid = monitor[index] == monitor_functions[index];
         }
     }
+    if (valid && cache_requested) {
+        PyObject *cached[3];
+        valid = cache_current(cached);
+        for (unsigned index = 0; valid && index < 3; ++index) valid = cached[index] == cache_functions[index];
+        if (valid) valid = PyFunction_GetCode(cached[0]) == cache_code;
+    }
     /* Do not leak lookup errors into an application exception in flight. */
     PyErr_Clear();
     PyErr_SetRaisedException(saved);
@@ -136,6 +163,16 @@ int otelc_py_origin_monitor_enable(void) {
     if (monitor_requested || installed || Py_IsInitialized()) return -1;
     monitor_requested = 1;
     return 0;
+}
+
+int otelc_py_origin_cache_enable(void) {
+    if (cache_requested || installed || Py_IsInitialized()) return -1;
+    cache_requested = 1;
+    return 0;
+}
+
+PyObject *otelc_py_origin_cache_value(unsigned index) {
+    return cache_requested && index < 3 && !otelc_py_origin_pins_ready() ? cache_functions[index] : NULL;
 }
 
 PyObject *otelc_py_origin_monitor_value(unsigned index) {

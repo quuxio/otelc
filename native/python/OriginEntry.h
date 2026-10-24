@@ -16,6 +16,8 @@ void otelc_py_origin_entry_read(const char *path, const unsigned char *bytes,
 /* Shared private catalogue and local monitor for checked loader transactions. */
 int otelc_py_origin_module(PyObject *code, const char *path, uint64_t sequence,
                             uint64_t loader, unsigned flags, int optimization);
+int otelc_py_origin_cached_module(PyObject *code, const char *input_path, const char *source_path,
+                                  uint64_t sequence, uint64_t loader);
 int otelc_py_origin_local_callback(PyObject *code, int event, int events, PyObject *callback);
 /* CodeCapture calls this only after authenticating its actual SDK start. */
 int otelc_py_origin_sdk_join(PyObject *code, uint64_t sdk, int offset);

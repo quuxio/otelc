@@ -47,6 +47,7 @@ class PythonProviderProtocolTests(unittest.TestCase):
                 stack.enter_context(mock.patch.object(Path, name, side_effect=AssertionError(name)))
             self.assertEqual(prepared.protocols()['kind'], 'otelc.python.protocols')
             self.assertEqual(prepared.protocols(profile='python-native-origins-v2')['kind'], 'otelc.python.protocols')
+            self.assertEqual(prepared.protocols(profile='python-native-cache-origins-v3')['kind'], 'otelc.python.protocols')
 
 
 if __name__ == '__main__':

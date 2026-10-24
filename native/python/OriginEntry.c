@@ -333,15 +333,26 @@ failed:
 
 static int publish_root(PyObject *code, const char *path, uint64_t sequence,
                         uint64_t loader, unsigned flags, int optimize, unsigned route) {
-    size_t length = strlen(path);
-    if (root_count == CODE_LIMIT || length + 1 > OTELC_PY_JOURNAL_LIMIT - root_path_bytes) return -1;
-    char *retained = strdup(path);
+    PyObject *filename = route == 3 ? PyUnicode_EncodeFSDefault(((PyCodeObject *)code)->co_filename) : NULL;
+    const char *executing_path = route == 3 ? (filename ? PyBytes_AS_STRING(filename) : NULL) : path;
+    if (!executing_path) return -1;
+    size_t length = strlen(executing_path);
+    if (filename && ((size_t)PyBytes_GET_SIZE(filename) != length || length > OTELC_PY_PATH_LIMIT)) {
+        Py_DECREF(filename);
+        return -1;
+    }
+    if (root_count == CODE_LIMIT || length + 1 > OTELC_PY_JOURNAL_LIMIT - root_path_bytes) {
+        Py_XDECREF(filename);
+        return -1;
+    }
+    char *retained = strdup(executing_path);
+    Py_XDECREF(filename);
     if (!retained) return -1;
     PyObject *payload = otelc_py_native_encode(code);
     if (!payload) { free(retained); return -1; }
     uint64_t fields[] = {root_count + 1, root_count + 1, loader, sequence, route,
                          PY_VERSION_HEX, 2, flags, (uint64_t)optimize};
-    int result = otelc_py_journal_origin(5, path,
+    int result = otelc_py_journal_origin(5, route == 3 ? retained : path,
         (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), fields, 9);
     Py_DECREF(payload);
     if (result) {
@@ -354,6 +365,28 @@ static int publish_root(PyObject *code, const char *path, uint64_t sequence,
     root_path_bytes += length + 1;
     uint64_t edges[EDGE_LIMIT] = {0};
     return catalogue(code, edges, 0, root);
+}
+
+int otelc_py_origin_cached_module(PyObject *code, const char *input_path, const char *source_path,
+                                  uint64_t sequence, uint64_t loader) {
+    if (!ready || lost || !same_owner()) return -1;
+    PyObject *saved = PyErr_GetRaisedException();
+    PyObject *encoded = PyCode_Check(code) ? PyUnicode_EncodeFSDefault(((PyCodeObject *)code)->co_filename) : NULL;
+    int valid = encoded && sequence && loader && input_path && source_path &&
+        PyUnicode_CompareWithASCIIString(((PyCodeObject *)code)->co_name, "<module>") == 0 &&
+        (size_t)PyBytes_GET_SIZE(encoded) == strlen(source_path) &&
+        !memcmp(PyBytes_AS_STRING(encoded), source_path, strlen(source_path)) &&
+        !otelc_py_origin_pins_ready() && own_tool();
+    Py_XDECREF(encoded);
+    /* 3 denotes unknown compiler optimisation: these are deserialised bytes,
+       not a compiler invocation whose flags could be inferred from a filename. */
+    if (!valid || publish_root(code, input_path, sequence, loader, 0, 3, 3)) {
+        release_tool();
+        (void)failure(saved);
+        return -1;
+    }
+    PyErr_SetRaisedException(saved);
+    return 0;
 }
 
 int otelc_py_origin_module(PyObject *code, const char *path, uint64_t sequence,
@@ -426,6 +459,11 @@ int otelc_py_origin_entry_install(void) {
     return 0;
 }
 #else
+int otelc_py_origin_cached_module(PyObject *code, const char *input_path, const char *source_path,
+                                  uint64_t sequence, uint64_t loader) {
+    (void)code; (void)input_path; (void)source_path; (void)sequence; (void)loader;
+    return -1;
+}
 int otelc_py_origin_entry_install(void) { return 0; }
 int otelc_py_origin_entry_ready(int optimization) { (void)optimization; return -1; }
 int otelc_py_origin_entry_active(void) { return 0; }
