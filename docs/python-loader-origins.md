@@ -35,7 +35,7 @@ Cached/sourceless bytecode, custom loaders, arbitrary dynamic compilation, other
 
 ## Acceptance still required
 
-The native component has an independent 80% line floor. Tests exercise repeated and concurrent original reads, exact descriptors, interpreter optimisation levels, source encoding cookies, equal-byte unrelated compilations, substituted reads/compilers, cache refusal, original syntax errors, weak object/code cleanup, existing builtin dictionary keys and failure before compilation. The separate [SDK join component](python-origin-sdk-joins.md) connects authenticated selected starts to this catalogue. These tests do not establish universal preservation. Independent review, the full repository gate, required hosted checks, both-lane supervisor integration, public journal-2 negotiation and frozen-provider oteleq qualification remain separate acceptance requirements.
+The native component has an independent 80% line floor. Tests exercise repeated and concurrent original reads, exact descriptors, interpreter optimisation levels, source encoding cookies, equal-byte unrelated compilations, substituted reads/compilers, cache refusal, original syntax errors, weak object/code cleanup, existing builtin dictionary keys and failure before compilation. The separate [SDK join component](python-origin-sdk-joins.md) connects authenticated selected starts to this catalogue. These tests do not establish universal preservation. Independent review, the full repository gate, required hosted checks and frozen-provider oteleq qualification remain separate acceptance requirements. The explicit [public origin profile](python-prepared-origins.md) adds both-lane execution and journal-2 negotiation.
 
 ## Optional application-root boundary
 

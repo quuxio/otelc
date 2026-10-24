@@ -4,6 +4,8 @@
 
 The Python candidate's public launcher prepares a fixed native recipe, then owns one application and its independent SDK through completion. Developer sources need no imports, decorators, annotations or bootstrap changes. [Function, lifetime, context and live metric controls](python-native.md) retain the same common policy.
 
+The separately selected [public origin profile](python-prepared-origins.md) provides journal-2 capture in both lanes. The default profile described here remains unchanged.
+
 ## Negotiate formats without launching
 
 `otelc.prepared_python.protocols()` is a metadata-only handshake for tooling consumers. It does not build, prepare or launch an application or SDK, read application inputs or change metric state. It returns a fresh JSON-compatible descriptor with handshake schema 1 and kind `otelc.python.protocols`; request, plan, prepared, command, execution and SDK versions are each 1. Journal schema 1 uses record kinds 1 (entry), 2 (final), 3 (loader) and 4 (code). The current code writer and graph reader support descriptor 2. Although the raw journal envelope reader can retain a descriptor-1 record, that does not establish graph-1 support in the prepared launcher. Common health is version 2 and the separate semantic code-comparison report is version 1.

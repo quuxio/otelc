@@ -46,6 +46,7 @@ class PythonProviderProtocolTests(unittest.TestCase):
             for name in ('open', 'read_bytes', 'read_text', 'resolve', 'mkdir'):
                 stack.enter_context(mock.patch.object(Path, name, side_effect=AssertionError(name)))
             self.assertEqual(prepared.protocols()['kind'], 'otelc.python.protocols')
+            self.assertEqual(prepared.protocols(profile='python-native-origins-v2')['kind'], 'otelc.python.protocols')
 
 
 if __name__ == '__main__':

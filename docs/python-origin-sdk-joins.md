@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This optional contributor component connects the Python monitor's selected code IDs to the [native origin catalogue](python-loader-origins.md). It adds no application annotations or instrumentation calls. Public launches still negotiate journal 1 and report `source_complete=false`; both-lane supervisor integration, public journal-2 negotiation and independent provider admission remain separate work.
+This optional contributor component connects the Python monitor's selected code IDs to the [native origin catalogue](python-loader-origins.md). It adds no application annotations or instrumentation calls. Public launches still negotiate journal 1 and report `source_complete=false`; the explicit [public origin profile](python-prepared-origins.md) adds both-lane supervisor integration and journal-2 negotiation. Independent provider admission remains separate work.
 
 ## Identity boundary
 

@@ -30,6 +30,15 @@ ENVIRONMENT_KEYS = (
 FIELDS = {'schema_version', 'profile', 'policy', 'policy_source', 'cwd',
           'paths', 'module', 'arguments', 'flags', 'plain', 'interpreter',
           'environment'}
+INPUT_PROFILE = 'python-native-inputs-v1'
+ORIGIN_PROFILE = 'python-native-origins-v2'
+
+
+def version(profile: str) -> int:
+    """Keep the existing input contract separate from explicit origin evidence."""
+    if type(profile) is not str or profile not in (INPUT_PROFILE, ORIGIN_PROFILE):
+        raise ValueError('unsupported native Python profile')
+    return 2 if profile == ORIGIN_PROFILE else 1
 
 
 def encoded(value: Any) -> str:
@@ -68,7 +77,7 @@ def native_argv0() -> str:
 
 def request(policy: Policy, runtime: Path | str, *, root: Path | str, entry: Path | str | None,
             module: str | None, arguments: tuple[str, ...] = (),
-            plain: bool = False) -> dict[str, Any]:
+            plain: bool = False, profile: str = INPUT_PROFILE) -> dict[str, Any]:
     """Keep the original spelling and full policy separate from resolved settings.
 
     Runtime must already exist. Entry paths resolve from the requested app root;
@@ -78,7 +87,7 @@ def request(policy: Policy, runtime: Path | str, *, root: Path | str, entry: Pat
     paths = {'root': _path(root, cwd), 'runtime': _path(runtime, cwd)}
     if entry is not None:
         paths['entry'] = _path(entry, Path(paths['root']['resolved']))
-    result = {'schema_version': 1, 'profile': 'python-native-inputs-v1',
+    result = {'schema_version': version(profile), 'profile': profile,
               'policy': copy.deepcopy(policy.data),
               'policy_source': copy.deepcopy(policy.source), 'cwd': str(cwd),
               'paths': paths, 'module': module, 'arguments': list(arguments),
@@ -98,8 +107,7 @@ def _validate(original: dict[str, Any]) -> Policy:
     if type(original['policy']) is not dict:
         raise ValueError('invalid native Python common policy')
     policy = Policy.parse(original['policy'])
-    if (type(original['schema_version']) is not int or original['schema_version'] != 1
-            or original['profile'] != 'python-native-inputs-v1'
+    if (type(original['schema_version']) is not int or original['schema_version'] != version(original['profile'])
             or original['policy'] != policy.data or 'python' not in policy.data['languages']
             or type(original['plain']) is not bool or original['flags'] != []
             or type(original['arguments']) is not list
@@ -108,6 +116,8 @@ def _validate(original: dict[str, Any]) -> Policy:
     _validate_environment(original['environment'])
     _validate_interpreter(original['interpreter'])
     _validate_paths(original)
+    if original['profile'] == ORIGIN_PROFILE and original['module'] is not None:
+        raise ValueError('native Python origins currently require a source entry')
     return policy
 
 
@@ -167,14 +177,15 @@ def resolve_plan(original: dict[str, Any]) -> dict[str, Any]:
         target = ['./' + spelling if spelling.startswith('-') else spelling]
     else:
         target = ['-m', original['module']]
-    return {'schema_version': 1, 'profile': original['profile'],
+    return {'schema_version': version(original['profile']), 'profile': original['profile'],
             'policy': copy.deepcopy(policy.data), 'plain': original['plain'],
             'cwd': original['paths']['root']['resolved'],
             'runtime': original['paths']['runtime']['resolved'],
             'python': original['interpreter']['file']['path'],
             'argv0': original['interpreter']['argv0'],
             'native_arguments': [*target, *original['arguments']],
-            'input_scope': 'native-source-entry-only',
+            'input_scope': ('native-application-root-origins' if original['profile'] == ORIGIN_PROFILE
+                            else 'native-source-entry-only'),
             'source_complete': False}
 
 
@@ -229,5 +240,6 @@ def native_command(original: dict[str, Any], driver: Path, journal_fd: int) -> l
         raise ValueError('invalid native Python journal descriptor')
     if not driver.is_absolute():
         raise ValueError('native Python driver must be an independently verified absolute path')
-    return [str(driver), str(journal_fd), plan['python'], plan['argv0'],
+    options = ['--origin-loader-root', plan['cwd']] if original['profile'] == ORIGIN_PROFILE else []
+    return [str(driver), *options, str(journal_fd), plan['python'], plan['argv0'],
             *plan['native_arguments']]

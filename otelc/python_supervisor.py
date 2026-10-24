@@ -72,7 +72,7 @@ class Owner:
         return 1 if self.failures else 0
 
     def start_record(self) -> dict[str, Any]:
-        return {'schema_version': 1, 'kind': 'otelc.python.supervisor',
+        return {'schema_version': recipe.version(self.original['profile']), 'kind': 'otelc.python.supervisor',
                 'supervisor_pid': os.getpid(), 'parent_pid': os.getppid(),
                 'process_group': os.getpgrp(),
                 'request_sha256': prepared.digest(self.original),
@@ -101,7 +101,7 @@ class Owner:
             journal_fd = os.open(self.directory / 'python-inputs.journal',
                                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             inherited.append(journal_fd)
-            invocation = recipe.native_command(self.original, prepared.native_tool(), journal_fd)
+            invocation = recipe.native_command(self.original, prepared.native_tool(self.original['profile']), journal_fd)
             self.application = subprocess.Popen(invocation, cwd=self.plan['cwd'],
                 env=environment, pass_fds=tuple(inherited))
             files.write(self.directory / 'python-application-start.json', {
@@ -135,6 +135,13 @@ class Owner:
         """Bind consumed script bytes to prepared input; modules stay unavailable."""
         path = self.directory / 'python-inputs.journal'
         try:
+            if self.original['profile'] == recipe.ORIGIN_PROFILE:
+                from otelc import python_origin_execution as origin_execution
+                self.entry = origin_execution.read(path, expected_pid=self.application.pid,
+                    entry=self.prepared['entry'], root=Path(self.plan['cwd']), plain=self.original['plain'])
+                if self.entry['phase'] != 'complete':
+                    self.failures['entry'] = 'unverified'
+                return
             journal = inputs.read(path, expected_pid=self.application.pid)
             self.entry = {'phase': 'unavailable', 'python_finalized': journal.python_finalized,
                 'capture_failures': journal.capture_failures, 'journal_failures': journal.journal_failures,
