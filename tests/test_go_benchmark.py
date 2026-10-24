@@ -45,7 +45,9 @@ class GoBenchmarkTests(unittest.TestCase):
         self.output = self.base / self._testMethodName
 
     def test_five_modes_have_real_embedded_sdk_costs_and_decoded_metrics(self) -> None:
-        report = adapter.run(self.policy, self.output, build_directory=self.build, comparison_id='shared-go')
+        data = copy.deepcopy(self.policy.data)
+        data['benchmark']['samples'] = 4
+        report = adapter.run(Policy.parse(data), self.output, build_directory=self.build, comparison_id='shared-go')
         self.assertEqual((report['language'], report['comparison_id'], report['expected_checksum']),
                          ('go', 'shared-go', 41284864))
         self.assertEqual(report['launch_profile'], prepared.PROFILE)
@@ -53,7 +55,7 @@ class GoBenchmarkTests(unittest.TestCase):
         self.assertEqual(report['sdk_pid'], report['pids']['instrumented'])
         self.assertEqual({row['pid'] for row in report['transitions']}, {report['sdk_pid']})
         self.assertEqual(set(report['samples_ns_per_operation']), {'plain', *benchmark.STATES})
-        self.assertTrue(all(len(values) == 2 for values in report['samples_ns_per_operation'].values()))
+        self.assertTrue(all(len(values) == 4 for values in report['samples_ns_per_operation'].values()))
         self.assertEqual(go_build.inputs(ROOT / 'examples/go'), self.original)
         for lane in ('plain', 'instrumented'):
             process = report['pids'][lane]
@@ -71,8 +73,8 @@ class GoBenchmarkTests(unittest.TestCase):
             for name, expected in report['launch_evidence'][lane].items():
                 self.assertEqual(adapter.identity(self.output / lane / name), expected)
         raw = report['process_samples']
-        self.assertEqual(len(raw), 10)
-        self.assertEqual(len((self.output / 'responses.jsonl').read_text().splitlines()), 10)
+        self.assertEqual(len(raw), 20)
+        self.assertEqual(len((self.output / 'responses.jsonl').read_text().splitlines()), 20)
         for row in raw:
             lane = 'plain' if row['mode'] == 'plain' else 'instrumented'
             self.assertEqual(row['pid'], report['pids'][lane])
@@ -84,9 +86,11 @@ class GoBenchmarkTests(unittest.TestCase):
                 self.assertGreaterEqual(usage['cpu_ns'], 0)
                 self.assertGreater(usage['rss_bytes'], 0)
         health = prepared.read(self.output / 'instrumented/health.json')
-        self.assertEqual(health['probe_accounting']['function_ended'], '91')
-        self.assertEqual(health['probe_accounting']['resource_released'], '91')
-        self.assertEqual(self.capture.calls(), 40)
+        self.assertEqual(health['probe_accounting']['function_ended'], '171')
+        self.assertEqual(health['probe_accounting']['resource_released'], '171')
+        self.assertEqual(self.capture.calls(), 80)
+        self.assertEqual(health['controls']['collection'], True)
+        self.assertEqual(health['controls']['emission'], True)
         self.assertEqual(len(self.capture.points('otelc.benchmark.operation.duration')), 5)
         self.assertTrue(self.capture.points('otelc.benchmark.process.cpu.duration'))
         self.assertTrue(self.capture.points('otelc.benchmark.process.rss'))

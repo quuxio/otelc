@@ -85,7 +85,13 @@ def completed(process: Application, runtime: Path, *, plain: bool, retain: bool 
     names = (prepared.REQUEST, prepared.PLAN, prepared.PREPARED,
              'go-supervisor-start.json', 'go-application-start.json', 'go-execution.json', 'process.json')
     if not plain:
-        names += ('config.json', 'health.json')
+        names += ('config.json', 'health.json', 'go-metric-finalization.json')
+        state = {'schema_version': 1, 'pid': process.pid, 'collection': True,
+                 'emission': True, 'effective_emission_off': False}
+        expected = {'schema_version': 1, 'application_pid': process.pid, 'restored': state, 'flushed': state}
+        if (not prepared.same(prepared.read(runtime / 'go-metric-finalization.json'), expected)
+                or not prepared.same(result['sdk_health']['controls'], state)):
+            raise ValueError('Go benchmark did not restore and flush collected metrics')
     process.evidence = {name: identity(runtime / name) for name in names}
 
 
@@ -188,6 +194,14 @@ def measure(policy: Policy, output: Path, build: Path, lane: str,
                 if result['checksum'] != expected:
                     raise ValueError('Go plain/instrumented workload checksum differs')
                 records.samples[mode].append(result['elapsed_ns'] / configuration['iterations'])
+        if endpoint is not None:
+            # The balanced schedule can finish off with retained measurements
+            # from its last collection-only batch. Restore and flush outside all
+            # sample windows, before closing the SDK that owns those values.
+            restored = switch(endpoint, process, 'both_on')
+            flushed = control.request(endpoint, 'flush')
+            files.write(runtime / 'go-metric-finalization.json', {'schema_version': 1,
+                'application_pid': process.pid, 'restored': restored, 'flushed': flushed})
     process.evidence['go-first-response.json'] = identity(runtime / 'go-first-response.json')
     return process
 
