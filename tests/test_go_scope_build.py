@@ -230,8 +230,16 @@ class ActualGoScopeBuildTests(unittest.TestCase):
                         selected = [span for span in functions if span.name == name]
                         self.assertEqual(len(selected), 5 if '/early_init.' in name else 4)
                         self.assertEqual([span.status.code for span in selected], [expected] * len(selected))
-                    releases = [span for span in spans if span.name.endswith('WorkItem lifetime')]
+                    lifetimes = [span for span in spans if span.name.endswith('WorkItem lifetime')]
+                    # GC observation and successful Close are separate boundaries.
+                    # A full run can collect objects between calls; a short run need not.
+                    boundaries = [(span, next((item.value.string_value for item in span.attributes
+                                   if item.key == 'boundary'), None)) for span in lifetimes]
+                    self.assertTrue(all(boundary in ('resource', 'observed_gc') for _, boundary in boundaries))
+                    self.assertEqual(len({span.span_id for span in lifetimes}), len(lifetimes))
+                    releases = [span for span, boundary in boundaries if boundary == 'resource']
                     self.assertEqual(len(releases), 4)
+                    self.assertLessEqual(sum(boundary == 'observed_gc' for _, boundary in boundaries), 4)
                     latest = {}
                     for packet in capture.metrics:
                         for resource in packet.resource_metrics:
