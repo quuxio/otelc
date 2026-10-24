@@ -29,7 +29,7 @@ Use Go 1.27.3, the version pinned in CI, with CGO and a C compiler for the race 
 make go-check
 ```
 
-The target checks formatting and `go vet`, runs real SDK tests with the race detector and locked module requirements, and requires at least 80% statement coverage overall and for each of the three production files. It writes `build/go-coverage.out` and a repository-relative `build/go-sonar-coverage.out` for [Sonar's Go coverage importer](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/test-coverage/go-test-coverage). `make check` includes this component.
+The target checks formatting and `go vet`, runs real SDK tests with the race detector and locked module requirements, and requires at least 80% statement coverage overall and for each production file. This includes the three control files and four candidate [owned pipeline files](go-source.md#owned-sdk-export-scheduling). It writes `build/go-coverage.out` and a repository-relative `build/go-sonar-coverage.out` for [Sonar's Go coverage importer](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/test-coverage/go-test-coverage). `make check` includes these components.
 
 Tests cover all four initial states, cached synchronous instruments, constructor and registered observable callbacks, callback metadata/errors/unregistration, disabling during a callback, real periodic-reader retention, application-provider isolation, export cancellation/barriers, exporter errors/shutdown and trace continuity. A delta-temporality negative control loses the paused counter observations; cumulative mode must preserve them.
 

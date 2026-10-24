@@ -7,11 +7,11 @@ NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
 BENCHMARK_LANGUAGE ?= java
 
-.PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
+.PHONY: help setup check lint test go-check go-upstream node-check node-observer node-native-coverage node-http python-inputs python-inputs-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
 
 help:
-	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint and Java/Node/Python/Go tests with component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
+	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint and Java/Node/Python/Go tests with component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'go-upstream Build and verify the pinned upstream Go compiler wrapper' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
 setup:
 	python3 -m venv .venv
@@ -38,13 +38,16 @@ python-inputs:
 python-inputs-check:
 	$(PYTHON) -m ci.check_python_inputs_coverage
 
+go-upstream:
+	$(PYTHON) -m ci.build_go_upstream --go "$(GO)"
+
 go-check:
 	mkdir -p build
-	cd adapters/go && test -z "$$(gofmt -l metriccontrol/*.go)"
+	cd adapters/go && test -z "$$(gofmt -l metriccontrol/*.go pipeline/*.go)"
 	cd adapters/go && GOWORK=off $(GO) vet -mod=readonly ./...
 	cd adapters/go && GOWORK=off $(GO) test -mod=readonly -race -count=1 -coverprofile="$(CURDIR)/build/go-coverage.out" ./...
 	cd adapters/go && $(GO) tool cover -func="$(CURDIR)/build/go-coverage.out" | awk '/^total:/ {gsub("%", "", $$3); print; found=1; if ($$3 < 80) exit 1} END {if (!found) exit 1}'
-	awk 'NR>1 {split($$1, p, ":"); total[p[1]]+=$$2; if ($$3>0) hit[p[1]]+=$$2} END {for (file in total) {files++; percent=100*hit[file]/total[file]; printf "%s: %.2f%% statements\n", file, percent; if (percent<80) failed=1} if (files!=3 || failed) exit 1}' build/go-coverage.out
+	awk 'NR>1 {split($$1, p, ":"); total[p[1]]+=$$2; if ($$3>0) hit[p[1]]+=$$2} END {for (file in total) {files++; percent=100*hit[file]/total[file]; printf "%s: %.2f%% statements\n", file, percent; if (percent<80) failed=1} if (files!=7 || failed) exit 1}' build/go-coverage.out
 	sed 's|^io\.quux\.otelc/go/|adapters/go/|' build/go-coverage.out > build/go-sonar-coverage.out
 
 java-build:
@@ -69,7 +72,7 @@ lint:
 	ci/markdownlint/node_modules/.bin/markdownlint '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore '**/target/**' --ignore 'build/**'
 	$(PYTHON) -m compileall -q otelc ci tests
 
-test: java-build node-observer node-http
+test: java-build node-observer node-http go-upstream
 	mkdir -p build
 	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
 	$(PYTHON) -m coverage report --fail-under=80
@@ -77,6 +80,8 @@ test: java-build node-observer node-http
 	$(PYTHON) -m coverage report --include='*/ci/native_origin_chain.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_journal.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_execution.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_context_bundle.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/build_go_upstream.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 
 check: lint java-check node-check go-check python-inputs-check test

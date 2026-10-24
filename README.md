@@ -26,6 +26,8 @@ The [native input observer](docs/python-input-journal.md#evidence-and-failure-bo
 
 The [Go SDK controls component](docs/go-sdk-controls.md) adds independent live gates around an isolated official Go metric pipeline. Source-free Go weaving, public launch/control integration, context/lifetime probes and qualification remain work; this component does not promote Go to a delivered adapter.
 
+The [Go source candidate](docs/go-source.md) reuses the pinned official compiler/context hooks and adds owned SDK export scheduling with HTTP/protobuf acknowledgement checks. Compiler and component tests cover the declared foundation; public Go application launching and complete language qualification remain work.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
