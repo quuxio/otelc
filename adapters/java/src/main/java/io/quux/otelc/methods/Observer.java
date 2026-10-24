@@ -40,7 +40,11 @@ public final class Observer {
     Context parent = Context.current();
     if (!INSTRUMENTER.shouldStart(parent, request)) return null;
     Context context = INSTRUMENTER.start(parent, request);
-    return new Call(request, context, context.makeCurrent());
+    // Children need the original SDK span to inherit its anchored clock.
+    // Keep the exception-safe wrapper only in the instrumenter's saved context.
+    Span span = Span.fromContext(context);
+    Context executing = span instanceof SafeSpan safe ? context.with(safe.original()) : context;
+    return new Call(request, context, executing.makeCurrent());
   }
 
   public static Object exit(Call call, String descriptor, Object result, Throwable error) {
@@ -53,6 +57,19 @@ public final class Observer {
     // Resolve only this return type. Reflecting a Method resolves unrelated declarations too.
     Class<?> returnType = MethodType.fromMethodDescriptorString(
         "()" + descriptor.substring(descriptor.indexOf(')') + 1), call.request().owner().getClassLoader()).returnType();
+    if (CompletionStage.class.isAssignableFrom(returnType) && result instanceof CompletionStage<?> stage) {
+      // A failed whenComplete-derived stage asks the JDK to format the original
+      // throwable. Resolve our discarded observer stage normally instead.
+      stage.handle((value, failure) -> {
+        try { INSTRUMENTER.end(call.context(), call.request(), null, failure); }
+        catch (Throwable ignored) {
+          // Keep the advice's failure boundary in asynchronous callbacks too;
+          // a discarded failed stage can otherwise call application formatters.
+        }
+        return null;
+      });
+      return result;
+    }
     Object observed = AsyncOperationEndSupport.create(INSTRUMENTER, Void.class, returnType)
         .asyncEnd(call.context(), call.request(), result, error);
     // Stage completion callbacks are installed eagerly; the application keeps its original future.

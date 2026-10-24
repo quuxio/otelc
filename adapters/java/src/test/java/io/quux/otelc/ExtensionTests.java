@@ -5,10 +5,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
 import io.opentelemetry.sdk.common.CompletableResultCode;
+import io.opentelemetry.sdk.common.Clock;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
+import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.metrics.InstrumentType;
 import io.opentelemetry.sdk.metrics.SdkMeterProvider;
 import io.opentelemetry.sdk.metrics.data.AggregationTemporality;
@@ -41,7 +46,22 @@ class ExtensionTests {
     @Override public boolean equals(Object other) { throw new AssertionError("application equals called"); }
   }
   private static final InMemoryMetricReader GLOBAL = InMemoryMetricReader.create();
+  private static final InMemorySpanExporter TRACES = InMemorySpanExporter.create();
+  private static final TraceClock TRACE_CLOCK = new TraceClock();
   private static Path directory;
+
+  private static final class TraceClock implements Clock {
+    Clock delegate = Clock.getDefault();
+    @Override public long now() { return delegate.now(); }
+    @Override public long nanoTime() { return delegate.nanoTime(); }
+  }
+
+  private static final class MovingClock implements Clock {
+    long epoch = 1_000_000_000_000L;
+    long ticks = 100;
+    @Override public long now() { return epoch + ticks; }
+    @Override public long nanoTime() { return ticks; }
+  }
 
   @BeforeAll static void configure() throws Exception {
     directory = Files.createTempDirectory(Path.of("/tmp"), "otelc-junit-");
@@ -52,7 +72,9 @@ class ExtensionTests {
     System.setProperty("otelc.lifetime.max-live", "2");
     System.setProperty("otelc.lifetime.resources", TestResource.class.getName());
     GlobalOpenTelemetry.resetForTest();
-    OpenTelemetrySdk.builder().setMeterProvider(SdkMeterProvider.builder().registerMetricReader(GLOBAL).build()).buildAndRegisterGlobal();
+    OpenTelemetrySdk.builder().setMeterProvider(SdkMeterProvider.builder().registerMetricReader(GLOBAL).build())
+        .setTracerProvider(SdkTracerProvider.builder().setClock(TRACE_CLOCK)
+            .addSpanProcessor(SimpleSpanProcessor.create(TRACES)).build()).buildAndRegisterGlobal();
   }
 
   static long count(String name) {
@@ -160,6 +182,153 @@ class ExtensionTests {
     assertSame(future, io.quux.otelc.methods.Observer.exit(async, "()Ljava/util/concurrent/CompletableFuture;", future, null));
     future.complete(7);
     assertEquals(7, future.join());
+  }
+
+  @Test void nestedSpansShareTheParentClockWhenWallTimeMovesForward() {
+    clockIntervals(1_000_000, false);
+  }
+
+  @Test void nestedSpansShareTheParentClockWhenWallTimeMovesBackwards() {
+    clockIntervals(-1_000_000, false);
+  }
+
+  @Test void asynchronousClockAndOriginalFutureRemainUnchanged() {
+    clockIntervals(1_000_000, true);
+  }
+
+  @Test void asynchronousCompletionErrorBeforeReturnDoesNotFormat() {
+    completionError(true);
+  }
+
+  @Test void asynchronousCompletionErrorAfterReturnDoesNotFormat() {
+    completionError(false);
+  }
+
+  @Test void completionOnAWorkerRestoresBothThreadContexts() throws Exception {
+    Context caller = Context.current();
+    int first = TRACES.getFinishedSpanItems().size();
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "workerCompletion");
+    assertSame(future, io.quux.otelc.methods.Observer.exit(call,
+        "()Ljava/util/concurrent/CompletionStage;", future, null));
+    assertSame(caller, Context.current());
+    assertEquals(first, TRACES.getFinishedSpanItems().size());
+    try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      assertTrue(executor.submit(() -> {
+        Context worker = Context.current();
+        assertTrue(future.complete(7));
+        assertSame(worker, Context.current());
+        return true;
+      }).get(5, java.util.concurrent.TimeUnit.SECONDS));
+    }
+    assertEquals(7, future.join());
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+    assertTrue(TRACES.getFinishedSpanItems().getLast().getEvents().isEmpty());
+    assertSame(caller, Context.current());
+  }
+
+  @Test void cancellationFinishesTheOriginalStageExactlyOnce() {
+    int first = TRACES.getFinishedSpanItems().size();
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "cancelledCompletion");
+    assertSame(future, io.quux.otelc.methods.Observer.exit(call,
+        "()Ljava/util/concurrent/CompletableFuture;", future, null));
+    assertTrue(future.cancel(false));
+    assertTrue(future.isCancelled());
+    assertFalse(future.complete(7));
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+    var span = TRACES.getFinishedSpanItems().getLast();
+    assertEquals(io.opentelemetry.api.trace.StatusCode.ERROR, span.getStatus().getStatusCode());
+    assertEquals(1, span.getEvents().size());
+    assertEquals("java.util.concurrent.CancellationException", span.getEvents().getFirst().getAttributes().get(
+        AttributeKey.stringKey("exception.type")));
+  }
+
+  @Test void stagesDeclaredAsObjectRetainSynchronousClassification() {
+    int first = TRACES.getFinishedSpanItems().size();
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "objectReturn");
+    assertSame(future, io.quux.otelc.methods.Observer.exit(call, "()Ljava/lang/Object;", future, null));
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+    assertTrue(future.complete(7));
+    assertEquals(first + 1, TRACES.getFinishedSpanItems().size());
+  }
+
+  private void completionError(boolean alreadyFailed) {
+    int[] callbacks = {0};
+    RuntimeException error = new RuntimeException() {
+      private String formatted() { callbacks[0]++; throw new AssertionError("application formatter called"); }
+      @Override public String getMessage() { return formatted(); }
+      @Override public String getLocalizedMessage() { return formatted(); }
+      @Override public String toString() { return formatted(); }
+      @Override public synchronized Throwable getCause() { formatted(); return null; }
+      @Override public StackTraceElement[] getStackTrace() { formatted(); return new StackTraceElement[0]; }
+    };
+    int first = TRACES.getFinishedSpanItems().size();
+    Context previous = Context.current();
+    var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "completionError");
+    var future = new java.util.concurrent.CompletableFuture<Integer>();
+    if (alreadyFailed) assertTrue(future.completeExceptionally(error));
+    assertSame(future, assertDoesNotThrow(() -> io.quux.otelc.methods.Observer.exit(call,
+        "()Ljava/util/concurrent/CompletableFuture;", future, null)));
+    if (!alreadyFailed) assertTrue(assertDoesNotThrow(() -> future.completeExceptionally(error)));
+    assertTrue(future.handle((value, caught) -> caught == error).join());
+    assertEquals(0, callbacks[0]);
+    assertSame(previous, Context.current());
+    var spans = TRACES.getFinishedSpanItems();
+    assertEquals(first + 1, spans.size());
+    var completed = spans.getLast();
+    assertEquals(io.opentelemetry.api.trace.StatusCode.ERROR, completed.getStatus().getStatusCode());
+    assertEquals(error.getClass().getName(), completed.getEvents().getFirst().getAttributes().get(
+        AttributeKey.stringKey("exception.type")));
+  }
+
+  private void clockIntervals(long shift, boolean asynchronous) {
+    Clock previous = TRACE_CLOCK.delegate;
+    var clock = new MovingClock();
+    TRACE_CLOCK.delegate = clock;
+    int first = TRACES.getFinishedSpanItems().size();
+    Throwable error = new RuntimeException() {
+      @Override public String getMessage() { throw new AssertionError("application message called"); }
+      @Override public String toString() { throw new AssertionError("application formatter called"); }
+      @Override public synchronized Throwable getCause() { throw new AssertionError("application cause called"); }
+    };
+    try {
+      var tracer = GlobalOpenTelemetry.getTracer("clock-regression");
+      Span root = tracer.spanBuilder("diagnostic-root").startSpan();
+      try (var scope = root.makeCurrent()) {
+        var call = io.quux.otelc.methods.Observer.enter(ExtensionTests.class, "clockOperation");
+        assertNotNull(call);
+        clock.ticks += 100;
+        clock.epoch += shift;
+        Span child = tracer.spanBuilder("recursive-target").startSpan();
+        clock.ticks += 100;
+        child.end();
+        clock.ticks += 100;
+        if (asynchronous) {
+          var future = new java.util.concurrent.CompletableFuture<Integer>();
+          assertSame(future, io.quux.otelc.methods.Observer.exit(call,
+              "()Ljava/util/concurrent/CompletableFuture;", future, null));
+          assertTrue(future.complete(7));
+        } else {
+          assertNull(io.quux.otelc.methods.Observer.exit(call, "()V", null, error));
+        }
+      }
+      clock.ticks += 100;
+      root.end();
+      var spans = TRACES.getFinishedSpanItems().subList(first, TRACES.getFinishedSpanItems().size());
+      assertEquals(3, spans.size());
+      var child = spans.stream().filter(span -> span.getName().equals("recursive-target")).findFirst().orElseThrow();
+      var method = spans.stream().filter(span -> span.getName().endsWith(".clockOperation")).findFirst().orElseThrow();
+      assertEquals(method.getSpanId(), child.getParentSpanId());
+      assertTrue(child.getStartEpochNanos() >= method.getStartEpochNanos(), "child started before its parent");
+      assertTrue(child.getEndEpochNanos() <= method.getEndEpochNanos(), "child ended after its parent");
+      if (asynchronous) assertTrue(method.getEvents().isEmpty());
+      else assertEquals(error.getClass().getName(), method.getEvents().getFirst().getAttributes().get(
+          AttributeKey.stringKey("exception.type")));
+    } finally {
+      TRACE_CLOCK.delegate = previous;
+    }
   }
 
   @Test void customizerAppliesOnlyToTheOfficialMethodInstrumenter() {
