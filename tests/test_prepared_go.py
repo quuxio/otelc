@@ -137,6 +137,24 @@ class PreparedGoTests(unittest.TestCase):
                     raise
                 time.sleep(.005)
 
+    def test_old_or_mismatched_build_runtime_contract_refuses_before_launch(self) -> None:
+        path = self.build / 'build.json'
+        original = path.read_bytes()
+        try:
+            for field, replacement in (('schema_version', 2),
+                    ('runtime_protocols', {'config': 1, 'health': 3}),
+                    ('runtime_protocols', {'config': True, 'health': 4})):
+                changed = json.loads(original)
+                changed[field] = replacement
+                path.write_text(json.dumps(changed))
+                directory = self.runtime(field + str(replacement))
+                with patch('subprocess.Popen', side_effect=AssertionError('no process may start')):
+                    with self.assertRaisesRegex(ValueError, 'build schema3'):
+                        prepared.prepare(self.current, directory, build_directory=self.build)
+                self.assertFalse(directory.exists())
+        finally:
+            path.write_bytes(original)
+
     def test_all_startup_states_live_flags_original_errors_panic_and_literal_arguments(self) -> None:
         fake = self.base / 'forbidden-tools'
         fake.mkdir()
@@ -492,7 +510,7 @@ class PreparedGoTests(unittest.TestCase):
             env=dict(os.environ, OTELC_PYTHON=sys.executable), capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
         announced = json.loads(result.stdout)
-        self.assertEqual(announced['schema_version'], 2)
+        self.assertEqual(announced['schema_version'], 3)
         self.assertEqual(announced['allocations'], 2)
         self.assertEqual(announced['release_hooks'], 2)
         receipt = json.loads((build / 'build.json').read_text())

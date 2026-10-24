@@ -31,6 +31,8 @@ jobs:
           cache-dependency-path: |
             adapters/go/go.sum
             adapters/go-source/go.sum
+            adapters/go-http/go.mod
+            adapters/go-http/go.sum
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
@@ -62,6 +64,8 @@ jobs:
           cache-dependency-path: |
             adapters/go/go.sum
             adapters/go-source/go.sum
+            adapters/go-http/go.mod
+            adapters/go-http/go.sum
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin
@@ -94,6 +98,8 @@ jobs:
           cache-dependency-path: |
             adapters/go/go.sum
             adapters/go-source/go.sum
+            adapters/go-http/go.mod
+            adapters/go-http/go.sum
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
           distribution: temurin

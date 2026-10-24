@@ -24,15 +24,15 @@ REQUEST, PLAN, PREPARED = 'go-request.json', 'go-plan.json', 'go-prepared.json'
 BUILD_FIELDS = {'schema_version', 'kind', 'root', 'target', 'selection', 'inputs', 'sdk_inputs',
                 'private_inputs', 'context_inputs', 'inventory', 'plain', 'instrumented',
                 'modules_before', 'modules_after', 'settings', 'toolchain', 'commands', 'source_complete',
-                'launch_inputs', 'source_roster'}
+                'launch_inputs', 'source_roster', 'runtime_protocols'}
 REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'policy', 'arguments', 'plain', 'launch_id'}
 
 
 def protocols() -> dict[str, Any]:
     """Describe formats without compiling or claiming provider qualification."""
     return {'schema_version': 1, 'kind': 'otelc.go.protocols', 'profile': PROFILE,
-            'build': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
-            'execution': 1, 'health': 3, 'embedded_sdk': True, 'source_complete': False}
+            'build': 3, 'config': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
+            'execution': 1, 'health': 4, 'embedded_sdk': True, 'source_complete': False}
 
 
 def digest(value: dict[str, Any]) -> str:
@@ -77,9 +77,10 @@ def verify_build(directory: Path, policy: Policy) -> dict[str, Any]:
     from otelc.python_sdk_io import decode
     value = decode(raw)
     if (set(value) != BUILD_FIELDS or type(value['schema_version']) is not int
-            or value['schema_version'] != 2 or value['kind'] != 'otelc.go-source-build'
+            or value['schema_version'] != 3 or value['kind'] != 'otelc.go-source-build'
+            or not same(value['runtime_protocols'], {'config': 2, 'health': 4})
             or value['source_complete'] is not False):
-        raise ValueError('Go prepared profile requires build schema2')
+        raise ValueError('Go prepared profile requires build schema3 with config2/health4')
     root = Path(value['root'])
     if not root.is_absolute() or root.resolve(strict=True) != root:
         raise ValueError('Go build original root is not canonical')
@@ -101,7 +102,7 @@ def verify_build(directory: Path, policy: Policy) -> dict[str, Any]:
     inventory = decode(inventory_bytes)
     if inventory['root'] != str(root) or inventory['target'] != value['target']:
         raise ValueError('Go source inventory differs from the fixed build recipe')
-    if policy.data['context']['http'] or not same(go_source.resolve(policy, inventory), value['selection']):
+    if not same(go_source.resolve(policy, inventory), value['selection']):
         raise ValueError('Go policy differs from the compiled source/context selection')
     host = {'GOOS': platform.system().lower(),
             'GOARCH': {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(platform.machine(), platform.machine())}
@@ -209,7 +210,7 @@ def verify(runtime: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any
         if not same(decode(raw), value):
             raise ValueError('Go private runtime configuration differs from the fixed policy')
         config = {'schema_version': 1, 'kind': 'otelc.go-runtime-config', 'directory': str(runtime),
-                  'config': identity, 'health_version': 3,
+                  'config': identity, 'health_version': 4,
                   'environment': {'OTELC_GO_RUNTIME': str(runtime), 'OTELC_GO_CONFIG_SHA256': identity['sha256']}}
     if not same(original, expected) or not same(resolved, expected_plan) or not same(prepared, manifest(expected, expected_plan, config)):
         raise ValueError('Go prepared files differ from the fixed recipe')

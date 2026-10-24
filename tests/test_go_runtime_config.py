@@ -28,6 +28,7 @@ class GoRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(value['policy_sha256'], hashlib.sha256(json.dumps(policy.data, sort_keys=True).encode()).hexdigest())
         self.assertEqual(value['boundaries'], policy.data['metrics']['histogram_boundaries_seconds'])
         self.assertEqual(value['selection_sha256'], 'c' * 64)
+        self.assertEqual(value['http_context'], policy.data['context']['http'])
 
     def test_refuses_unselected_malformed_duplicate_or_disabled_bindings(self) -> None:
         policy = self.policy()
@@ -59,7 +60,7 @@ class GoRuntimeConfigTests(unittest.TestCase):
             self.assertEqual(config.stat().st_mode & 0o777, 0o600)
             original = config.read_bytes()
             self.assertEqual(hashlib.sha256(original).hexdigest(), value['environment']['OTELC_GO_CONFIG_SHA256'])
-            self.assertEqual(value['health_version'], 3)
+            self.assertEqual(value['health_version'], 4)
             with self.assertRaises(FileExistsError):
                 runtime.prepare(self.policy(), directory, functions=(), lifetimes=(), selection_sha256='a' * 64)
             self.assertEqual(config.read_bytes(), original)

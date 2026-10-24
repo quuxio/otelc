@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sdk "go.opentelemetry.io/otel/sdk/trace"
@@ -13,16 +14,35 @@ import (
 // Failed batches remain queued; SDK span construction, sampling and context are
 // unchanged. It imposes no complete-root-tree requirement on delayed children.
 type Traces struct {
-	exporter sdk.SpanExporter
-	capacity int
-	batch    int
-	mu       sync.Mutex
-	queue    []sdk.ReadOnlySpan
-	closed   bool
-	closeErr error
-	token    chan struct{}
-	worker   worker
-	health   counters
+	exporter    sdk.SpanExporter
+	capacity    int
+	batch       int
+	mu          sync.Mutex
+	queue       []sdk.ReadOnlySpan
+	closed      bool
+	closeErr    error
+	token       chan struct{}
+	worker      worker
+	health      counters
+	httpStarted atomic.Uint64
+	httpEnded   atomic.Uint64
+	httpActive  atomic.Uint64
+}
+
+const httpScope = "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
+// HTTPHealth counts recording SDK HTTP spans, including record-only spans.
+// Unclosed response-body spans remain active instead of disappearing at drain.
+type HTTPHealth struct {
+	Started, Ended, Active uint64
+	Closed                 bool
+}
+
+func (p *Traces) HTTPHealth() HTTPHealth {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	return HTTPHealth{p.httpStarted.Load(), p.httpEnded.Load(), p.httpActive.Load(), closed}
 }
 
 // NewTraces owns the supplied exporter. A zero interval uses explicit flushes.
@@ -36,11 +56,20 @@ func NewTraces(exporter sdk.SpanExporter, capacity, batch int, interval, timeout
 	return p, nil
 }
 
-// OnStart intentionally leaves SDK and application context unchanged.
-func (p *Traces) OnStart(context.Context, sdk.ReadWriteSpan) {}
+// OnStart observes owned HTTP span counts without changing application context.
+func (p *Traces) OnStart(_ context.Context, span sdk.ReadWriteSpan) {
+	if span.InstrumentationScope().Name == httpScope {
+		p.httpStarted.Add(1)
+		p.httpActive.Add(1)
+	}
+}
 
 // OnEnd never calls application code or performs network IO.
 func (p *Traces) OnEnd(span sdk.ReadOnlySpan) {
+	if span.InstrumentationScope().Name == httpScope {
+		p.httpEnded.Add(1)
+		p.httpActive.Add(^uint64(0))
+	}
 	// Record-only sampling exposes the span to processors without permitting
 	// export. Match the official SDK's simple and batch processors.
 	if !span.SpanContext().IsSampled() {

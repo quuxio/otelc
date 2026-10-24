@@ -13,7 +13,7 @@ from otelc import go_health, health
 
 def report() -> dict:
     exports = {'observed': True, 'attempts': '1', 'succeeded': '1', 'failed': '0', 'closed': False}
-    return {'schema_version': 3, 'kind': 'otelc.runtime-health', 'language': 'go',
+    return {'schema_version': 4, 'kind': 'otelc.runtime-health', 'language': 'go',
             'scope': 'sdk_pipeline', 'pid': os.getpid(), 'policy_sha256': 'a' * 64,
             'selection_sha256': 'b' * 64, 'phase': 'running', 'sdk_attached': True,
             'source_complete': False,
@@ -24,6 +24,7 @@ def report() -> dict:
             'probe_accounting': dict.fromkeys(go_health.PROBE_COUNTERS, '0') | {'closed': False},
             'metric_exports': exports,
             'trace_exports': exports | {'exported_spans': '1', 'queue_pending': '0', 'queue_dropped': '0'},
+            'http_spans': {'observed': True, 'closed': False, 'started': '0', 'ended': '0', 'active': '0'},
             'downstream_receipt': 'unavailable', 'otlp_partial_rejection': 'unavailable'}
 
 
@@ -31,7 +32,7 @@ class GoHealthTests(unittest.TestCase):
     def test_final_drain_is_separate_from_unresolved_objects_and_downstream_receipt(self) -> None:
         value = report()
         value.update(phase='final', lifecycle={'flush': 'succeeded', 'shutdown': 'succeeded'})
-        for name in ('probe_accounting', 'metric_exports', 'trace_exports'):
+        for name in ('probe_accounting', 'metric_exports', 'trace_exports', 'http_spans'):
             value[name]['closed'] = True
         value['probe_accounting'].update(object_admitted='2', objects_pending='2', resources_unreleased='2')
         self.assertTrue(go_health.final_clean(value))
@@ -42,12 +43,14 @@ class GoHealthTests(unittest.TestCase):
                 ('probe_accounting', 'function_started', '1'), ('probe_accounting', 'observer_started', '1'),
                 ('trace_exports', 'closed', False), ('trace_exports', 'queue_pending', '1'),
                 ('trace_exports', 'queue_dropped', '1'), ('metric_exports', 'failed', '1'),
-                ('metric_exports', 'attempts', '2')):
+                ('metric_exports', 'attempts', '2'), ('http_spans', 'closed', False),
+                ('http_spans', 'active', '1'), ('http_spans', 'started', '1')):
             original = copy.deepcopy(value)
             (original if section is None else original[section])[field] = changed
             with self.subTest(section=section, field=field):
                 self.assertFalse(go_health.final_clean(original))
         value['trace_exports'] = {'observed': False}
+        value['http_spans'] = {'observed': False}
         self.assertTrue(go_health.final_clean(value))
 
     def test_common_health_routes_live_and_final_go_reports(self) -> None:
@@ -59,18 +62,20 @@ class GoHealthTests(unittest.TestCase):
                 path.write_text(json.dumps(value))
                 path.chmod(0o600)
                 self.assertEqual(health.read(path), value)
-        value = report() | {'trace_exports': {'observed': False}}
+        value = report() | {'trace_exports': {'observed': False}, 'http_spans': {'observed': False}}
         self.assertIs(go_health.validate(value), value)
 
     def test_refuses_wrong_identity_control_and_completion_claims(self) -> None:
         for field, invalid in (
-            ('schema_version', True), ('schema_version', 2), ('language', 'java'),
+            ('schema_version', True), ('schema_version', 2), ('schema_version', 3), ('language', 'java'),
             ('scope', 'all_application_code'), ('pid', True), ('pid', 0),
             ('policy_sha256', 'A' * 64), ('selection_sha256', []),
             ('phase', 'completed'), ('sdk_attached', False), ('source_complete', True),
             ('downstream_receipt', 'succeeded'), ('otlp_partial_rejection', 'zero'),
             ('lifecycle', {}), ('lifecycle', {'flush': [], 'shutdown': 'pending'}),
             ('metric_exports', {'observed': False}), ('trace_exports', None),
+            ('http_spans', None), ('http_spans', {'observed': 1}), ('http_spans', {'observed': False, 'active': '0'}),
+            ('http_spans', {'observed': False}),
         ):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 go_health.validate(report() | {field: invalid})

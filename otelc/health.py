@@ -59,7 +59,7 @@ def validate(value: Any) -> dict[str, Any]:
     """Require the public report shape; consumers must assess its actual evidence."""
     if type(value) is dict and value.get('schema_version') == 2:
         return python_health.validate(value)
-    if type(value) is dict and value.get('schema_version') == 3:
+    if type(value) is dict and value.get('language') == 'go':
         return go_health.validate(value)
     _identity(value)
     lifecycle = value.get("lifecycle")

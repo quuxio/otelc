@@ -35,11 +35,12 @@ def configuration(policy: Policy, functions: tuple[str, ...], lifetimes: tuple[t
                    or type(resource) is not bool or not policy.selection('lifetimes').accepts(name)
                    for name, resource in lifetimes)):
         raise ValueError('invalid or unselected resolved Go lifetime')
-    return {'schema_version': 1, 'service_name': data['resource']['service_name'],
+    return {'schema_version': 2, 'service_name': data['resource']['service_name'],
             'endpoint': data['export']['endpoint'], 'interval_ms': data['export']['interval_ms'],
             'timeout_ms': data['export']['timeout_ms'], 'shutdown_timeout_ms': data['export']['shutdown_timeout_ms'],
             'collection': data['metrics']['collection'], 'emission': data['metrics']['emission'],
             'traces_enabled': data['traces']['enabled'], 'sample_ratio': data['traces']['sample_ratio'],
+            'http_context': data['context']['http'],
             'functions': list(functions),
             'lifetimes': [{'name': name, 'resource': resource} for name, resource in lifetimes],
             'max_live': data['lifetimes']['max_live'],
@@ -70,5 +71,5 @@ def prepare(policy: Policy, directory: Path, *, functions: tuple[str, ...],
         os.close(descriptor)
     identity, _ = checked_file(path, nofollow=True, max_bytes=MAX_CONFIG_BYTES)
     return {'schema_version': 1, 'kind': 'otelc.go-runtime-config', 'directory': str(directory),
-            'config': identity, 'health_version': 3,
+            'config': identity, 'health_version': 4,
             'environment': {'OTELC_GO_RUNTIME': str(directory), 'OTELC_GO_CONFIG_SHA256': identity['sha256']}}

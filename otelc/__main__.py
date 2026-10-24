@@ -124,7 +124,7 @@ def main() -> int:
         if args.command == 'go-build':
             tools = build_go_upstream.build(args.go, build_go_upstream.ROOT / 'build/go-upstream')
             result = go_build.build_project(args.root, args.target, policy, args.output, tools)
-            print(json.dumps({'schema_version': 2, 'kind': 'otelc.go.build-result',
+            print(json.dumps({'schema_version': 3, 'kind': 'otelc.go.build-result',
                               'profile': prepared_go.PROFILE, 'build': str(args.output.resolve() / 'build.json'),
                               'plain': result['plain'], 'instrumented': result['instrumented'],
                               'functions': [row['name'] for row in result['selection']['functions']],

@@ -38,6 +38,7 @@ type Config struct {
 	Collection        bool             `json:"collection"`
 	Emission          bool             `json:"emission"`
 	TracesEnabled     bool             `json:"traces_enabled"`
+	HTTPContext       bool             `json:"http_context"`
 	SampleRatio       float64          `json:"sample_ratio"`
 	Functions         []string         `json:"functions"`
 	Lifetimes         []probe.Lifetime `json:"lifetimes"`
@@ -50,7 +51,7 @@ type Config struct {
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (c Config) validate() error {
-	if c.SchemaVersion != 1 || c.ServiceName == "" || utf8.RuneCountInString(c.ServiceName) > 128 ||
+	if c.SchemaVersion != 2 || c.ServiceName == "" || utf8.RuneCountInString(c.ServiceName) > 128 ||
 		!digestPattern.MatchString(c.PolicySHA256) || !digestPattern.MatchString(c.SelectionSHA256) ||
 		math.IsNaN(c.SampleRatio) || math.IsInf(c.SampleRatio, 0) || c.SampleRatio < 0 || c.SampleRatio > 1 {
 		return errors.New("invalid Go runtime identity or sampling configuration")
@@ -89,6 +90,15 @@ type Runtime struct {
 	flushFailures          atomic.Uint64
 	closeOnce              sync.Once
 	closeErr               error
+}
+
+// TracerProvider exposes this runtime's owned SDK to generated library hooks.
+// It never returns or installs an application-global provider.
+func (r *Runtime) TracerProvider() trace.TracerProvider {
+	if r.provider != nil {
+		return r.provider
+	}
+	return noop.NewTracerProvider()
 }
 
 // RejectAmbient refuses before creating an official SDK that could parse/log
@@ -174,6 +184,12 @@ func (r *Runtime) attach(parent func() trace.Span, detach func(trace.Span) bool)
 		r.provider = sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithSpanProcessor(r.Traces),
 			sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(c.SampleRatio))), sdktrace.WithoutPanicRecording())
 		tracer = r.provider.Tracer(pipeline.Scope)
+	} else if c.HTTPContext {
+		// Preserve implicit W3C context even when span recording/export is
+		// disabled. No processor or exporter is created for this provider.
+		r.provider = sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithSampler(sdktrace.NeverSample()),
+			sdktrace.WithoutPanicRecording())
+		tracer = r.provider.Tracer(pipeline.Scope)
 	}
 	probes := c.probeOptions(parent, detach)
 	probes.Collecting = r.Controls.CollectionEnabled
@@ -216,15 +232,21 @@ func (r *Runtime) Health() map[string]any {
 		metrics = exportHealth(r.Metrics.Health(), false)
 	}
 	traces := map[string]any{"observed": false}
+	httpSpans := map[string]any{"observed": false}
 	if r.Traces != nil {
 		traces = exportHealth(r.Traces.Health(), true)
+		observed := r.Traces.HTTPHealth()
+		httpSpans = map[string]any{"observed": true, "closed": observed.Closed,
+			"started": strconv.FormatUint(observed.Started, 10), "ended": strconv.FormatUint(observed.Ended, 10),
+			"active": strconv.FormatUint(observed.Active, 10)}
 	}
-	return map[string]any{"schema_version": 3, "kind": "otelc.runtime-health", "language": "go", "scope": "sdk_pipeline",
+	return map[string]any{"schema_version": 4, "kind": "otelc.runtime-health", "language": "go", "scope": "sdk_pipeline",
 		"pid": os.Getpid(), "policy_sha256": r.Config.PolicySHA256, "selection_sha256": r.Config.SelectionSHA256,
 		"phase": phase, "sdk_attached": r.Metrics != nil, "source_complete": false, "controls": r.Status(),
 		"lifecycle":        map[string]string{"flush": flush, "shutdown": shutdown},
 		"metric_flush":     map[string]string{"attempts": strconv.FormatUint(r.flushAttempts.Load(), 10), "failed_attempts": strconv.FormatUint(r.flushFailures.Load(), 10)},
 		"probe_accounting": probeHealth(observers), "metric_exports": metrics, "trace_exports": traces,
+		"http_spans":         httpSpans,
 		"downstream_receipt": "unavailable", "otlp_partial_rejection": "unavailable"}
 }
 

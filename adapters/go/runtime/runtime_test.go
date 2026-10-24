@@ -89,7 +89,7 @@ func (s *receiver) snapshot() (int, int, int64) {
 }
 
 func configuration(endpoint string) Config {
-	return Config{SchemaVersion: 1, ServiceName: "go-runtime-test", Endpoint: endpoint, IntervalMS: 60000, TimeoutMS: 100, ShutdownTimeoutMS: 500,
+	return Config{SchemaVersion: 2, ServiceName: "go-runtime-test", Endpoint: endpoint, IntervalMS: 60000, TimeoutMS: 100, ShutdownTimeoutMS: 500,
 		Collection: true, Emission: true, TracesEnabled: true, SampleRatio: 1, Functions: []string{"workload"}, Lifetimes: []probe.Lifetime{},
 		MaxLive: 128, Boundaries: []float64{.001, .01}, PolicySHA256: strings.Repeat("a", 64), SelectionSHA256: strings.Repeat("b", 64)}
 }
@@ -162,7 +162,7 @@ func TestRuntimeStartupOffAndEveryLiveStateWithIndependentTraces(t *testing.T) {
 				}
 			}
 			health := command(t, r, "health")
-			if health["schema_version"] != float64(3) || health["source_complete"] != false || health["downstream_receipt"] != "unavailable" {
+			if health["schema_version"] != float64(4) || health["source_complete"] != false || health["downstream_receipt"] != "unavailable" {
 				t.Fatal("invalid health claims")
 			}
 			if command(t, r, "status")["pid"] != float64(os.Getpid()) {
@@ -294,7 +294,7 @@ func TestControlRefusesMalformedAndUnauthenticatedRequests(t *testing.T) {
 }
 
 func TestRuntimeConfigurationFailureAndAmbientSDKRefusal(t *testing.T) {
-	for _, change := range []func(*Config){func(c *Config) { c.SchemaVersion = 2 }, func(c *Config) { c.ServiceName = "" }, func(c *Config) { c.ServiceName = "bad\n" }, func(c *Config) { c.PolicySHA256 = "bad" }, func(c *Config) { c.SampleRatio = 2 }, func(c *Config) { c.IntervalMS = 0 }, func(c *Config) { c.MaxLive = 0 }, func(c *Config) { c.Endpoint = "invalid" }} {
+	for _, change := range []func(*Config){func(c *Config) { c.SchemaVersion = 1 }, func(c *Config) { c.ServiceName = "" }, func(c *Config) { c.ServiceName = "bad\n" }, func(c *Config) { c.PolicySHA256 = "bad" }, func(c *Config) { c.SampleRatio = 2 }, func(c *Config) { c.IntervalMS = 0 }, func(c *Config) { c.MaxLive = 0 }, func(c *Config) { c.Endpoint = "invalid" }} {
 		cfg := configuration("http://127.0.0.1:1")
 		change(&cfg)
 		if r, err := New(cfg, privateTemp(t), func() trace.Span { return nil }, func(trace.Span) bool { return true }); err == nil {

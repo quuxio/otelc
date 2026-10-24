@@ -34,8 +34,9 @@ func main(){value,err:=workload();fmt.Println(value,err)}
             (original / 'model').mkdir()
             (original / 'model/object.go').write_text('''/* ordinary source */package model
 type WorkItem struct{Values [2]uint64}
+var owned,official,probe,bootstrap = 1,2,3,4
 var global = &WorkItem{Values:[2]uint64{7,0}}
-func New()*WorkItem{return &WorkItem{Values:[2]uint64{42,0}}}
+func New()*WorkItem{return &WorkItem{Values:[2]uint64{uint64(32+owned+official+probe+bootstrap),0}}}
 func (item *WorkItem) Close()error{return nil}
 ''')
             before = go_build.inputs(original)
@@ -152,9 +153,6 @@ func (item *WorkItem) Close()error{return nil}
             (root / 'alias').symlink_to(root)
             with self.assertRaisesRegex(ValueError, 'symlinks'):
                 go_build.inputs(root)
-            policy = Policy.parse({'schema_version': 3, 'context': {'http': True}})
-            with self.assertRaisesRegex(ValueError, 'pending library integration'):
-                go_build.build_project(root, '.', policy, root.parent / 'unused', {})
 
 
 if __name__ == '__main__':

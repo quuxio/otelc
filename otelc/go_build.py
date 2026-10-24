@@ -8,7 +8,7 @@ import subprocess
 from typing import Any
 
 from ci import build_go_upstream as tooling
-from otelc import go_context_bundle, go_source
+from otelc import go_context_bundle, go_http_bundle, go_source
 from otelc.config import Policy
 
 SOURCE_SUFFIXES = frozenset(('.go', '.s', '.S', '.h', '.syso', '.c', '.cc', '.cpp', '.cxx', '.m', '.mm', '.f', '.f90'))
@@ -87,24 +87,35 @@ def allocate(source: bytes, rows: list[dict[str, Any]], prefix: str) -> bytes:
     return b''.join([*chunks, source[previous:]])
 
 
-def helper(package: str, prefix: str, selection_sha256: str) -> str:
-    """Generated bootstrap is private tooling, never developer-authored code."""
-    return f'''package {package}
-import (
- official "go.opentelemetry.io/otelc/pkg/runtime"
- owned "io.quux.otelc/go/runtime"
- probe "io.quux.otelc/go/probe"
-)
-var {prefix}Runtime = func()*owned.Runtime {{
- value,err:=owned.FromEnvironment(official.GetSpanFromGLS,official.DetachSpanFromGLS)
+def runtime_factory(prefix: str, selection_sha256: str, http: bool) -> str:
+    """Use one initializer body for direct helpers and eager HTTP bootstrap."""
+    configure = (f' if err:={prefix}httptrace.Configure(value.TracerProvider(),value.Metrics.Provider,'
+                 f'{prefix}official.GetSpanFromGLS,{prefix}official.DetachSpanFromGLS);err!=nil{{panic(err)}}\n') if http else ''
+    return f'''var {prefix}Runtime = func()*{prefix}owned.Runtime {{
+ value,err:={prefix}owned.FromEnvironment({prefix}official.GetSpanFromGLS,{prefix}official.DetachSpanFromGLS)
  if err!=nil{{panic(err)}}
  if value.Config.SelectionSHA256!={json.dumps(selection_sha256)}{{panic("Go runtime differs from compiled selection")}}
+{configure}\
  return value
 }}()
+'''
+
+
+def helper(package: str, prefix: str, selection_sha256: str, *, bootstrap: str | None = None) -> str:
+    """Generated bootstrap is private tooling, never developer-authored code."""
+    imports = (' ' + prefix + 'bootstrap ' + json.dumps(bootstrap) + '\n') if bootstrap else (
+        f' {prefix}official "go.opentelemetry.io/otelc/pkg/runtime"\n {prefix}owned "io.quux.otelc/go/runtime"\n')
+    initialization = f'var {prefix}Runtime = {prefix}bootstrap.Runtime\n' if bootstrap else runtime_factory(prefix, selection_sha256, False)
+    return f'''package {package}
+import (
+ {prefix}probe "io.quux.otelc/go/probe"
+{imports}\
+)
+{initialization}\
 func {prefix}Track[T any](value *T,id int)*T{{
- probe.Track({prefix}Runtime.Probes,value,id);return value
+ {prefix}probe.Track({prefix}Runtime.Probes,value,id);return value
 }}
-func {prefix}Release[T any](value *T,success bool){{probe.Release({prefix}Runtime.Probes,value,success)}}
+func {prefix}Release[T any](value *T,success bool){{{prefix}probe.Release({prefix}Runtime.Probes,value,success)}}
 '''
 
 
@@ -144,6 +155,18 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
     selected = {row['name'] for row in [*selection['functions'], *selection['releases']]}
     by_package = {row['package'] for row in inventory['functions']
                   if row['name'] in selected or row['package'] == inventory['main'] and row['symbol'] == 'main'}
+    bootstrap = None
+    if selection['context']['http']:
+        by_package.update(inventory['packages'])
+        name = 'otelc_bootstrap_' + selection['sha256'][:12]
+        directory = private / name
+        if directory.exists():
+            raise ValueError('Go HTTP bootstrap would replace an application directory')
+        directory.mkdir()
+        bootstrap = module_name + '/' + name
+        (directory / 'bootstrap.go').write_text('package otelcbootstrap\nimport (\n'
+            ' official "go.opentelemetry.io/otelc/pkg/runtime"\n owned "io.quux.otelc/go/runtime"\n'
+            ' httptrace "io.quux.otelc/go-http"\n)\n' + runtime_factory('', selection['sha256'], True))
     for row in selection['allocations']:
         package = next(name for name, fact in inventory['packages'].items()
                        if fact['directory'] == Path(row['file']).parent.as_posix())
@@ -157,7 +180,7 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
         name = 'zz_otelc_' + selection['sha256'][:12] + '.go'
         if (directory / name).exists():
             raise ValueError('generated Go helper would replace an application file')
-        (directory / name).write_text(helper(fact['name'], prefix, selection['sha256']))
+        (directory / name).write_text(helper(fact['name'], prefix, selection['sha256'], bootstrap=bootstrap))
     for name in inventory['files']:
         rows = [row for row in selection['allocations'] if row['file'] == name]
         if rows:
@@ -168,10 +191,13 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
     rule_dir.mkdir()
     (rule_dir / 'doc.go').write_text('package rules\n')
     (rule_dir / 'otelc.yaml').write_text(rules(selection, inventory, prefix))
-    (private / 'otel.instrumentation.go').write_text('//go:build tools\n\npackage tools\nimport (\n'
-        + ''.join(' _ ' + json.dumps(name) + '\n' for name in (module_name + '/otelc_rules',
+    instruments = [module_name + '/otelc_rules',
             'go.opentelemetry.io/otelc/instrumentation/runtime',
-            'go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace')) + ')\n')
+            'go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace']
+    if selection['context']['http']:
+        instruments.append('io.quux.otelc/go-http')
+    (private / 'otel.instrumentation.go').write_text('//go:build tools\n\npackage tools\nimport (\n'
+        + ''.join(' _ ' + json.dumps(name) + '\n' for name in instruments) + ')\n')
 
 
 def build_project(root: Path, target: str, policy: Policy, output: Path,
@@ -180,8 +206,6 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
     root, output = root.absolute(), output.resolve()
     if root.resolve(strict=True) != root or output.is_relative_to(root):
         raise ValueError('Go build requires a canonical root and external output')
-    if policy.data['context']['http']:
-        raise ValueError('Go HTTP context weaving requires its pending library integration')
     original = inputs(root)
     output.mkdir(mode=0o700)
     inventory = go_source.inspect_project(root, target, tools, output / 'inspection')
@@ -222,7 +246,23 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
         raise ValueError('local Go module replacements require a separate closure profile')
     before = documents(command([go, 'list', '-m', '-mod=readonly', '-json', 'all'], root))
     instrument_sources(root, private, inventory, selection, settings['Module']['Path'])
-    for name, path in {**go_context_bundle.replacements(modules), 'io.quux.otelc/go': sdk}.items():
+    http_modules = {}
+    if policy.data['context']['http']:
+        http_directory = private / '.otelc-http'
+        if http_directory.exists():
+            raise ValueError('Go HTTP support directory conflicts with an application input')
+        http_directory.mkdir(mode=0o700)
+        hooks = http_directory / 'hooks'
+        shutil.copytree(go_source.ROOT / 'adapters/go-http', hooks)
+        upstream = http_directory / 'otelhttp'
+        go_http_bundle.prepare(tools, upstream)
+        http_modules = {'io.quux.otelc/go-http': hooks, go_http_bundle.MODULE: upstream}
+        native = Path(tools['go']).parent.parent / 'src/net/http'
+        for name, declaration in (('roundtrip.go', 'func (t *Transport) RoundTrip(req *Request) (*Response, error) {'),
+                                  ('server.go', 'func (sh serverHandler) ServeHTTP(rw ResponseWriter, req *Request) {')):
+            if (native / name).read_text().count(declaration) != 1:
+                raise ValueError('Go HTTP native entry differs from the pinned compiler profile')
+    for name, path in {**go_context_bundle.replacements(modules), 'io.quux.otelc/go': sdk, **http_modules}.items():
         command([go, 'mod', 'edit', '-replace=' + name + '=' + str(path), '-require=' + name + '@v0.0.0'], private)
     command([go, 'mod', 'edit', '-require=go.opentelemetry.io/otel/sdk@v1.47.0'], private)
     command([go, 'mod', 'tidy'], private)
@@ -236,7 +276,8 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
              '-mod=readonly', '-o', str(instrumented), target], private)
     if inputs(root) != original or inputs(sdk) != sdk_inputs:
         raise ValueError('Go original application or private SDK changed during compilation')
-    receipt = {'schema_version': 2, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
+    receipt = {'schema_version': 3, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
+               'runtime_protocols': {'config': 2, 'health': 4},
                'selection': selection, 'inputs': original, 'sdk_inputs': sdk_inputs,
                'launch_inputs': {name: original[name] for name in
                                  sorted(set(inventory['compiler_inputs']) | {'go.mod'} | ({'go.sum'} & set(original)))},

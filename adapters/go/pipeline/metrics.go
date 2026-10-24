@@ -72,7 +72,9 @@ func NewMetrics(controls *metriccontrol.Controls, exporter sdk.Exporter, res *re
 	m.reader = sdk.NewManualReader(sdk.WithTemporalitySelector(m.exporter.Temporality),
 		sdk.WithAggregationSelector(m.exporter.Aggregation))
 	m.base = sdk.NewMeterProvider(sdk.WithReader(m.reader), sdk.WithResource(res))
-	m.Provider = controls.MeterProvider(m.base, noop.NewMeterProvider(), func(scope string) bool { return scope == Scope })
+	m.Provider = controls.MeterProvider(m.base, noop.NewMeterProvider(), func(scope string) bool {
+		return scope == Scope || scope == httpScope
+	})
 	m.worker = start(interval, timeout, m.Flush)
 	return m, nil
 }

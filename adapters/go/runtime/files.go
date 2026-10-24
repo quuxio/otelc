@@ -101,7 +101,7 @@ func Load(directory, expectedSHA256 string) (Config, error) {
 		return config, errors.New("Go configuration content changed")
 	}
 	err = decodeObject(data, []string{"schema_version", "service_name", "endpoint", "interval_ms", "timeout_ms", "shutdown_timeout_ms",
-		"collection", "emission", "traces_enabled", "sample_ratio", "functions", "lifetimes", "max_live", "boundaries", "policy_sha256", "selection_sha256"}, &config)
+		"collection", "emission", "traces_enabled", "http_context", "sample_ratio", "functions", "lifetimes", "max_live", "boundaries", "policy_sha256", "selection_sha256"}, &config)
 	if err != nil {
 		return config, err
 	}

@@ -66,6 +66,7 @@ type acknowledgementTransport struct {
 }
 
 func (t acknowledgementTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	request = request.WithContext(WithoutHTTPInstrumentation(request.Context()))
 	response, err := t.base.RoundTrip(request)
 	if err != nil {
 		return nil, err

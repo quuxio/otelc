@@ -1,0 +1,26 @@
+# Targets are the pinned official net/http locations. Direct entry injection
+# preserves original panics; recoverable before-hooks must not call native code.
+otelc_owned_http_bridge:
+  target: net/http
+  do:
+    - add_file:
+        file: http_bridge.go
+        path: io.quux.otelc/go-http
+otelc_owned_http_client:
+  target: net/http
+  where:
+    func: RoundTrip
+    recv: "*Transport"
+  do:
+    - inject_code:
+        raw: |
+          if otelcClientEnabled(req) { return otelcRoundTrip(t, req) }
+otelc_owned_http_server:
+  target: net/http
+  where:
+    func: ServeHTTP
+    recv: serverHandler
+  do:
+    - inject_code:
+        raw: |
+          if otelcServerEnabled(req) { otelcServeHTTP(sh, rw, req); return }

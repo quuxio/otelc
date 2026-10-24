@@ -43,13 +43,13 @@ def exports(value: Any, *, traces: bool) -> None:
 
 
 def validate(value: Any) -> dict[str, Any]:
-    """Accept schema 3 only; consumers assess counters and scope separately."""
+    """Accept schema 4 only; HTTP activity is separate from function probes."""
     fields = {'schema_version', 'kind', 'language', 'scope', 'pid', 'policy_sha256',
               'selection_sha256', 'phase', 'sdk_attached', 'source_complete', 'controls',
-              'lifecycle', 'metric_flush', 'probe_accounting', 'metric_exports',
+              'lifecycle', 'metric_flush', 'probe_accounting', 'metric_exports', 'http_spans',
               'trace_exports', 'downstream_receipt', 'otlp_partial_rejection'}
     if (type(value) is not dict or set(value) != fields
-            or type(value['schema_version']) is not int or value['schema_version'] != 3
+            or type(value['schema_version']) is not int or value['schema_version'] != 4
             or value['kind'] != 'otelc.runtime-health' or value['language'] != 'go'
             or value['scope'] != 'sdk_pipeline' or type(value['pid']) is not int or value['pid'] <= 0
             or value['phase'] not in ('running', 'final') or value['sdk_attached'] is not True
@@ -73,6 +73,16 @@ def validate(value: Any) -> dict[str, Any]:
     counters(value['probe_accounting'], PROBE_COUNTERS, boolean='closed')
     exports(value['metric_exports'], traces=False)
     exports(value['trace_exports'], traces=True)
+    http = value['http_spans']
+    if type(http) is not dict or type(http.get('observed')) is not bool:
+        raise ValueError('invalid Go HTTP span observation')
+    if http['observed']:
+        counters({key: item for key, item in http.items() if key != 'observed'},
+                 {'started', 'ended', 'active'}, boolean='closed')
+    elif http != {'observed': False}:
+        raise ValueError('unobserved Go HTTP spans have invented counters')
+    if http['observed'] != value['trace_exports']['observed']:
+        raise ValueError('Go HTTP observer differs from its owned trace SDK')
     if (value['metric_exports'].get('observed') is not True
             or value['downstream_receipt'] != 'unavailable' or value['otlp_partial_rejection'] != 'unavailable'):
         raise ValueError('unsupported Go health delivery claim')
@@ -83,6 +93,9 @@ def final_clean(value: Any) -> bool:
     """Assess final SDK drain only; unresolved lifetimes and receipt stay separate."""
     report = validate(value)
     probes = report['probe_accounting']
+    http = report['http_spans']
+    if http['observed'] and (not http['closed'] or http['active'] != '0' or http['started'] != http['ended']):
+        return False
     if (report['phase'] != 'final' or report['lifecycle'] != {'flush': 'succeeded', 'shutdown': 'succeeded'}
             or not probes['closed'] or report['metric_flush']['failed_attempts'] != '0'
             or any(probes[key] != '0' for key in ('function_active', 'observer_active',
