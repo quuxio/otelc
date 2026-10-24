@@ -4,6 +4,8 @@ Status: implementation in progress. The [SDK controls](go-sdk-controls.md) are d
 
 ## Upstream compiler and context reuse
 
+Explicit build variants use repeated `go-build --build-tag NAME` arguments. The [tagged build guide](go-build-tags-plan.md) describes build 5, the matching compiler inspection, retained command evidence and compiler-free launch checks. Omitting tags keeps build 4 unchanged. Tags are build context; the common instrumentation TOML remains the same.
+
 `make go-upstream` builds the official `go.opentelemetry.io/otelc` compiler wrapper at version 1.0.1 using Go 1.27.3. It verifies the module and go.mod checksums, embedded instrumentation bundle, executable build metadata and reported tool version. Compiler, executable and bundle identities are retained in `build/go-upstream/toolchain.json`. These are tooling inputs, not evidence that a particular application was instrumented.
 
 The build environment pins `GOROOT`, `GOTOOLCHAIN=local` and the selected compiler's directory at the start of `PATH`. The wrapper runs a nested `go` command, so passing an absolute compiler to the stock build alone is insufficient. Every compiler fixture independently checks that nested `go env` reports the same Go version and root before building.

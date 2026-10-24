@@ -8,7 +8,7 @@ import subprocess
 from typing import Any
 
 from ci import build_go_upstream as tooling
-from otelc import go_context_bundle, go_http_bundle, go_source
+from otelc import go_build_tags, go_context_bundle, go_http_bundle, go_source
 from otelc.config import Policy
 
 SOURCE_SUFFIXES = frozenset(('.go', '.s', '.S', '.h', '.syso', '.c', '.cc', '.cpp', '.cxx', '.m', '.mm', '.f', '.f90'))
@@ -149,7 +149,8 @@ def rules(selection: dict[str, Any], inventory: dict[str, Any], prefix: str) -> 
 
 
 def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
-                       selection: dict[str, Any], module_name: str) -> None:
+                       selection: dict[str, Any], module_name: str, *,
+                       build_tags: tuple[str, ...] = ()) -> None:
     """Materialise typed expression wrappers, package helpers and upstream rules."""
     prefix = '__otelc_' + selection['sha256'][:12] + '_'
     selected = {row['name'] for row in [*selection['functions'], *selection['releases']]}
@@ -196,19 +197,22 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
             'go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace']
     if selection['context']['http']:
         instruments.append('io.quux.otelc/go-http')
-    (private / 'otel.instrumentation.go').write_text('//go:build tools\n\npackage tools\nimport (\n'
+    # The first explicit tag is true in both builds, even when it is "tools".
+    constraint = '!' + build_tags[0] if build_tags else 'tools'
+    (private / 'otel.instrumentation.go').write_text('//go:build ' + constraint + '\n\npackage tools\nimport (\n'
         + ''.join(' _ ' + json.dumps(name) + '\n' for name in instruments) + ')\n')
 
 
 def build_project(root: Path, target: str, policy: Policy, output: Path,
-                  tools: dict[str, Any]) -> dict[str, Any]:
+                  tools: dict[str, Any], *, build_tags: tuple[str, ...] = ()) -> dict[str, Any]:
     """Produce both immutable binaries; launching is a separate compiler-free API."""
+    tags = go_build_tags.canonical(build_tags)
     root, output = root.absolute(), output.resolve()
     if root.resolve(strict=True) != root or output.is_relative_to(root):
         raise ValueError('Go build requires a canonical root and external output')
     original = inputs(root)
     output.mkdir(mode=0o700)
-    inventory = go_source.inspect_project(root, target, tools, output / 'inspection')
+    inventory = go_source.inspect_project(root, target, tools, output / 'inspection', build_tags=tags)
     if any(name not in original or original[name]['sha256'] != digest for name, digest in inventory['compiler_inputs'].items()):
         raise ValueError('Go parser input differs from the frozen original project')
     selection = go_source.resolve(policy, inventory)
@@ -245,7 +249,7 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
     if any(not row['New'].get('Version') for row in settings.get('Replace') or []):
         raise ValueError('local Go module replacements require a separate closure profile')
     before = documents(command([go, 'list', '-m', '-mod=readonly', '-json', 'all'], root))
-    instrument_sources(root, private, inventory, selection, settings['Module']['Path'])
+    instrument_sources(root, private, inventory, selection, settings['Module']['Path'], build_tags=tags)
     http_modules = {}
     if policy.data['context']['http']:
         http_directory = private / '.otelc-http'
@@ -271,12 +275,13 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
     command([go, 'mod', 'verify'], root)
     command([go, 'mod', 'verify'], private)
     plain, instrumented = output / 'plain', output / 'instrumented'
-    command([go, 'build', '-mod=readonly', '-o', str(plain), target], root)
+    flags = ['-mod=readonly', *go_build_tags.arguments(tags)]
+    command([go, 'build', *flags, '-o', str(plain), target], root)
     command([tools['weaver'], '--work-dir', str(output / 'weaver-work'), 'go', 'build',
-             '-mod=readonly', '-o', str(instrumented), target], private)
+             *flags, '-o', str(instrumented), target], private)
     if inputs(root) != original or inputs(sdk) != sdk_inputs:
         raise ValueError('Go original application or private SDK changed during compilation')
-    receipt = {'schema_version': 4, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
+    receipt = {'schema_version': 5 if tags else 4, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
                'runtime_protocols': {'config': 2, 'health': 4},
                'selection': selection, 'inputs': original, 'sdk_inputs': sdk_inputs,
                'launch_inputs': {name: original[name] for name in
@@ -287,6 +292,11 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
                'plain': go_source.identity(plain), 'instrumented': go_source.identity(instrumented),
                'modules_before': before, 'modules_after': after, 'settings': settings,
                'toolchain': tools, 'commands': commands, 'source_complete': False}
+    if tags:
+        receipt['build_tags'] = list(tags)
+        receipt['command_evidence'] = {name: go_source.identity(output / name) for name in
+            ['commands.json', *[f'command-{index}.{suffix}' for index in range(len(commands))
+                               for suffix in ('stdout', 'stderr')]]}
     (output / 'build.json').write_text(json.dumps(receipt, sort_keys=True, indent=2) + '\n')
     shutil.rmtree(scratch)
     return receipt

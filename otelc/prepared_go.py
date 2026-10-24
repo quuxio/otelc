@@ -13,10 +13,11 @@ import subprocess
 import sys
 from typing import Any
 
-from otelc import file_inputs, go_build, go_health, go_runtime_config, go_source, health
+from otelc import file_inputs, go_build, go_build_tags, go_health, go_runtime_config, go_source, health
 from otelc import python_launch_files as files
 from otelc import python_recipe
 from otelc.config import Policy
+from otelc.python_handoff import unique_fields
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = 'go-source-v1'
@@ -28,11 +29,14 @@ BUILD_FIELDS = {'schema_version', 'kind', 'root', 'target', 'selection', 'inputs
 REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'policy', 'arguments', 'plain', 'launch_id'}
 
 
-def protocols() -> dict[str, Any]:
+def protocols(*, build_tags: bool = False) -> dict[str, Any]:
     """Describe formats without compiling or claiming provider qualification."""
-    return {'schema_version': 1, 'kind': 'otelc.go.protocols', 'profile': PROFILE,
+    value = {'schema_version': 1, 'kind': 'otelc.go.protocols', 'profile': PROFILE,
             'build': 4, 'config': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
             'execution': 1, 'health': 4, 'embedded_sdk': True, 'source_complete': False}
+    if build_tags:
+        value.update(build=5, inspection=2)
+    return value
 
 
 def digest(value: dict[str, Any]) -> str:
@@ -76,11 +80,16 @@ def verify_build(directory: Path, policy: Policy) -> dict[str, Any]:
                                             nofollow=True, max_bytes=go_source.MAX_INVENTORY)
     from otelc.python_sdk_io import decode
     value = decode(raw)
-    if (set(value) != BUILD_FIELDS or type(value['schema_version']) is not int
-            or value['schema_version'] != 4 or value['kind'] != 'otelc.go-source-build'
+    tagged = value.get('schema_version') == 5
+    fields = BUILD_FIELDS | {'build_tags', 'command_evidence'} if tagged else BUILD_FIELDS
+    if (set(value) != fields or type(value['schema_version']) is not int
+            or value['schema_version'] not in (4, 5) or value['kind'] != 'otelc.go-source-build'
             or not same(value['runtime_protocols'], {'config': 2, 'health': 4})
             or value['source_complete'] is not False):
-        raise ValueError('Go prepared profile requires build schema4 with config2/health4')
+        raise ValueError('Go prepared profile requires build schema4/5 with config2/health4')
+    tags = go_build_tags.record(value['build_tags']) if tagged else ()
+    if tagged:
+        verify_tagged_commands(directory, value, tags)
     root = Path(value['root'])
     if not root.is_absolute() or root.resolve(strict=True) != root:
         raise ValueError('Go build original root is not canonical')
@@ -100,6 +109,11 @@ def verify_build(directory: Path, policy: Policy) -> dict[str, Any]:
     _, inventory_bytes = file_inputs.checked_file(inventory_path, include_content=True,
                                                   nofollow=True, max_bytes=go_source.MAX_INVENTORY)
     inventory = decode(inventory_bytes)
+    if (type(inventory.get('schema_version')) is not int
+            or inventory['schema_version'] != (2 if tagged else 1)
+            or (tagged and not same(inventory.get('build_tags'), list(tags)))
+            or (not tagged and 'build_tags' in inventory)):
+        raise ValueError('Go source inventory differs from the fixed build tags')
     if inventory['root'] != str(root) or inventory['target'] != value['target']:
         raise ValueError('Go source inventory differs from the fixed build recipe')
     if not same(go_source.resolve(policy, inventory), value['selection']):
@@ -109,6 +123,38 @@ def verify_build(directory: Path, policy: Policy) -> dict[str, Any]:
     if value['toolchain']['platform'] != host:
         raise ValueError('Go build is not for the current native host')
     return {'identity': identity, 'receipt': value}
+
+
+def verify_tagged_commands(directory: Path, value: dict[str, Any], tags: tuple[str, ...]) -> None:
+    """Check retained compiler recipes and logs without executing recorded argv."""
+    commands = value['commands']
+    if (type(commands) is not list or not 2 <= len(commands) <= 128
+            or any(type(row) is not dict or set(row) != {'argv', 'cwd', 'exit_code'}
+                   or type(row['argv']) is not list or not row['argv']
+                   or any(type(arg) is not str for arg in row['argv'])
+                   or type(row['cwd']) is not str or not same(row['exit_code'], 0)
+                   for row in commands)):
+        raise ValueError('invalid Go tagged compiler command records')
+    names = {'commands.json', *[f'command-{index}.{suffix}' for index in range(len(commands))
+                               for suffix in ('stdout', 'stderr')]}
+    evidence = value['command_evidence']
+    if (type(evidence) is not dict or set(evidence) != names
+            or any(not same(go_source.identity(directory / name), evidence[name]) for name in names)):
+        raise ValueError('Go tagged compiler command evidence changed')
+    command_identity, raw = file_inputs.checked_file(directory / 'commands.json', include_content=True,
+                                                     nofollow=True, max_bytes=go_source.MAX_INVENTORY)
+    if (not same(command_identity, evidence['commands.json'])
+            or not same(json.loads(raw, object_pairs_hook=unique_fields), commands)):
+        raise ValueError('Go tagged compiler command evidence changed')
+    flags = ['-mod=readonly', *go_build_tags.arguments(tags)]
+    expected = [
+        {'argv': [value['toolchain']['go'], 'build', *flags, '-o', str(directory / 'plain'), value['target']],
+         'cwd': value['root'], 'exit_code': 0},
+        {'argv': [value['toolchain']['weaver'], '--work-dir', str(directory / 'weaver-work'),
+                  'go', 'build', *flags, '-o', str(directory / 'instrumented'), value['target']],
+         'cwd': str(directory / 'private'), 'exit_code': 0}]
+    if not same(commands[-2:], expected):
+        raise ValueError('Go tagged compiler command differs from the fixed build recipe')
 
 
 def bindings(value: dict[str, Any]) -> dict[str, Any]:

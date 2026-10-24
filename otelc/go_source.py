@@ -8,6 +8,7 @@ import subprocess
 from typing import Any
 
 from ci import build_go_upstream as tooling
+from otelc import go_build_tags
 from otelc.config import Policy, Selection
 from otelc.file_inputs import checked_file
 
@@ -22,8 +23,9 @@ def identity(path: Path) -> dict[str, Any]:
 
 
 def inspect_project(root: Path, target: str, tools: dict[str, Any],
-                    output: Path) -> dict[str, Any]:
+                    output: Path, *, build_tags: tuple[str, ...] = ()) -> dict[str, Any]:
     """Build the locked inspector and load types without executing the target."""
+    tags = go_build_tags.canonical(build_tags)
     root = root.absolute()
     if root.resolve(strict=True) != root:
         raise ValueError('Go source root must be canonical without symlink aliases')
@@ -50,15 +52,23 @@ def inspect_project(root: Path, target: str, tools: dict[str, Any],
     if build.returncode:
         raise RuntimeError(f'Go source inspector build failed ({build.returncode})')
     request = {'schema_version': 1, 'root': str(root), 'target': target}
-    result = subprocess.run([str(binary)], input=json.dumps(request).encode(), cwd=output,
+    if tags:
+        request.update(schema_version=2, build_tags=list(tags))
+    encoded = json.dumps(request, ensure_ascii=not bool(tags)).encode()
+    result = subprocess.run([str(binary)], input=encoded, cwd=output,
                             env=env, capture_output=True, timeout=300)
     (output / 'inspect.stderr').write_bytes(result.stderr)
     if result.returncode or len(result.stdout) > MAX_INVENTORY:
         raise ValueError('Go source inspection failed: ' + result.stderr.decode(errors='replace')[-4096:])
     inventory = json.loads(result.stdout)
-    if (type(inventory) is not dict or inventory.get('schema_version') != 1
+    if (type(inventory) is not dict or type(inventory.get('schema_version')) is not int
+            or inventory['schema_version'] != (2 if tags else 1)
             or inventory.get('root') != str(root) or inventory.get('target') != target):
         raise ValueError('Go source inspector returned a different request binding')
+    if tags and go_build_tags.record(inventory.get('build_tags')) != tags:
+        raise ValueError('Go source inspector returned different build tags')
+    if not tags and 'build_tags' in inventory:
+        raise ValueError('untagged Go inspection returned tagged inputs')
     for name, sha256 in inventory['files'].items():
         path = root / name
         if not path.is_relative_to(root) or '..' in Path(name).parts or path.resolve(strict=True) != path:
@@ -70,7 +80,7 @@ def inspect_project(root: Path, target: str, tools: dict[str, Any],
     if any(identity(source / name) != value for name, value in tooling_inputs.items()):
         raise ValueError('Go inspector tooling changed during source inspection')
     (output / 'inventory.json').write_bytes(result.stdout)
-    receipt = {'schema_version': 1, 'kind': 'otelc.go-source-inspection',
+    receipt = {'schema_version': 2 if tags else 1, 'kind': 'otelc.go-source-inspection',
                'request': request, 'inventory': identity(output / 'inventory.json'),
                'inspector': identity(binary), 'tooling': tooling_inputs, 'modules': original,
                'go': {'path': tools['go'], 'sha256': tools['go_sha256']},
@@ -83,8 +93,13 @@ def resolve(policy: Policy, inventory: dict[str, Any]) -> dict[str, Any]:
     """Select functions, concrete allocations and releases without fixture names."""
     if 'go' not in policy.data['languages']:
         raise ValueError('Go is not enabled by the common policy')
-    if inventory.get('schema_version') != 1:
+    version = inventory.get('schema_version')
+    if type(version) is not int or version not in (1, 2):
         raise ValueError('unsupported Go source inventory')
+    if version == 2:
+        go_build_tags.record(inventory.get('build_tags'))
+    elif 'build_tags' in inventory:
+        raise ValueError('untagged Go source inventory contains build tags')
     sources = policy.selection('sources')
 
     def selected(row: dict[str, Any], section: str) -> bool:

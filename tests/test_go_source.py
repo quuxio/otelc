@@ -110,9 +110,19 @@ func excludedWorkload(){}
         with self.assertRaisesRegex(ValueError, 'ambiguous'):
             go_source.resolve(self.policy(), inventory)
         with self.assertRaisesRegex(ValueError, 'inventory'):
-            go_source.resolve(self.policy(), {'schema_version': 2})
+            go_source.resolve(self.policy(), {'schema_version': 3})
         with self.assertRaisesRegex(ValueError, 'not enabled'):
             go_source.resolve(Policy.parse({'schema_version': 3, 'languages': ['java']}), self.inventory)
+
+    def test_tagged_inventory_requires_exact_version_and_canonical_nonempty_tags(self) -> None:
+        tagged = copy.deepcopy(self.inventory)
+        tagged.update(schema_version=2, build_tags=['feature'])
+        self.assertEqual(go_source.resolve(self.policy(), tagged), go_source.resolve(self.policy(), self.inventory))
+        for version, names in ((2, []), (2, ['z', 'a']), (1, ['feature']), (True, ['feature'])):
+            value = copy.deepcopy(tagged)
+            value.update(schema_version=version, build_tags=names)
+            with self.subTest(version=version, names=names), self.assertRaises(ValueError):
+                go_source.resolve(self.policy(), value)
 
     def test_module_and_output_boundaries_fail_before_application_build(self) -> None:
         empty = self.directory / 'empty'
