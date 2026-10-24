@@ -29,6 +29,7 @@ class MetricState {
  public:
   MetricState(bool collection, bool emission);
   MetricStatus Status() const;
+  bool Collecting() const noexcept { return collection_.load(std::memory_order_acquire); }
   bool SetEmission(bool enabled);
 
  private:
