@@ -23,7 +23,7 @@ Linux CI uses Ubuntu 24.04 and `bash ci/install_llvm22.sh`, selecting `/usr/lib/
 make llvm-plugin LLVM_OUTPUT=build/llvm-plugin-second
 ```
 
-The record binds the compiler/plugin source, compiler identities, actual compile command, diagnostics and resulting library. The Python API retains an immutable caller-held build result; an edited on-disk record does not replace it. This is a local component binding, not a signature or whole-program provenance claim. `source_complete=false` stays explicit.
+The record binds the compiler/plugin source, compiler identities, actual compile command, compilation database, diagnostics and resulting library. The Python API retains an immutable caller-held build result; an edited on-disk record does not replace it. The [native analysis pipeline](native-analysis.md) uses that actual build context for C++ scanning. This is a local component binding, not a signature or whole-program provenance claim. `source_complete=false` stays explicit.
 
 ## Common selection and probe contract
 

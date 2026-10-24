@@ -95,7 +95,9 @@ test: java-build node-observer node-http native-check
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_journal.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_execution.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/llvm_backend.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/native_sonar.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
+	$(PYTHON) -m ci.native_sonar
 
 check: lint java-check node-check go-check python-inputs-check test
 

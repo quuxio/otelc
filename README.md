@@ -28,7 +28,7 @@ The [Go SDK controls component](docs/go-sdk-controls.md) adds independent live g
 
 The [LLVM compiler component](docs/llvm-backend.md) is a candidate for original C/C++ compilation and a separate ordinary IR example. It preserves tested exception cleanup and applies common function selection; native SDK export, live controls and lifetime instrumentation remain work.
 
-The [native SDK control component](docs/native-sdk-controls.md) reuses official C++ SDK meter configuration and filtering for live collection, with a separate emission delegate. Native application launch, OTLP integration and complete C/C++ lifetime support remain work.
+The [native SDK control component](docs/native-sdk-controls.md) reuses official C++ SDK meter configuration and filtering for live collection, with a separate emission delegate. Its [native analysis pipeline](docs/native-analysis.md) retains actual compiler context and exact-source coverage for Sonar. Native application launch, OTLP integration and complete C/C++ lifetime support remain work.
 
 ## Java example and Grafana
 

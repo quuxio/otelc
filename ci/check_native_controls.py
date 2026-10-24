@@ -54,7 +54,8 @@ def check() -> None:
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith('OTEL') and key not in ('CXXFLAGS', 'CFLAGS', 'CPPFLAGS', 'LDFLAGS')}
     commands = []
-    with tempfile.TemporaryDirectory(prefix='native-controls-', dir=output) as temporary:
+    keep_analysis = os.environ.get('OTELC_CPP_ANALYSIS') == '1'
+    with tempfile.TemporaryDirectory(prefix='native-controls-', dir=output, delete=not keep_analysis) as temporary:
         work = Path(temporary).resolve()
         environment['LLVM_PROFILE_FILE'] = str(work / '%m-%p.profraw')
         def run(arguments: list[str]) -> None:
@@ -63,7 +64,8 @@ def check() -> None:
         run([cmake, '-S', str(NATIVE), '-B', str(work), '-G', 'Ninja',
              '-DCMAKE_MAKE_PROGRAM=' + str(tools[1]), '-DCMAKE_BUILD_TYPE=Release',
              '-DCMAKE_CXX_COMPILER=' + str(binaries / 'clang++'),
-             '-DCMAKE_C_COMPILER=' + str(binaries / 'clang'), '-DOTELC_NATIVE_COVERAGE=ON'])
+             '-DCMAKE_C_COMPILER=' + str(binaries / 'clang'), '-DOTELC_NATIVE_COVERAGE=ON',
+             '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'])
         run([cmake, '--build', str(work), '--target', 'otelc_native_controls_test', '--parallel', '2'])
         run([str(ctest), '--test-dir', str(work), '--output-on-failure'])
         profiles = sorted(work.glob('*.profraw'))
@@ -77,6 +79,10 @@ def check() -> None:
         commands.append(command)
         coverage = json.loads(subprocess.check_output(command, env=environment, timeout=60))
         lines = summaries(coverage, expected)
+        lcov = output / 'native-control.lcov'
+        lcov.write_bytes(subprocess.check_output([*command, '-format=lcov'], env=environment, timeout=60))
+        database = output / 'native-sdk-compile-commands.json'
+        shutil.copyfile(work / 'compile_commands.json', database)
         if before != [llvm_backend.identity(path) for path in sources] or tool_inputs != [llvm_backend.identity(path) for path in tools] or not llvm_backend.unchanged(llvm):
             raise ValueError('native metric source or tooling changed during validation')
         shutil.copyfile(executable, output / 'native-control-test')
@@ -84,6 +90,7 @@ def check() -> None:
         (output / 'native-control-coverage.json').write_text(json.dumps({
             'source_inputs': before, 'tool_inputs': tool_inputs, 'llvm': llvm,
             'product': llvm_backend.identity(output / 'native-control-test'),
+            'lcov': llvm_backend.identity(lcov), 'compilation_database': llvm_backend.identity(database),
             'line_coverage': lines, 'commands': commands,
             'scope': 'SDK controls only; no native application launch or downstream telemetry qualification'}, indent=2) + '\n')
         print('Native metric control line coverage:', lines)

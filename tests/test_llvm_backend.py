@@ -62,6 +62,10 @@ class LLVMBackendTests(unittest.TestCase):
         self.assertIn('-I/headers with spaces', self.compilation)
         self.assertIn('-L/libraries with spaces', self.compilation)
         self.assertIn('-fcoverage-mapping', self.compilation)
+        database = json.loads((plugin.directory / 'compile_commands.json').read_text())
+        self.assertEqual(database, [{'directory': str(backend.ROOT), 'file': str(self.source),
+                                     'arguments': self.compilation}])
+        self.assertEqual(self.run_mock.call_args.kwargs['cwd'], backend.ROOT)
         with patch.object(backend.subprocess, 'run', side_effect=AssertionError('verification executed metadata')):
             self.assertEqual(backend.verify(plugin), value)
         view = plugin.manifest()
@@ -93,7 +97,7 @@ class LLVMBackendTests(unittest.TestCase):
             backend.verify(value)
 
     def test_changed_source_tool_or_audit_record_refuses(self) -> None:
-        for name in ('source', 'clang', 'build.stdout', 'command.json'):
+        for name in ('source', 'clang', 'build.stdout', 'command.json', 'compile_commands.json'):
             plugin = self.build('output-' + name.replace('.', '-'))
             path = self.source if name == 'source' else self.root / name if name == 'clang' else plugin.directory / name
             original = path.read_bytes()

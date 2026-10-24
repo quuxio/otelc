@@ -71,6 +71,7 @@ jobs:
     env:
       CXX: /usr/lib/llvm-22/bin/clang++
       OTELC_LLVM_BIN: /usr/lib/llvm-22/bin
+      OTELC_CPP_ANALYSIS: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

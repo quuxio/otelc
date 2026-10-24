@@ -119,17 +119,20 @@ def build(output: Path, *, config: Path | None = None, coverage: bool = False) -
                *tools['cxxflags'], str(SOURCE), *tools['ldflags'], '-o', str(plugin)]
     if coverage:
         command.extend(['-fprofile-instr-generate', '-fcoverage-mapping'])
-    result = subprocess.run(command, capture_output=True, timeout=180)
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=180)
     (output / 'build.stdout').write_bytes(result.stdout)
     (output / 'build.stderr').write_bytes(result.stderr)
     (output / 'command.json').write_text(json.dumps(command, indent=2) + '\n')
+    (output / 'compile_commands.json').write_text(json.dumps([
+        {'directory': str(ROOT), 'file': str(SOURCE), 'arguments': command}], indent=2) + '\n')
     if result.returncode:
         raise ValueError('LLVM plugin compilation failed; see build.stderr')
     if identity(SOURCE) != source or not unchanged(tools):
         raise ValueError('LLVM source or tooling changed during compilation')
     value = {'schema_version': 1, 'kind': 'otelc.llvm-plugin', 'profile': PROFILE,
              'source': source, 'toolchain': tools, 'plugin': identity(plugin),
-             'evidence': {name: identity(output / name) for name in ('command.json', 'build.stdout', 'build.stderr')},
+             'evidence': {name: identity(output / name) for name in
+                          ('command.json', 'compile_commands.json', 'build.stdout', 'build.stderr')},
              'coverage': coverage, 'probe_abi': 'otelc.function.v1', 'source_complete': False}
     encoded = json.dumps(value, sort_keys=True, indent=2) + '\n'
     (output / MANIFEST).write_text(encoded)

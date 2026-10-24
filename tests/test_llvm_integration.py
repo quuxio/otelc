@@ -27,7 +27,9 @@ class LLVMIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         (ROOT / 'build').mkdir(exist_ok=True)
-        cls.temporary = tempfile.TemporaryDirectory(prefix='llvm-hooks-', dir=ROOT / 'build')
+        cls.keep_analysis = os.environ.get('OTELC_CPP_ANALYSIS') == '1'
+        cls.temporary = tempfile.TemporaryDirectory(prefix='llvm-hooks-', dir=ROOT / 'build',
+                                                     delete=not cls.keep_analysis)
         cls.base = Path(cls.temporary.name).resolve()
         cls.plugin = backend.build(cls.base / 'plugin', coverage=True)
         cls.manifest = backend.verify(cls.plugin)
@@ -55,14 +57,21 @@ class LLVMIntegrationTests(unittest.TestCase):
                  if Path(file['filename']).resolve() == backend.SOURCE.resolve()]
         assert len(files) == 1, 'native pass coverage is missing its exact source file'
         (ROOT / 'build/llvm-pass-coverage.json').write_bytes(exported)
+        lcov = ROOT / 'build/llvm-pass.lcov'
+        lcov.write_bytes(subprocess.check_output([str(cls.bin / 'llvm-cov'), 'export', str(cls.library),
+            '-format=lcov', '-instr-profile=' + str(merged), str(backend.SOURCE)], timeout=60))
+        database = ROOT / 'build/llvm-pass-compile-commands.json'
+        shutil.copyfile(cls.base / 'plugin/compile_commands.json', database)
         retained = ROOT / 'build' / cls.library.name
         shutil.copyfile(cls.library, retained)
         (ROOT / 'build/llvm-pass-coverage-identity.json').write_text(json.dumps({
             'plugin_sha256': cls.manifest['plugin']['sha256'], 'source': cls.manifest['source'],
+            'lcov': backend.identity(lcov), 'compilation_database': backend.identity(database),
             'line_coverage': files[0]['summary']['lines'], 'llvm_version': cls.manifest['toolchain']['version'],
             'scope': 'Exact compiler plugin executed inside Clang; fixture ABI counters are not a native SDK.'}, indent=2) + '\n')
         assert files[0]['summary']['lines']['percent'] >= 80, files[0]['summary']['lines']
-        cls.temporary.cleanup()
+        if not cls.keep_analysis:
+            cls.temporary.cleanup()
 
     def run_command(self, args: list, *, environment: dict | None = None, success: bool = True) -> subprocess.CompletedProcess:
         result = subprocess.run(list(map(str, args)), env=environment, capture_output=True,
