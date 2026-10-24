@@ -56,7 +56,12 @@ class ExtensionTests {
   }
 
   static long count(String name) {
+    return count(name, null);
+  }
+
+  static long count(String name, String scope) {
     return GLOBAL.collectAllMetrics().stream().filter(metric -> metric.getName().equals(name))
+        .filter(metric -> scope == null || scope.equals(metric.getInstrumentationScopeInfo().getName()))
         .flatMap(metric -> metric.getLongSumData().getPoints().stream()).mapToLong(LongPointData::getValue).sum();
   }
 
@@ -134,7 +139,7 @@ class ExtensionTests {
     listener.onEnd(listener.onStart(Context.root(), attrs, 1000), Attributes.empty(), 2000);
     listener.onEnd(listener.onStart(admitted, attrs, 1500), Attributes.empty(), 2000);
     assertEquals(3, state.completed.get());
-    assertEquals(3, count("otelc.function.calls"));
+    assertEquals(3, count("otelc.function.calls", "test-methods"));
   }
 
   @Test void safeMethodObserverPreservesValuesAndClosesSyncAndAsyncScopes() {

@@ -18,7 +18,7 @@ from test_prepared_java import binding
 
 class HelperCollisionTests(unittest.TestCase):
     def test_private_helpers_preserve_application_namespaces_without_source_changes(self) -> None:
-        for namespace in ("methods", "lifecycle", "http"):
+        for namespace in ("methods", "lifecycle", "witness.probe", "http"):
             for jar in (False, True):
                 with self.subTest(namespace=namespace, jar=jar):
                     self.exercise(namespace, jar)
@@ -94,6 +94,6 @@ class HelperCollisionTests(unittest.TestCase):
                     self.assertFalse((runtime / "helpers-extension.jar").exists())
                 else:
                     mapping = json.loads((runtime / "helpers.json").read_text())
-                    self.assertEqual(set(mapping["packages"]), {"io.quux.otelc.methods.", "io.quux.otelc.lifecycle.", "io.quux.otelc.http."})
+                    self.assertEqual(set(mapping["packages"]), {"io.quux.otelc.methods.", "io.quux.otelc.lifecycle.", "io.quux.otelc.witness.probe.", "io.quux.otelc.http."})
                     self.assertEqual(capture.calls(), 1)
                     self.assertGreater(len(capture.traces), 0)
