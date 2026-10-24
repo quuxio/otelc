@@ -12,6 +12,7 @@ from otelc import go_build_tags, go_context_bundle, go_http_bundle, go_prepared_
 from otelc.config import Policy
 
 SOURCE_SUFFIXES = frozenset(('.go', '.s', '.S', '.h', '.syso', '.c', '.cc', '.cpp', '.cxx', '.m', '.mm', '.f', '.f90'))
+SCOPE_HELPER_PROFILE = 'private-bootstrap-v1'
 
 
 def source_roster(root: Path) -> list[str]:
@@ -101,8 +102,31 @@ def runtime_factory(prefix: str, selection_sha256: str, http: bool) -> str:
 '''
 
 
-def helper(package: str, prefix: str, selection_sha256: str, *, bootstrap: str | None = None) -> str:
+def scope_helper(package: str, prefix: str, *, bootstrap: str | None = None) -> str:
+    """Resolve the runtime and predeclared types outside application bindings."""
+    if bootstrap is None:
+        raise ValueError('Go helpers require the private bootstrap package')
+    return f'''package {package}
+import (
+ {prefix}probe "io.quux.otelc/go/probe"
+ {prefix}bootstrap {json.dumps(bootstrap)}
+)
+const {prefix}False = {prefix}bootstrap.False
+const {prefix}True = {prefix}bootstrap.True
+func {prefix}Runtime()*{prefix}bootstrap.RuntimeType{{return {prefix}bootstrap.Runtime}}
+func {prefix}NotNil[T {prefix}bootstrap.Any](value T){prefix}bootstrap.Bool{{return {prefix}bootstrap.NotNil(value)}}
+func {prefix}Track[T {prefix}bootstrap.Any](value *T,id {prefix}bootstrap.Int)*T{{
+ {prefix}probe.Track({prefix}bootstrap.Runtime.Probes,value,id);return value
+}}
+func {prefix}Release[T {prefix}bootstrap.Any](value *T,success {prefix}bootstrap.Bool){{{prefix}probe.Release({prefix}bootstrap.Runtime.Probes,value,success)}}
+'''
+
+
+def helper(package: str, prefix: str, selection_sha256: str, *, bootstrap: str | None = None,
+           scope_safe: bool = False) -> str:
     """Generated bootstrap is private tooling, never developer-authored code."""
+    if scope_safe:
+        return scope_helper(package, prefix, bootstrap=bootstrap)
     imports = (' ' + prefix + 'bootstrap ' + json.dumps(bootstrap) + '\n') if bootstrap else (
         f' {prefix}official "go.opentelemetry.io/otelc/pkg/runtime"\n {prefix}owned "io.quux.otelc/go/runtime"\n')
     initialization = f'var {prefix}Runtime = {prefix}bootstrap.Runtime\n' if bootstrap else runtime_factory(prefix, selection_sha256, False)
@@ -119,10 +143,20 @@ func {prefix}Release[T any](value *T,success bool){{{prefix}probe.Release({prefi
 '''
 
 
-def rules(selection: dict[str, Any], inventory: dict[str, Any], prefix: str) -> str:
+def failure_expression(expression: str, prefix: str) -> str:
+    """Translate the inspector's closed failure grammar without app-scope builtins."""
+    if expression in ('true', 'false'):
+        return prefix + expression.title()
+    if expression.endswith(' != nil') and expression[:-7].strip():
+        return prefix + 'NotNil(' + expression[:-7] + ')'
+    raise ValueError('unsupported Go error-result predicate')
+
+
+def rules(selection: dict[str, Any], inventory: dict[str, Any], prefix: str, *, scope_safe: bool = False) -> str:
     """One rule per declaration composes shutdown, function and release hooks."""
     function_ids = {row['name']: index for index, row in enumerate(selection['functions'])}
     releases = {row['name']: row for row in selection['releases']}
+    runtime = prefix + ('Runtime()' if scope_safe else 'Runtime')
     rows = []
     for row in inventory['functions']:
         finish = row['package'] == inventory['main'] and row['symbol'] == 'main' and not row['receiver_id']
@@ -130,13 +164,14 @@ def rules(selection: dict[str, Any], inventory: dict[str, Any], prefix: str) -> 
             continue
         code = []
         if finish:
-            code.append('defer ' + prefix + 'Runtime.Close()')
-        failure = ' || '.join(value['failure'] for value in row['results'] if value['error']) or 'false'
+            code.append('defer ' + runtime + '.Close()')
+        failure = ' || '.join(failure_expression(value['failure'], prefix) if scope_safe else value['failure']
+                              for value in row['results'] if value['error']) or (prefix + 'False' if scope_safe else 'false')
         if row['name'] in function_ids:
-            code.append(f'{prefix}Invocation := {prefix}Runtime.Probes.Start({function_ids[row["name"]]})')
+            code.append(f'{prefix}Invocation := {runtime}.Probes.Start({function_ids[row["name"]]})')
             code.append('defer func(){' + prefix + 'Invocation.End(' + failure + ')}()')
         if row['name'] in releases:
-            code.append(f'{prefix}Completion := {prefix}Runtime.Probes.Watch()')
+            code.append(f'{prefix}Completion := {runtime}.Probes.Watch()')
             code.append('defer func(){' + prefix + 'Release(' + row['receiver'] + ','
                         + prefix + 'Completion.End(' + failure + '))}()')
         target = 'main' if row['package'] == inventory['main'] else row['package']
@@ -150,24 +185,31 @@ def rules(selection: dict[str, Any], inventory: dict[str, Any], prefix: str) -> 
 
 def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
                        selection: dict[str, Any], module_name: str, *,
-                       build_tags: tuple[str, ...] = ()) -> None:
+                       build_tags: tuple[str, ...] = (), scope_safe: bool = False) -> None:
     """Materialise typed expression wrappers, package helpers and upstream rules."""
     prefix = '__otelc_' + selection['sha256'][:12] + '_'
     selected = {row['name'] for row in [*selection['functions'], *selection['releases']]}
     by_package = {row['package'] for row in inventory['functions']
                   if row['name'] in selected or row['package'] == inventory['main'] and row['symbol'] == 'main'}
-    bootstrap = None
     if selection['context']['http']:
         by_package.update(inventory['packages'])
+    bootstrap = None
+    if scope_safe or selection['context']['http']:
         name = 'otelc_bootstrap_' + selection['sha256'][:12]
         directory = private / name
         if directory.exists():
-            raise ValueError('Go HTTP bootstrap would replace an application directory')
+            raise ValueError('Go bootstrap would replace an application directory')
         directory.mkdir()
         bootstrap = module_name + '/' + name
+        http_import = ' httptrace "io.quux.otelc/go-http"\n' if selection['context']['http'] else ''
+        declarations = ('type Any = interface{}\ntype Bool = bool\ntype Int = int\ntype RuntimeType = owned.Runtime\n'
+                        'const False = false\nconst True = true\n'
+                        'func NotNil[T any](value T)bool{return !reflect.ValueOf(&value).Elem().IsNil()}\n') if scope_safe else ''
         (directory / 'bootstrap.go').write_text('package otelcbootstrap\nimport (\n'
-            ' official "go.opentelemetry.io/otelc/pkg/runtime"\n owned "io.quux.otelc/go/runtime"\n'
-            ' httptrace "io.quux.otelc/go-http"\n)\n' + runtime_factory('', selection['sha256'], True))
+            + (' "reflect"\n' if scope_safe else '')
+            + ' official "go.opentelemetry.io/otelc/pkg/runtime"\n owned "io.quux.otelc/go/runtime"\n'
+            + http_import + ')\n' + declarations
+            + runtime_factory('', selection['sha256'], selection['context']['http']))
     for row in selection['allocations']:
         package = next(name for name, fact in inventory['packages'].items()
                        if fact['directory'] == Path(row['file']).parent.as_posix())
@@ -181,7 +223,8 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
         name = 'zz_otelc_' + selection['sha256'][:12] + '.go'
         if (directory / name).exists():
             raise ValueError('generated Go helper would replace an application file')
-        (directory / name).write_text(helper(fact['name'], prefix, selection['sha256'], bootstrap=bootstrap))
+        (directory / name).write_text(helper(fact['name'], prefix, selection['sha256'],
+                                            bootstrap=bootstrap, scope_safe=scope_safe))
     for name in inventory['files']:
         rows = [row for row in selection['allocations'] if row['file'] == name]
         if rows:
@@ -191,7 +234,7 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
         raise ValueError('existing Go instrumentation requires a separate composition profile')
     rule_dir.mkdir()
     (rule_dir / 'doc.go').write_text('package rules\n')
-    (rule_dir / 'otelc.yaml').write_text(rules(selection, inventory, prefix))
+    (rule_dir / 'otelc.yaml').write_text(rules(selection, inventory, prefix, scope_safe=scope_safe))
     instruments = [module_name + '/otelc_rules',
             'go.opentelemetry.io/otelc/instrumentation/runtime',
             'go.opentelemetry.io/otelc/instrumentation/go.opentelemetry.io/otel/sdk/trace']
@@ -205,15 +248,20 @@ def instrument_sources(root: Path, private: Path, inventory: dict[str, Any],
 
 def build_project(root: Path, target: str, policy: Policy, output: Path,
                   tools: dict[str, Any], *, build_tags: tuple[str, ...] = (),
-                  prepared_tools: go_prepared_tools.PreparedTools | None = None) -> dict[str, Any]:
+                  prepared_tools: go_prepared_tools.PreparedTools | None = None,
+                  scope_safe: bool = False) -> dict[str, Any]:
     """Produce both immutable binaries; launching is a separate compiler-free API."""
     tags = go_build_tags.canonical(build_tags)
     if prepared_tools is not None:
         if type(prepared_tools) is not go_prepared_tools.PreparedTools:
             raise ValueError('Go prepared tooling requires its caller-held binding')
         prepared_tools.verify(tools)
-    if tools.get('schema_version') == 2:
+    if type(scope_safe) is not bool:
+        raise ValueError('Go scope-safe build selection must be boolean')
+    if tools.get('schema_version') == 2 and not scope_safe:
         raise ValueError('scope-safe Go tooling requires a separately versioned application build profile')
+    if scope_safe and (prepared_tools is None or tools.get('schema_version') != 2):
+        raise ValueError('scope-safe Go builds require caller-held prepared tooling2')
     root, output = root.absolute(), output.resolve()
     if root.resolve(strict=True) != root or output.is_relative_to(root):
         raise ValueError('Go build requires a canonical root and external output')
@@ -256,7 +304,8 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
     if any(not row['New'].get('Version') for row in settings.get('Replace') or []):
         raise ValueError('local Go module replacements require a separate closure profile')
     before = documents(command([go, 'list', '-m', '-mod=readonly', '-json', 'all'], root))
-    instrument_sources(root, private, inventory, selection, settings['Module']['Path'], build_tags=tags)
+    instrument_sources(root, private, inventory, selection, settings['Module']['Path'],
+                       build_tags=tags, scope_safe=scope_safe)
     http_modules = {}
     if policy.data['context']['http']:
         http_directory = private / '.otelc-http'
@@ -290,7 +339,8 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
         raise ValueError('Go original application or private SDK changed during compilation')
     if prepared_tools is not None:
         prepared_tools.verify(tools)
-    receipt = {'schema_version': 5 if tags else 4, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
+    receipt = {'schema_version': (7 if tags else 6) if scope_safe else (5 if tags else 4),
+               'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
                'runtime_protocols': {'config': 2, 'health': 4},
                'selection': selection, 'inputs': original, 'sdk_inputs': sdk_inputs,
                'launch_inputs': {name: original[name] for name in
@@ -301,8 +351,11 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
                'plain': go_source.identity(plain), 'instrumented': go_source.identity(instrumented),
                'modules_before': before, 'modules_after': after, 'settings': settings,
                'toolchain': tools, 'commands': commands, 'source_complete': False}
+    if scope_safe:
+        receipt['helper_profile'] = SCOPE_HELPER_PROFILE
     if tags:
         receipt['build_tags'] = list(tags)
+    if tags or scope_safe:
         receipt['command_evidence'] = {name: go_source.identity(output / name) for name in
             ['commands.json', *[f'command-{index}.{suffix}' for index in range(len(commands))
                                for suffix in ('stdout', 'stderr')]]}

@@ -6,6 +6,8 @@ The explicit prepared-tools profile separates installing SDK compiler tooling fr
 
 ## Prepare, negotiate and build
 
+This guide describes default tooling 1 with builds 4/5. The explicit [private-bootstrap candidate](go-scope-build.md) separately negotiates tooling 2 with builds 6/7; the helper/profile contract must not be mixed between them.
+
 ```sh
 make go-upstream
 bin/quux-otelc go-protocols --prepared-tools

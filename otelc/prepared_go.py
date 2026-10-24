@@ -13,6 +13,7 @@ import subprocess
 import sys
 from typing import Any
 
+from ci import go_scope_patch
 from otelc import file_inputs, go_build, go_build_tags, go_health, go_runtime_config, go_source, health
 from otelc import python_launch_files as files
 from otelc import python_recipe
@@ -29,7 +30,8 @@ BUILD_FIELDS = {'schema_version', 'kind', 'root', 'target', 'selection', 'inputs
 REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'policy', 'arguments', 'plain', 'launch_id'}
 
 
-def protocols(*, build_tags: bool = False, prepared_tools: bool = False) -> dict[str, Any]:
+def protocols(*, build_tags: bool = False, prepared_tools: bool = False,
+              scope_safe: bool = False) -> dict[str, Any]:
     """Describe formats without compiling or claiming provider qualification."""
     value = {'schema_version': 1, 'kind': 'otelc.go.protocols', 'profile': PROFILE,
             'build': 4, 'config': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
@@ -38,6 +40,11 @@ def protocols(*, build_tags: bool = False, prepared_tools: bool = False) -> dict
         value.update(build=5, inspection=2)
     if prepared_tools:
         value['prepared_tools'] = 1
+    if scope_safe:
+        value.update(build=7 if build_tags else 6, inspection=2 if build_tags else 1,
+                     helper_profile=go_build.SCOPE_HELPER_PROFILE)
+        if prepared_tools:
+            value['prepared_tools'] = 2
     return value
 
 
@@ -82,15 +89,27 @@ def verify_build(directory: Path, policy: Policy) -> dict[str, Any]:
                                             nofollow=True, max_bytes=go_source.MAX_INVENTORY)
     from otelc.python_sdk_io import decode
     value = decode(raw)
-    tagged = value.get('schema_version') == 5
+    tagged = value.get('schema_version') in (5, 7)
+    scope_safe = value.get('schema_version') in (6, 7)
     fields = BUILD_FIELDS | {'build_tags', 'command_evidence'} if tagged else BUILD_FIELDS
+    if scope_safe:
+        fields = fields | {'helper_profile', 'command_evidence'}
     if (set(value) != fields or type(value['schema_version']) is not int
-            or value['schema_version'] not in (4, 5) or value['kind'] != 'otelc.go-source-build'
+            or value['schema_version'] not in (4, 5, 6, 7) or value['kind'] != 'otelc.go-source-build'
             or not same(value['runtime_protocols'], {'config': 2, 'health': 4})
+            or type(value['toolchain']) is not dict
             or value['source_complete'] is not False):
-        raise ValueError('Go prepared profile requires build schema4/5 with config2/health4')
+        raise ValueError('Go prepared profile requires build schema4/5/6/7 with config2/health4')
+    if not scope_safe and same(value['toolchain'].get('schema_version'), 2):
+        raise ValueError('Go scope-safe tooling cannot use an old helper/build format')
+    if scope_safe and (value['helper_profile'] != go_build.SCOPE_HELPER_PROFILE
+            or type(value['toolchain']) is not dict
+            or not same(value['toolchain'].get('schema_version'), 2)
+            or value['toolchain'].get('patch_profile') != go_scope_patch.PROFILE
+            or value['toolchain'].get('version_output') != 'otelc version ' + go_scope_patch.VERSION):
+        raise ValueError('Go scope-safe build requires its fixed helper and tooling2 profile')
     tags = go_build_tags.record(value['build_tags']) if tagged else ()
-    if tagged:
+    if tagged or scope_safe:
         verify_tagged_commands(directory, value, tags)
     root = Path(value['root'])
     if not root.is_absolute() or root.resolve(strict=True) != root:
@@ -136,18 +155,18 @@ def verify_tagged_commands(directory: Path, value: dict[str, Any], tags: tuple[s
                    or any(type(arg) is not str for arg in row['argv'])
                    or type(row['cwd']) is not str or not same(row['exit_code'], 0)
                    for row in commands)):
-        raise ValueError('invalid Go tagged compiler command records')
+        raise ValueError('invalid Go compiler command records')
     names = {'commands.json', *[f'command-{index}.{suffix}' for index in range(len(commands))
                                for suffix in ('stdout', 'stderr')]}
     evidence = value['command_evidence']
     if (type(evidence) is not dict or set(evidence) != names
             or any(not same(go_source.identity(directory / name), evidence[name]) for name in names)):
-        raise ValueError('Go tagged compiler command evidence changed')
+        raise ValueError('Go compiler command evidence changed')
     command_identity, raw = file_inputs.checked_file(directory / 'commands.json', include_content=True,
                                                      nofollow=True, max_bytes=go_source.MAX_INVENTORY)
     if (not same(command_identity, evidence['commands.json'])
             or not same(json.loads(raw, object_pairs_hook=unique_fields), commands)):
-        raise ValueError('Go tagged compiler command evidence changed')
+        raise ValueError('Go compiler command evidence changed')
     flags = ['-mod=readonly', *go_build_tags.arguments(tags)]
     expected = [
         {'argv': [value['toolchain']['go'], 'build', *flags, '-o', str(directory / 'plain'), value['target']],
@@ -156,7 +175,7 @@ def verify_tagged_commands(directory: Path, value: dict[str, Any], tags: tuple[s
                   'go', 'build', *flags, '-o', str(directory / 'instrumented'), value['target']],
          'cwd': str(directory / 'private'), 'exit_code': 0}]
     if not same(commands[-2:], expected):
-        raise ValueError('Go tagged compiler command differs from the fixed build recipe')
+        raise ValueError('Go compiler command differs from the fixed build recipe')
 
 
 def bindings(value: dict[str, Any]) -> dict[str, Any]:

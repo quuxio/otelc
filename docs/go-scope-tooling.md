@@ -19,10 +19,10 @@ The executable reports `otelc version v1.0.1+quux.scope.1`. Its actual Go build 
 
 `otelc.go_prepared_tools.prepare()` accepts this explicit schema-2 installation, rechecks the fixed source directory and manifest, and queries only the recorded compiler and fixed `bin/otelc`. The caller-held binding detects changed source bytes, file facts, tool identities or metadata. Application build caches do not select replacement installed tools. Validation does not download, install or rewrite the tooling.
 
-This is an installer and prepared-tool component. It does not negotiate a new public Go application recipe, admit the scope-safe helper prototype, or establish complete Go language qualification. The public helper/build format must be versioned and independently reconstructed by oteleq before that route is admitted.
+This is an installer and prepared-tool component. The separate explicit [private-bootstrap candidate](go-scope-build.md) negotiates application builds 6/7 and requires a caller-held tooling-2 binding. It does not establish complete Go language qualification. Independent oteleq reconstruction and provider admission remain outstanding.
 
 ## Checks
 
 `tests/test_go_scope_patch.py` covers exact-source patching, copy preservation, source drift, changed manifests and refused links. `tests/test_go_scope_tooling.py` checks the explicit version/provenance contract and read-only bindings. Its real-compiler test demonstrates that the raw-only regression fails on the original source and passes after the patch, runs the upstream instrument package tests, and confirms that required trampoline declarations remain present.
 
-The default Python test discovery includes these checks. The Makefile requires at least 80% line coverage for the patch component, installer and prepared-tool reader separately. Application-level helper/error-result regressions and the independently reviewed public format remain separate work.
+The default Python test discovery includes these checks. The Makefile requires at least 80% line coverage for the patch component, installer and prepared-tool reader separately. The private-bootstrap candidate has separate application-level helper/error-result regressions; independently reviewed provider admission remains work.
