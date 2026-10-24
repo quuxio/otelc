@@ -319,6 +319,28 @@ class PreparedGoTests(unittest.TestCase):
             prepared.execution(directory, supervisor_pid=process.pid, parent_pid=os.getpid(), returncode=0)
         owner_path.write_bytes(owner_original)
 
+    def test_execution_reader_accepts_parent_one_without_allowing_child_one_or_coercion(self) -> None:
+        # Model the container PID namespace in completed records. These real
+        # processes run on the ordinary host; this is not a PID-1 container test.
+        for plain in (True, False):
+            directory = self.runtime('parent-one-' + str(plain))
+            process = self.start(directory, plain=plain)
+            self.line(process)
+            record = self.finish(process, directory)
+            owner = prepared.read(directory / 'go-supervisor-start.json')
+            owner['parent_pid'] = 1
+            record['supervisor'] = owner
+            (directory / 'go-supervisor-start.json').write_text(json.dumps(owner))
+            (directory / 'go-execution.json').write_text(json.dumps(record))
+            self.assertEqual(prepared.execution(directory, supervisor_pid=process.pid,
+                                               parent_pid=1, returncode=0), record)
+            for parent in (0, -1, True, 1.0, process.pid):
+                with self.subTest(plain=plain, parent=parent), self.assertRaises(ValueError):
+                    prepared.execution(directory, supervisor_pid=process.pid, parent_pid=parent, returncode=0)
+            for supervisor in (0, 1, True, 1.0):
+                with self.subTest(plain=plain, supervisor=supervisor), self.assertRaises(ValueError):
+                    prepared.execution(directory, supervisor_pid=supervisor, parent_pid=1, returncode=0)
+
     def test_signal_forwarding_keeps_actual_application_signal_and_incomplete_health(self) -> None:
         directory = self.runtime('signal')
         process = self.start(directory)

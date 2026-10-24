@@ -284,7 +284,8 @@ def execution(runtime: Path | str, *, supervisor_pid: int, parent_pid: int,
     A returned failure record remains incomplete evidence. No target is started
     and no live flush, Collector query or lifetime drain is performed here.
     """
-    if (any(type(pid) is not int or pid <= 1 for pid in (supervisor_pid, parent_pid))
+    if (type(supervisor_pid) is not int or supervisor_pid <= 1
+            or type(parent_pid) is not int or parent_pid < 1 or parent_pid == supervisor_pid
             or type(returncode) is not int or not -128 <= returncode <= 255):
         raise ValueError('Go execution requires caller-observed process and exit identities')
     runtime = Path(runtime)
@@ -298,7 +299,7 @@ def execution(runtime: Path | str, *, supervisor_pid: int, parent_pid: int,
     result = read(runtime / 'go-execution.json')
     execution_shape(result)
     if (result['launch_id'] != original['launch_id'] or not same(result['supervisor'], owner)
-            or result['application_pid'] == supervisor_pid):
+            or result['application_pid'] in (supervisor_pid, parent_pid)):
         raise ValueError('Go execution has a different owner or application identity')
     application = {'schema_version': 1, 'kind': 'otelc.go.application', 'profile': PROFILE,
                    'launch_id': original['launch_id'], 'pid': result['application_pid'],
