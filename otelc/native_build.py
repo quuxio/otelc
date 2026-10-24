@@ -12,6 +12,7 @@ from otelc.python_sdk_io import decode
 
 PROFILE = 'native-owned-v1'
 MANIFEST = 'native-source-build.json'
+SDK_MANIFEST = 'native-sdk-build.json'
 FIELDS = {'schema_version', 'kind', 'profile', 'native', 'plugin', 'gate', 'sdk', 'source_complete'}
 
 
@@ -24,7 +25,7 @@ def read(path: Path) -> tuple[dict[str, Any], bytes]:
 def sdk(directory: Path) -> dict[str, Any]:
     """Bind the fixed SDK product and its retained source/tool inputs."""
     directory = directory.resolve(strict=True)
-    value, _ = read(directory / 'native-sdk-build.json')
+    value, _ = read(directory / SDK_MANIFEST)
     fields = {'schema_version', 'kind', 'sources', 'toolchain', 'build_tools', 'commands',
               'library', 'coverage', 'source_complete'}
     name = 'libotelc_native_runtime.dylib' if sys.platform == 'darwin' else 'libotelc_native_runtime.so'
@@ -58,7 +59,7 @@ def build(policy: Policy, language: str, root: Path, sources: list[Path], output
              'native': native_gate.identity(built.directory / 'native-build.json'),
              'plugin': native_gate.identity(built.directory / 'plugin' / llvm_backend.MANIFEST),
              'gate': native_gate.identity(built.directory / 'gate/gate.json'),
-             'sdk': native_gate.identity(Path(sdk_directory).resolve() / 'native-sdk-build.json'),
+             'sdk': native_gate.identity(Path(sdk_directory).resolve() / SDK_MANIFEST),
              'source_complete': False}
     (built.directory / MANIFEST).write_text(json.dumps(value, sort_keys=True, indent=2) + '\n')
     return value
@@ -80,7 +81,8 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
     if type(value['sdk']) is not dict or type(value['sdk'].get('path')) is not str:
         raise ValueError('native SDK build binding must identify its fixed record')
     sdk_path = Path(value['sdk']['path'])
-    if not sdk_path.is_absolute() or native_gate.identity(sdk_path) != value['sdk']:
+    if (not sdk_path.is_absolute() or sdk_path.name != SDK_MANIFEST
+            or sdk_path.resolve(strict=True) != sdk_path or native_gate.identity(sdk_path) != value['sdk']):
         raise ValueError('native SDK build binding changed')
     source_sdk = sdk(sdk_path.parent)
     metadata, raw = read(fixed['native'])

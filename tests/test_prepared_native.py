@@ -253,6 +253,7 @@ class PreparedNativeTests(unittest.TestCase):
         for field, wrong in (('exec_verified', True), ('source_complete', True),
                              ('schema_version', True), ('released', 1), ('inputs_rechecked', 1),
                              ('process_exit_code', False), ('profile', 'unknown'),
+                             ('process_exit_code', 23), ('process_exit_code', -9),
                              ('application', None), ('sdk_health', {}), ('extra', 'field')):
             changed = dict(final); changed[field] = wrong
             try:
@@ -313,19 +314,20 @@ class PreparedNativeTests(unittest.TestCase):
             self.assertEqual(final['failures'], {})
             self.assertTrue(final['released'] and final['inputs_rechecked'])
 
-    def test_killed_woven_application_does_not_gain_a_successful_sdk_checkpoint(self) -> None:
-        runtime, process, _ = self.start('killed', covered=True)
-        app = self.wait_file(runtime / 'native-application-start.json', process)
-        prepared.release(runtime, pid=app['pid'], supervisor_pid=process.pid)
-        self.line(process)
-        os.kill(app['pid'], signal.SIGKILL)
-        self.assertEqual(process.wait(timeout=10), 128 + signal.SIGKILL)
-        final = prepared.execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(),
-                                   returncode=process.returncode)
-        self.assertEqual(final['process_exit_code'], -signal.SIGKILL)
-        self.assertIsNone(final['sdk_health'])
-        self.assertFalse(final['inputs_rechecked'])
-        self.assertTrue(final['failures'])
+    def test_killed_application_preserves_signal_and_missing_sdk_checkpoint(self) -> None:
+        for plain in (True, False):
+            runtime, process, _ = self.start('killed-' + str(plain), plain=plain, covered=True)
+            app = self.wait_file(runtime / 'native-application-start.json', process)
+            prepared.release(runtime, pid=app['pid'], supervisor_pid=process.pid)
+            self.line(process)
+            os.kill(app['pid'], signal.SIGKILL)
+            self.assertEqual(process.wait(timeout=10), 128 + signal.SIGKILL)
+            final = prepared.execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(),
+                                       returncode=process.returncode)
+            self.assertEqual(final['process_exit_code'], -signal.SIGKILL)
+            self.assertIsNone(final['sdk_health'])
+            self.assertEqual(final['inputs_rechecked'], plain)
+            self.assertEqual(bool(final['failures']), not plain)
 
     def test_host_refusal_reaps_the_waiting_child_without_running_its_constructor(self) -> None:
         runtime, marker = self.base / 'host-refusal', self.base / 'host-refusal.ctor'
@@ -374,3 +376,39 @@ class PreparedNativeTests(unittest.TestCase):
             if not plain:
                 self.assertEqual(final['sdk_health']['function_accounting']['ended'], '1')
         self.assertEqual(source.read_bytes(), original)
+
+    def test_execution_health_is_bound_to_the_verified_language_and_selection(self) -> None:
+        runtime, process, _ = self.start('health', covered=True)
+        app = self.wait_file(runtime / 'native-application-start.json', process)
+        prepared.release(runtime, pid=app['pid'], supervisor_pid=process.pid)
+        self.line(process)
+        final = self.finish(runtime, process)
+        execution, checkpoint = runtime / 'native-execution.json', runtime / 'app/health.json'
+        execution_raw, checkpoint_raw = execution.read_bytes(), checkpoint.read_bytes()
+        for field, altered in (('language', 'java'), ('selection_sha256', '0' * 64)):
+            changed = copy.deepcopy(final)
+            changed['sdk_health'][field] = altered
+            try:
+                execution.write_text(json.dumps(changed))
+                checkpoint.write_text(json.dumps(changed['sdk_health']))
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    prepared.execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(), returncode=0)
+            finally:
+                execution.write_bytes(execution_raw)
+                checkpoint.write_bytes(checkpoint_raw)
+
+    def test_build_refuses_a_rehashed_decoy_sdk_record_binding(self) -> None:
+        metadata = self.build / native_build.MANIFEST
+        original = metadata.read_bytes()
+        with tempfile.NamedTemporaryFile(prefix='decoy-', dir=self.sdk, delete=False) as stream:
+            stream.write(b'This file is not the SDK build record.\n')
+            decoy = Path(stream.name)
+        self.addCleanup(decoy.unlink)
+        changed = json.loads(original)
+        changed['sdk'] = native_gate.identity(decoy)
+        try:
+            metadata.write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError, 'SDK build binding'):
+                native_build.verify(self.build, self.current)
+        finally:
+            metadata.write_bytes(original)

@@ -149,9 +149,21 @@ def release(runtime: Path, *, pid: int, supervisor_pid: int) -> None:
         'launch_id': original['launch_id'], 'pid': pid, 'supervisor_pid': supervisor_pid})
 
 
+def validate_health(value: dict[str, Any], *, built: native_launch.Build,
+                    pid: int, policy: dict[str, Any]) -> None:
+    """Bind a final SDK checkpoint to the verified build and launched process."""
+    health.validate(value)
+    metadata = built.manifest()
+    if (value['pid'] != pid or value['phase'] != 'final'
+            or value['policy_sha256'] != native_launch.digest(policy)
+            or value['language'] != metadata['language']
+            or value['selection_sha256'] != metadata['selection_sha256']):
+        raise ValueError('native SDK checkpoint does not identify the launched build/policy/process')
+
+
 def execution(runtime: Path, *, supervisor_pid: int, parent_pid: int, returncode: int) -> dict[str, Any]:
     """Bind completed process observations; release alone is not image proof."""
-    original, resolved, _, _ = verify(runtime)
+    original, resolved, built, _ = verify(runtime)
     value, _ = files.read(runtime / 'native-execution.json')
     start, _ = files.read(runtime / 'native-supervisor-start.json')
     expected_start = {'schema_version': 1, 'kind': 'otelc.native.supervisor', 'pid': supervisor_pid,
@@ -188,15 +200,18 @@ def execution(runtime: Path, *, supervisor_pid: int, parent_pid: int, returncode
     if checkpoint is not None:
         if original['plain'] or app is None:
             raise ValueError('native SDK health requires an instrumented application')
-        health.validate(checkpoint)
+        validate_health(checkpoint, built=built, pid=app['pid'], policy=original['policy'])
         observed = health.read(runtime / 'app/health.json')
-        if (not same(checkpoint, observed) or checkpoint['pid'] != app['pid']
-                or checkpoint['phase'] != 'final'
-                or checkpoint['policy_sha256'] != native_launch.digest(original['policy'])):
+        if not same(checkpoint, observed):
             raise ValueError('native SDK health does not match the launched application')
     if not value['failures'] and (not value['released'] or not value['inputs_rechecked']
                                  or not original['plain'] and checkpoint is None):
         raise ValueError('native execution lacks its final observations')
+    if not value['failures']:
+        child_exit = value['process_exit_code']
+        expected_exit = 128 - child_exit if child_exit < 0 else child_exit
+        if returncode != expected_exit:
+            raise ValueError('native child exit contradicts the observed supervisor exit')
     return value
 
 

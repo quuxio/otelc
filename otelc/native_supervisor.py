@@ -77,9 +77,7 @@ def execute(runtime: Path) -> int:
         waiting.process.wait()
         if not original['plain']:
             sdk_health = health.read(runtime / 'app/health.json')
-            if (sdk_health.get('pid') != waiting.process.pid or sdk_health.get('phase') != 'final'
-                    or sdk_health.get('policy_sha256') != native_launch.digest(policy.data)):
-                raise ValueError('native SDK checkpoint does not identify the launched policy/process')
+            prepared.validate_health(sdk_health, built=built, pid=waiting.process.pid, policy=policy.data)
         prepared.verify(runtime)
         rechecked = True
     except (ValueError, OSError, subprocess.SubprocessError) as error:
