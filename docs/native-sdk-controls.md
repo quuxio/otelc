@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development component. This adds independent collection/emission controls around the official OpenTelemetry C++ SDK 1.30.0. It is a building block for C/C++ and the native compiler pipeline, not a delivered application adapter. Native common-policy launch commands, probe ABI linking, OTLP export, context propagation, object/resource lifetimes and equivalent application benchmarks remain work.
+Status: development component. This adds independent collection/emission controls around the official OpenTelemetry C++ SDK 1.30.0. The separate [function SDK engine](native-functions.md) connects registered compiler probes in internal C/C++ fixtures and preserves SDK call context. These are building blocks for C/C++ and the native compiler pipeline, not a delivered application adapter. Native common-policy launch commands, generated application bootstrap/ABI linking, OTLP export, task/service propagation, object/resource lifetimes and equivalent application benchmarks remain work.
 
 Developers will not add these classes or SDK calls to application source. The C++ fixtures are internal component tests; the native frontend must generate its own bootstrap and consume the common TOML policy. The [LLVM compiler component](llvm-backend.md) inserts selected calls separately.
 
