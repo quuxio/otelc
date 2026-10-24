@@ -101,7 +101,15 @@ Requested native lifetime or task/HTTP instrumentation fails explicitly before b
 
 ## Focused checks
 
-Build a profiled SDK library with `python -m otelc.native_launch --output NEW_DIRECTORY --coverage`, then select its path for the actual launcher tests:
+`make check` includes the actual launcher gate. It builds the pinned SDK library, runs the selected application/tooling tests with no skips, and requires at least 80% line coverage separately for the C++ runtime, Python launcher, gate and suite runner. Linux CI installs Protobuf/compiler and libcurl development packages; macOS CI uses Homebrew Protobuf and curl. Run it independently with:
+
+```sh
+make native-launch-check
+```
+
+The gate retains compact source/tool/product identities, merged native profiles, exact runtime LCOV and its CMake compiler entry under `build/native-launch*`. `OTELC_CPP_ANALYSIS=1` additionally keeps dependency headers and working directories until Sonar scanning finishes. See [native analysis](native-analysis.md).
+
+For development against an explicitly selected existing library, build it with `python -m otelc.native_launch --output NEW_DIRECTORY --coverage`, then run:
 
 ```sh
 OTELC_NATIVE_LIBRARY=/absolute/path/libotelc_native_runtime.dylib \
@@ -109,4 +117,4 @@ OTELC_NATIVE_LIBRARY=/absolute/path/libotelc_native_runtime.dylib \
 make llvm-check
 ```
 
-Without `OTELC_NATIVE_LIBRARY`, the launcher integration group is skipped. This explicit development gate is not yet part of full language admission. The LLVM source profile and existing native engine/control gates remain separate.
+Direct unittest discovery without `OTELC_NATIVE_LIBRARY` skips the launcher integration group; it is not a substitute for `native-launch-check`. The default full gate builds and selects its own library and rejects missing/skipped tests. Passing these component checks is still separate from full language admission.

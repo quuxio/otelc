@@ -104,6 +104,8 @@ The separate [private-handle compiler component](docs/java-handle-witness.md) bi
 make check
 ```
 
+The full check also requires LLVM 22, CMake, Ninja, Protobuf with its compiler, and libcurl development headers/libraries. CI installs these dependencies. It builds and exercises the native HTTP runtime, rejects skipped launcher tests and enforces the component coverage floors; see [native launch checks](docs/native-launch.md#focused-checks).
+
 Checks include policy validation, source/checksum preservation, decoded OTLP, exceptions, all four same-process metric states, cached instruments, trace continuity, lifetime observation, complete source exclusion and coverage. An empty resolved lifetime selection reports zero capacity loss; an expected observer that cannot be read still reports unknown and prevents benchmark publication. Java requires the pinned agent, extension SPI and SDK combination qualified by the integration checks. Dynamic meter configuration currently uses a pinned internal SDK bridge; incompatible upgrades must fail validation.
 
 The launcher supports the internal Java example and explicit prepared classpaths. Automatic build-system discovery, arbitrary classloaders/inheritance/delegating constructors, more precise overloaded-method selection, other languages and further platform qualification remain work. Name-based Java selection is used only when all selected overloads can be honoured; partial overload exclusions fail before launch. The stack is local, with anonymous Grafana viewing bound to loopback. Stop its containers with `make stack-down`; data volumes remain.
