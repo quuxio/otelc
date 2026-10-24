@@ -19,7 +19,8 @@ class BenchmarkFinalizationTests(unittest.TestCase):
     def test_changed_final_process_or_gate_retains_response_and_refuses(self) -> None:
         valid = {'pid': 101, 'sdk_pid': 202, 'collection': True, 'emission': True}
         for stage in ('restored', 'flushed'):
-            for key, value in (('pid', 303), ('sdk_pid', 404), ('collection', False), ('emission', False)):
+            for key, value in (('pid', 303), ('sdk_pid', 404), ('pid', 101.0), ('sdk_pid', 202.0),
+                               ('collection', False), ('emission', False), ('collection', 1), ('emission', 1)):
                 with self.subTest(stage=stage, key=key), tempfile.TemporaryDirectory() as temporary:
                     output = Path(temporary)
                     wrong = valid | {key: value}

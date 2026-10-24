@@ -100,7 +100,8 @@ def finalize_metrics(process: benchmark.Application, endpoint: Path, sdk_pid: in
         state = control.request(endpoint, command)
         receipt[label] = state
         (output / 'metric-finalization.json').write_text(json.dumps(receipt, indent=2) + '\n')
-        if (state['pid'] != process.pid or state['sdk_pid'] != sdk_pid
+        if (type(state.get('pid')) is not int or type(state.get('sdk_pid')) is not int
+                or state['pid'] != process.pid or state['sdk_pid'] != sdk_pid
                 or state['collection'] is not True or state['emission'] is not True):
             raise ValueError('benchmark final metric state or SDK process changed')
 
