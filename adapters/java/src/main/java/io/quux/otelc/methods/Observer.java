@@ -40,7 +40,11 @@ public final class Observer {
     Context parent = Context.current();
     if (!INSTRUMENTER.shouldStart(parent, request)) return null;
     Context context = INSTRUMENTER.start(parent, request);
-    return new Call(request, context, context.makeCurrent());
+    // Children need the original SDK span to inherit its anchored clock.
+    // Keep the exception-safe wrapper only in the instrumenter's saved context.
+    Span span = Span.fromContext(context);
+    Context executing = span instanceof SafeSpan safe ? context.with(safe.original()) : context;
+    return new Call(request, context, executing.makeCurrent());
   }
 
   public static Object exit(Call call, String descriptor, Object result, Throwable error) {
