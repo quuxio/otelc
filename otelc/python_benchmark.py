@@ -123,6 +123,8 @@ def measure_process(policy: Policy, output: Path, lane: str,
             control.request(endpoint, 'flush')
         benchmark_process.measure_batches(process, policy, output, endpoint, sdk_pid, expected, records,
                                           supervisor_pid=process.supervisor_pid)
+        if endpoint is not None:
+            benchmark_process.finalize_metrics(process, endpoint, sdk_pid, output)
     process.evidence['python-first-response.json'] = file_identity(runtime / 'python-first-response.json')
     return process
 
@@ -148,6 +150,7 @@ def run(policy: Policy, output: Path, *, comparison_id: str | None = None,
     identity = benchmark_process.RunIdentity('python', platform.python_implementation() + ' ' + platform.python_version(),
         'CPython bytecode', ('stock CPython plain; prepared native code-v2 instrumented', 'no additional application interpreter flags'), before['sha256'])
     report = benchmark_process.summary(policy, output, records, identity, pids, sdk_pid, comparison_id)
+    report['metric_finalization'] = file_identity(output / 'metric-finalization.json')
     report['launch_profile'] = 'stock-plain-prepared-codes-v5'
     report['supervisor_pids'] = supervisors
     report['launch_to_first_response'] = {lane: process.first_response for lane, process in processes.items()}

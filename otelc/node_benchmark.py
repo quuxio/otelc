@@ -53,6 +53,8 @@ def measure_process(policy: Policy, output: Path, runtime: Path, invocation: lis
             if endpoint is not None:
                 control.request(endpoint, 'flush')
             benchmark_process.measure_batches(process, policy, output, endpoint, sdk_pid, expected, records)
+            if endpoint is not None:
+                benchmark_process.finalize_metrics(process, endpoint, sdk_pid, output)
         finally:
             finish_process(process, policy, runtime, manifest, sdk_pid)
     return process.pid, sdk_pid
@@ -101,6 +103,7 @@ def run(policy: Policy, output: Path, *, language: str, backend: str = 'native',
     identity = benchmark_process.RunIdentity(language, 'Node ' + manifest['runtime']['version'],
         compiler, ('source launch', '--enable-source-maps', compiler), before['sha256'])
     report = benchmark_process.summary(policy, output, records, identity, pids, sdk_pid, comparison_id)
+    report['metric_finalization'] = node_provenance.identity(output / 'metric-finalization.json')
     report['config_sha256'] = hashlib.sha256(json.dumps(policy.data, sort_keys=True).encode()).hexdigest()
     report['launch_evidence'] = {lane: {name: node_provenance.identity(output / lane / (prefix + '-' + name + '.json'))
         for name in ('launch', 'inputs')} for lane, prefix in (('plain', 'node-plain'), ('instrumented', 'node'))}
