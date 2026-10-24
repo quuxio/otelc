@@ -32,6 +32,7 @@ class Owner:
         self.failures: dict[str, str] = {}
         self.rechecked = False
         self.stopping: int | None = None
+        self.pending_signal: int | None = None
         self.owner_identity = self.owner_record()
 
     def owner_record(self) -> dict[str, Any]:
@@ -50,6 +51,13 @@ class Owner:
             'launch_id': self.original['launch_id'], 'pid': self.application.pid,
             'supervisor_pid': os.getpid(), 'process_group': os.getpgid(self.application.pid),
             'plain': self.original['plain'], 'argv': self.plan['argv'], 'binary': self.plan['binary']})
+        # A handler can run inside Popen before the child handle is published.
+        # Only that pending signal needs forwarding here; later signals already
+        # see the child and must not be delivered a second time. Publish its
+        # process identity before forwarding the pending cancellation.
+        if self.pending_signal is not None:
+            self.forward_signal(self.pending_signal)
+            self.pending_signal = None
 
     def checkpoint(self) -> None:
         """A final SDK report must belong to this actual process and fixed policy."""
@@ -69,6 +77,13 @@ class Owner:
 
     def interrupt(self, number: int, _frame: FrameType | None) -> None:
         self.stopping = number
+        if self.application is None:
+            self.pending_signal = number
+        else:
+            self.forward_signal(number)
+
+    def forward_signal(self, number: int) -> None:
+        """Forward cancellation when the child still exists, including spawn races."""
         if self.application is not None and self.application.poll() is None:
             try:
                 self.application.send_signal(number)
