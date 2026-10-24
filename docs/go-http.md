@@ -45,14 +45,21 @@ The wrapper uses explicit owned tracer/meter providers and W3C trace-context/bag
 
 Client operation spans follow the official EOF/close-attempt boundary. That is separate from a successful resource release or object GC. Health 4 counts actual recording-SDK HTTP start/end callbacks; an unread retained body remains incomplete. End calls after SDK shutdown do not fabricate an observed completion. Unsampled context is not misreported as a recorded span.
 
+## TLS HTTP/2 example
+
+The ordinary [HTTP/2 example](../examples/go-http2/main.go) uses the same policy, a standard TLS server and a client that trusts that server's certificate explicitly. It makes one request or four concurrent requests on the HTTP/2 transport. It adds no telemetry code and does not disable certificate verification.
+
+Build it with `go-build --root "$PWD/examples/go-http2"` and fresh output/runtime paths as above. Run its `server` role first. Pass the complete printed JSON object as the client's single argument after `client`, for example `-- client '{"url":"https://127.0.0.1:PORT","certificate":"PRINTED_BASE64_CERTIFICATE"}'`. Enter `single` or `concurrent`, then `quit`. Each reply reports the actual protocol; the acceptance test requires `HTTP/2.0` in stock and instrumented lanes. The common policy starts metrics off; use the same live control commands to enable them.
+
 ## Checks and limits
 
 ```sh
 make go-check
 PYTHONPATH=tests .venv/bin/python -m unittest -v \
   test_go_http_integration test_go_http_bundle test_go_health test_prepared_go
+PYTHONPATH=tests .venv/bin/python -m unittest -v test_go_http2
 ```
 
 The component checks use the actual pinned official wrapper, vet/race tests and per-file 80% floors. Compiler checks use ordinary native services and the public prepared launcher, covering all initial/live metric flags, W3C parentage, original header preservation, body abandonment, native error identity, formatter counts, panic/cancellation and task inheritance. SDK health and decoded receipt remain separate evidence.
 
-Custom RoundTrippers that do not reach the standard transport, HTTP/2 and upgrade workflows beyond the component interface checks, arbitrary external dependency initialisers, application-owned SDK interactions and complete source/dependency closure require separate implementation or qualification. The HTTP candidate does not establish generated oteleq workflow admission or a complete Go release. See the [source profile](go-source.md) and [local metrics/traces stack](../README.md#java-example-and-grafana).
+The HTTP/2 test checks real TLS, single and concurrent requests, separate stream contexts, unchanged original headers/results, native parentage, clean final counts and startup-off to same-PID metric enable. Broader HTTP/2 cancellation, push, upgrades and flow-control behaviours still need qualification. Custom RoundTrippers that do not reach the standard transport, arbitrary external dependency initialisers, application-owned SDK interactions and complete source/dependency closure require separate work. The HTTP candidate does not establish generated oteleq workflow admission or a complete Go release. See the [source profile](go-source.md) and [local metrics/traces stack](../README.md#java-example-and-grafana).

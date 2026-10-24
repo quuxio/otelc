@@ -2,14 +2,14 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Select object types in the same policy used for function instrumentation. The application needs no telemetry imports, annotations or probes. The current rebuild implements the internal Java example; the remaining adapters follow the [delivery plan](rebuild-plan.md).
+Select object types in the same policy used for function instrumentation. The application needs no telemetry imports, annotations or probes. Java is delivered; Node, Python and Go have source candidates with the boundaries below. Independent language qualification and the remaining adapters follow the [delivery plan](rebuild-plan.md).
 
 ```toml
 [lifetimes]
 enabled = true
 include = ["*WorkItem", "*work_item"]
 exclude = []
-release_methods = ["close"]
+release_methods = ["close", "Close"]
 max_live = 1000000
 ```
 
@@ -24,9 +24,11 @@ max_live = 1000000
 | Destruction | Complete object construction to destruction, including exception unwinding | Planned C++/LLVM adapter |
 | Drop | Completed construction to ownership-driven drop | Planned Rust adapter |
 | Allocation/free | Selected allocation to matching free or resource release | Planned C/LLVM adapter |
-| Other managed runtimes | Observed GC where the runtime permits it, plus explicit resource release | [Node](node-source.md) and [Python](python-native.md) candidates with declared source/runtime limits; Go planned |
+| Other managed runtimes | Observed GC where the runtime permits it, plus explicit resource release | [Node](node-source.md), [Python](python-native.md) and [Go](go-source.md) candidates with declared source/runtime limits |
 
 GC notification has no exact destruction-time guarantee. A long observed interval can include time waiting for the collector and observer. It must not be compared as an equivalent of C++ destruction or Rust drop. See the [JDK reference queue contract](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/ref/ReferenceQueue.html).
+
+The [Go candidate](go-source.md) observes selected pointer allocations through generated private source and the runtime's weak-pointer/cleanup facilities. Its current profile requires non-tiny objects of at least 16 bytes and supports typed `new(T)` and `&T{...}` expressions. Existing zero-argument pointer release methods with no result or one error-compatible result supply successful-release boundaries. Failed and duplicate releases do not fabricate completion. The ordinary Go example and paired benchmarks use `WorkItem` and `Close` through the common configuration. Generic/value storage, addresses of existing storage and reflective/external allocations remain outside this profile. Final health retains pending object/resource counts; it does not invent a completion duration.
 
 ## Run and inspect
 
@@ -56,6 +58,6 @@ Metric switches do not disable those spans. Objects created while metric collect
 
 `make check` launches the unchanged application under the official Java agent and decodes actual OTLP metrics and spans. It checks successful construction, failed construction, failed and duplicate release, missing release, observed GC, non-negative span durations, creation-span links and metric controls in one PID. Unit tests also check weak identity handling without application `hashCode`/`equals`, bounded capacity and incomplete resources.
 
-The observer must not retain application objects strongly or change application cleanup. A missing release observation is evidence about the selected boundary, not proof of a leak. The last gauge value from a terminated process is historical. Objects still tracked at shutdown currently have no final duration or dedicated shutdown-censor counter. Arbitrary classloaders, inheritance and delegating constructors remain unsupported and are not claimed as qualified.
+The observer must not retain application objects strongly or change application cleanup. A missing release observation is evidence about the selected boundary, not proof of a leak. The last gauge value from a terminated process is historical. Java objects still tracked at shutdown currently have no final duration or dedicated shutdown-censor counter. Arbitrary Java classloaders, inheritance and delegating constructors remain unsupported and are not claimed as qualified. Candidate-specific final counters and limits are documented in their source guides.
 
 For overhead measurements, retain the plain baseline and all four live metric states with `make benchmark`. Tracing and lifecycle tracking can still have a cost when metrics are off. To isolate the lifecycle observer's added cost, run a second full benchmark with `lifetimes.enabled = false` and compare only matching runtime, workload, trace settings and live states. The driver retains this flag in every report and exported measurement.
