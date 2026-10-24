@@ -72,8 +72,9 @@ def check() -> dict:
         encoder = ROOT / 'build/native' / ('python-encoder-fixture-' + sys.implementation.cache_tag)
         pins = ROOT / 'build/native' / ('python-origin-pins-fixture-' + sys.implementation.cache_tag)
         backend = ROOT / 'build/native' / ('python-origin-backend-' + sys.implementation.cache_tag)
+        cache_failure = ROOT / 'build/native' / ('python-cache-startup-failure-' + sys.implementation.cache_tag)
         objects = [binary, binary.parent / manifest['library'], origin_binary,
-                   origin_binary.parent / origin_manifest['library'], fixture, imports, encoder, pins, backend]
+                   origin_binary.parent / origin_manifest['library'], fixture, imports, encoder, pins, backend, cache_failure]
         output = subprocess.check_output(export_command(llvm, objects, profile, manifest['inputs']['machine']), text=True)
         (ROOT / 'build/python-native-coverage.raw.json').write_text(output)
         result = {'interpreter': manifest['inputs']['interpreter'], 'architecture': manifest['inputs']['machine'],

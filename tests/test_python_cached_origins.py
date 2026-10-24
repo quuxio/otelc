@@ -8,6 +8,7 @@ from pathlib import Path
 import py_compile
 import subprocess
 import sys
+import tempfile
 import unittest
 
 from ci import build_python_inputs as tooling
@@ -37,6 +38,78 @@ class UnavailablePythonCacheOriginTests(unittest.TestCase):
         self.assertEqual(cache_return(None, None), -1)
         cancel()
         self.assertEqual(active(), 0)
+
+
+class PythonCacheOptionTests(NativeInputCase):
+    """CLI parsing and unavailable-image evidence must run on every supported host."""
+
+    def test_disabled_image_preserves_unrooted_entry_and_refuses_rooted_cache_profile(self) -> None:
+        metadata = json.loads((self.tool.parent / 'build.json').read_bytes())
+        self.assertFalse(metadata['inputs']['origin_chain']['available'])
+        entry = self.root / 'entry.py'
+        content = b'print("original cache entry")\n'
+        entry.write_bytes(content)
+        for rooted in (False, True):
+            with self.subTest(rooted=rooted):
+                status, out, err, path, pid = self.launch(
+                    ['-B', str(entry)], cache_origins=True,
+                    origin_root=self.root if rooted else None)
+                if rooted:
+                    self.assertEqual((status, out, err), (64, b'', b''))
+                    self.assertEqual(path.read_bytes(), b'')
+                    continue
+                self.assertEqual((status, out, err), (0, b'original cache entry\n', b''))
+                value = journal.read(path, expected_pid=pid, version=3)
+                self.assertFalse(value.capture_complete)
+                self.assertGreater(value.capture_failures, 0)
+                self.assertEqual((value.roots, value.sdk_joins), ((), ()))
+                self.assertEqual([(row.path, row.content) for _, row in value.sources],
+                                 [(os.fsencode(entry), content)])
+                self.assertEqual(entry.read_bytes(), content)
+
+    def test_cache_startup_failure_cancels_both_observers_and_preserves_entry(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        metadata = json.loads((self.tool.parent / 'build.json').read_bytes())
+        target = root / 'build/native' / ('python-cache-startup-failure-' + sys.implementation.cache_tag)
+        # Reuse the actual fixed compiler recipe and disabled backend. Only the
+        # preceding readiness stages and cancellation counters are fault fixtures.
+        command = list(metadata['commands'][1])
+        command.insert(2, str(root / 'tests/fixtures/python_cache_startup_failure.c'))
+        command[3] = str(self.tool.parent / metadata['library'])
+        command.extend(['-I', str(root / 'native/python'),
+                        '-Wl,-rpath,' + str(self.tool.parent)])
+        with tempfile.TemporaryDirectory(dir=root / 'build/native') as temporary:
+            candidate = Path(temporary) / 'cache-startup-failure'
+            command[command.index('-o') + 1] = str(candidate)
+            subprocess.run(command, check=True, capture_output=True)
+            os.replace(candidate, target)
+        self.tool = target
+        entry = self.root / 'entry.py'
+        content = b'print("original failed-cache entry")\n'
+        entry.write_bytes(content)
+        status, out, err, path, pid = self.launch(['-B', str(entry)], cache_origins=True)
+        # The fixture itself returns99 unless both readiness calls and both
+        # cancellations occurred exactly once around the real failed cache API.
+        self.assertEqual((status, out, err), (0, b'original failed-cache entry\n', b''))
+        value = journal.read(path, expected_pid=pid, version=3)
+        self.assertFalse(value.capture_complete)
+        self.assertGreater(value.capture_failures, 0)
+        self.assertEqual((value.roots, value.sdk_joins), ((), ()))
+        self.assertEqual([(row.path, row.content) for _, row in value.sources],
+                         [(os.fsencode(entry), content)])
+        self.assertEqual(entry.read_bytes(), content)
+
+    def test_incomplete_or_invalid_cache_root_options_never_run_the_entry(self) -> None:
+        for flag in ('--origin-loader-caches-root', '--origin-loader-root'):
+            child = subprocess.run([str(self.tool), flag], capture_output=True, timeout=10)
+            self.assertEqual((child.returncode, child.stdout, child.stderr), (64, b'', b''))
+        entry = self.root / 'entry.py'
+        entry.write_text("raise AssertionError('entry must not run')\n")
+        for root in (Path('.'), self.root / 'missing', entry):
+            with self.subTest(root=root):
+                status, out, err, _, _ = self.launch(
+                    ['-B', str(entry)], origin_root=root, cache_origins=True)
+                self.assertEqual((status, out, err), (64, b'', b''))
 
 
 class PythonCachedOriginTests(NativeInputCase):
@@ -286,16 +359,6 @@ print('original cached values and clean SDK drain')
             for point in points:
                 self.assertEqual({item.key:item.value for item in point.attributes}['otelc.python.code_id'].int_value, identity)
         self.assertEqual((cache.read_bytes(),self.target.read_bytes()),(cached,source))
-
-    def test_incomplete_or_invalid_cache_root_options_never_run_the_entry(self) -> None:
-        for flag in ('--origin-loader-caches-root', '--origin-loader-root'):
-            child = subprocess.run([str(self.tool), flag], capture_output=True, timeout=10)
-            self.assertEqual((child.returncode, child.stdout, child.stderr), (64, b'', b''))
-        self.entry.write_text("raise AssertionError('entry must not run')\n")
-        for root in (Path('.'), self.root / 'missing', self.target):
-            with self.subTest(root=root):
-                status, out, err, _, _ = self.launch(['-B', str(self.entry)], origin_root=root, cache_origins=True)
-                self.assertEqual((status, out, err), (64, b'', b''))
 
     def test_refused_local_call_registration_preserves_app_and_reports_incomplete_capture(self) -> None:
         startup = self.root / 'sitecustomize.py'

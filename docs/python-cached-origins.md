@@ -74,3 +74,5 @@ PYTHONPATH=tests .venv/bin/python -m unittest -v \
   test_python_prepared_origins test_python_recipe test_python_provider_protocol
 make check
 ```
+
+CLI-option and disabled-image tests run independently of supported-origin image tests. A native startup-failure fixture forces only the preceding entry/loader readiness stages, then checks the real failed cache setup, both cancellation calls, original application output and incomplete journal evidence. Its counters use the unchanged production NativeMain translation unit. This component fault test does not establish a usable source-origin backend on an unsupported image.
