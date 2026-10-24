@@ -2,6 +2,12 @@
 
 This component wraps the pinned official OpenTelemetry Go metric API/SDK 1.47.0. It supplies separate live collection and emission switches for an isolated otelc-owned push pipeline. It does not yet supply a public Go launch/control command or a source-free application adapter. `plan` continues to list Go as remaining.
 
+## Runtime candidate dependencies
+
+The separate owned-runtime candidate pins `golang.org/x/net v0.60.0`, which fixes HTTP/2 advisories GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612 and GO-2026-6617. Its dependency locks retain the verified module checksums. Existing application dependency resolutions must still be preserved; an incompatible version requires an explicit build refusal rather than a silent upgrade.
+
+The module graph also contains `x/crypto`, whose OpenPGP packages are [unmaintained and unsafe at every version](https://pkg.go.dev/vuln/GO-2026-5932). The current SDK's compiled package graph does not import those packages. `make go-check` retains the actual `go list -deps` inventory in `build/go-dependencies.txt` and refuses any OpenPGP import, including its subpackages. No advisory suppression is configured. This package-level check is separate from an online advisory scan and does not prove absence of other vulnerabilities.
+
 ## Behaviour
 
 Create the controls and owned SDK pipeline before the application starts, even when metrics are initially off. Cached meters, synchronous instruments and observable registrations then follow later changes without provider replacement or an application restart.

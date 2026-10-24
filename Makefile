@@ -44,6 +44,8 @@ go-upstream:
 
 go-check:
 	mkdir -p build
+	cd adapters/go && GOWORK=off $(GO) list -deps -mod=readonly ./... > "$(CURDIR)/build/go-dependencies.txt"
+	awk '/^golang.org\/x\/crypto\/openpgp(\/|$$)/ {print "Unsupported unsafe Go dependency: " $$0; failed=1} END {exit failed}' build/go-dependencies.txt
 	cd adapters/go && test -z "$$(gofmt -l metriccontrol/*.go pipeline/*.go probe/*.go runtime/*.go)"
 	cd adapters/go && GOWORK=off $(GO) vet -mod=readonly ./...
 	cd adapters/go && GOWORK=off $(GO) test -mod=readonly -race -count=1 -coverprofile="$(CURDIR)/build/go-coverage.out" ./...
