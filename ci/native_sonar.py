@@ -11,7 +11,8 @@ from otelc import llvm_backend
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = ('native/llvm/OtelcPass.cpp', 'adapters/native/src/metric_control.cpp',
-              'adapters/native/src/function_runtime.cpp', 'adapters/native/launcher/src/runtime.cpp')
+              'adapters/native/src/function_runtime.cpp', 'adapters/native/launcher/src/runtime.cpp',
+              'adapters/native/gate/ExecGate.c')
 TEST = 'adapters/native/tests/metric_control_test.cpp'
 TESTS = (TEST, 'adapters/native/tests/function_runtime_test.cpp',
          'adapters/native/tests/fixtures/functions.c', 'adapters/native/tests/fixtures/functions.cpp')
@@ -126,10 +127,12 @@ def generate(root: Path = ROOT) -> None:
     llvm = json.loads((output / 'llvm-pass-source-coverage-identity.json').read_bytes())
     native = json.loads((output / 'native-control-coverage.json').read_bytes())
     launch = json.loads((output / 'native-launch-coverage.json').read_bytes())
+    gate = json.loads((output / 'native-gate-coverage.json').read_bytes())
     checked_artifact(llvm['source'], root / PRODUCTION[0])
     for header in llvm['headers']:
         checked_artifact(header, Path(header['path']))
-    for record, relatives in ((native, PRODUCTION[1:3]), (launch, PRODUCTION[3:])):
+    checked_artifact(gate['source'], root / PRODUCTION[4])
+    for record, relatives in ((native, PRODUCTION[1:3]), (launch, PRODUCTION[3:4])):
         for row in record['source_inputs']:
             checked_artifact(row, Path(row['path']))
         if any(llvm_backend.identity(root / relative) not in record['source_inputs'] for relative in relatives):
@@ -137,10 +140,12 @@ def generate(root: Path = ROOT) -> None:
     checked_artifact(native['lcov'], Path(native['lcov']['path']))
     checked_artifact(launch['lcov'], Path(launch['lcov']['path']))
     native_records = lcov_records(Path(native['lcov']['path']).read_text(), {root / path for path in PRODUCTION[1:3]})
-    native_records.update(lcov_records(Path(launch['lcov']['path']).read_text(), {root / path for path in PRODUCTION[3:]}))
+    native_records.update(lcov_records(Path(launch['lcov']['path']).read_text(), {root / PRODUCTION[3]}))
+    checked_artifact(gate['lcov'], Path(gate['lcov']['path']))
+    native_records.update(lcov_records(Path(gate['lcov']['path']).read_text(), {root / PRODUCTION[4]}))
     document = ET.Element('coverage', version='1')
     databases = []
-    for relative, record in zip(PRODUCTION, (llvm, native, native, launch), strict=True):
+    for relative, record in zip(PRODUCTION, (llvm, native, native, launch, gate), strict=True):
         source = root / relative
         lcov = Path(record['lcov']['path'])
         database = Path(record['compilation_database']['path'])
