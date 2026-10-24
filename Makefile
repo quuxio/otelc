@@ -100,7 +100,7 @@ lint:
 test: java-build node-observer node-http native-check native-launch-check
 	mkdir -p build
 	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
-	$(PYTHON) -m coverage combine --append --keep build/native-tooling.coverage build/native-launch-tooling.coverage build/native-launch-python.coverage
+	$(PYTHON) -m coverage combine --append --keep build/native-tooling.coverage build/native-launch-tooling.coverage build/native-launch-python.coverage build/native-prepared-subprocess.coverage
 	$(PYTHON) -m coverage report --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_encoder.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_origin_chain.py' --fail-under=80
@@ -110,6 +110,9 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/ci/native_sonar.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_gate.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_launch.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/native_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/native_supervisor.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/prepared_native.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/check_native_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_launch_suite.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml

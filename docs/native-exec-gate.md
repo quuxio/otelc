@@ -2,7 +2,7 @@
 
 The gate starts a fixed tool-owned C helper in a new process session. It reports its PID, parent, process group and session through an inherited pipe, then waits for a separate host acknowledgement. The target image and its constructors have not executed at this point. After release, `execve` preserves that PID/group, literal arguments and standard streams.
 
-This is an internal component. The current public native launch command does not use it yet. A versioned public native build/preparation/execution contract, host integration in both lanes, independent oteleq reconstruction and final language qualification remain work. This component does not establish the executed image's complete source origin or dependency closure.
+This component supports the explicit [native prepared-launch candidate](native-prepared.md), whose public `native-build` and `native-run` commands hold both lanes before application or loader-library constructors run. The earlier `native` command remains a separate immediate-launch profile. Independent oteleq reconstruction and final language qualification remain work. This component does not establish the executed image's complete source origin or dependency closure.
 
 ## Host API
 
