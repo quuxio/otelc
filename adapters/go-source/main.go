@@ -74,15 +74,16 @@ type allocation struct {
 }
 
 type inventory struct {
-	SchemaVersion int                    `json:"schema_version"`
-	Root          string                 `json:"root"`
-	Target        string                 `json:"target"`
-	Main          string                 `json:"main"`
-	Functions     []function             `json:"functions"`
-	Types         []objectType           `json:"types"`
-	Allocations   []allocation           `json:"allocations"`
-	Files         map[string]string      `json:"files"`
-	Packages      map[string]packageFact `json:"packages"`
+	SchemaVersion  int                    `json:"schema_version"`
+	Root           string                 `json:"root"`
+	Target         string                 `json:"target"`
+	Main           string                 `json:"main"`
+	Functions      []function             `json:"functions"`
+	Types          []objectType           `json:"types"`
+	Allocations    []allocation           `json:"allocations"`
+	Files          map[string]string      `json:"files"`
+	Packages       map[string]packageFact `json:"packages"`
+	CompilerInputs map[string]string      `json:"compiler_inputs"`
 }
 
 type packageFact struct {
@@ -273,7 +274,7 @@ func scanFile(r request, p *packages.Package, file *ast.File, parsed map[string]
 }
 
 func inspect(r request) (inventory, error) {
-	out := inventory{SchemaVersion: 1, Root: r.Root, Target: r.Target, Functions: []function{}, Types: []objectType{}, Allocations: []allocation{}, Files: map[string]string{}, Packages: map[string]packageFact{}}
+	out := inventory{SchemaVersion: 1, Root: r.Root, Target: r.Target, Functions: []function{}, Types: []objectType{}, Allocations: []allocation{}, Files: map[string]string{}, Packages: map[string]packageFact{}, CompilerInputs: map[string]string{}}
 	if err := validate(r); err != nil {
 		return out, err
 	}
@@ -281,7 +282,7 @@ func inspect(r request) (inventory, error) {
 		return out, errors.New("external Go package drivers are outside this source profile")
 	}
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports |
-		packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedModule | packages.NeedTypesSizes
+		packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedModule | packages.NeedTypesSizes | packages.NeedEmbedFiles
 	parsed := map[string]string{}
 	var mu sync.Mutex
 	parse := func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
@@ -330,6 +331,19 @@ func inspect(r request) (inventory, error) {
 			}
 			out.Packages[p.PkgPath] = packageFact{Name: p.Name, Directory: filepath.ToSlash(relative)}
 		}
+		for _, absolute := range append(append(append([]string{}, p.GoFiles...), p.OtherFiles...), p.EmbedFiles...) {
+			name, pathErr := inside(r.Root, absolute)
+			if pathErr != nil {
+				err = pathErr
+				return
+			}
+			data, readErr := os.ReadFile(absolute)
+			if readErr != nil {
+				err = readErr
+				return
+			}
+			out.CompilerInputs[name] = digest(data)
+		}
 	})
 	if err != nil {
 		return out, err
@@ -338,6 +352,12 @@ func inspect(r request) (inventory, error) {
 		data, readErr := os.ReadFile(filepath.Join(r.Root, filepath.FromSlash(name)))
 		if readErr != nil || digest(data) != before {
 			return out, errors.New("Go source changed during inspection")
+		}
+	}
+	for name, before := range out.CompilerInputs {
+		data, readErr := os.ReadFile(filepath.Join(r.Root, filepath.FromSlash(name)))
+		if readErr != nil || digest(data) != before {
+			return out, errors.New("Go compiler input changed during inspection")
 		}
 	}
 	sort.Slice(out.Functions, func(i, j int) bool { return out.Functions[i].Name < out.Functions[j].Name })

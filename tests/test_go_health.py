@@ -28,6 +28,28 @@ def report() -> dict:
 
 
 class GoHealthTests(unittest.TestCase):
+    def test_final_drain_is_separate_from_unresolved_objects_and_downstream_receipt(self) -> None:
+        value = report()
+        value.update(phase='final', lifecycle={'flush': 'succeeded', 'shutdown': 'succeeded'})
+        for name in ('probe_accounting', 'metric_exports', 'trace_exports'):
+            value[name]['closed'] = True
+        value['probe_accounting'].update(object_admitted='2', objects_pending='2', resources_unreleased='2')
+        self.assertTrue(go_health.final_clean(value))
+        self.assertEqual(value['downstream_receipt'], 'unavailable')
+        for section, field, changed in ((None, 'phase', 'running'),
+                ('lifecycle', 'flush', 'timed_out'), ('metric_flush', 'failed_attempts', '1'),
+                ('probe_accounting', 'closed', False), ('probe_accounting', 'function_active', '1'),
+                ('probe_accounting', 'function_started', '1'), ('probe_accounting', 'observer_started', '1'),
+                ('trace_exports', 'closed', False), ('trace_exports', 'queue_pending', '1'),
+                ('trace_exports', 'queue_dropped', '1'), ('metric_exports', 'failed', '1'),
+                ('metric_exports', 'attempts', '2')):
+            original = copy.deepcopy(value)
+            (original if section is None else original[section])[field] = changed
+            with self.subTest(section=section, field=field):
+                self.assertFalse(go_health.final_clean(original))
+        value['trace_exports'] = {'observed': False}
+        self.assertTrue(go_health.final_clean(value))
+
     def test_common_health_routes_live_and_final_go_reports(self) -> None:
         for phase in ('running', 'final'):
             value = report() | {'phase': phase}

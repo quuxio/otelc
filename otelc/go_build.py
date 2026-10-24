@@ -11,6 +11,15 @@ from ci import build_go_upstream as tooling
 from otelc import go_context_bundle, go_source
 from otelc.config import Policy
 
+SOURCE_SUFFIXES = frozenset(('.go', '.s', '.S', '.h', '.syso', '.c', '.cc', '.cpp', '.cxx', '.m', '.mm', '.f', '.f90'))
+
+
+def source_roster(root: Path) -> list[str]:
+    """New source/native units require rebuilding; ordinary runtime logs do not."""
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob('*')
+                  if '.git' not in path.relative_to(root).parts
+                  and path.suffix in SOURCE_SUFFIXES and path.is_file())
+
 
 def documents(raw: bytes) -> list[dict[str, Any]]:
     """Read cmd/go's concatenated JSON module records without line assumptions."""
@@ -176,7 +185,7 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
     original = inputs(root)
     output.mkdir(mode=0o700)
     inventory = go_source.inspect_project(root, target, tools, output / 'inspection')
-    if any(name not in original or original[name]['sha256'] != digest for name, digest in inventory['files'].items()):
+    if any(name not in original or original[name]['sha256'] != digest for name, digest in inventory['compiler_inputs'].items()):
         raise ValueError('Go parser input differs from the frozen original project')
     selection = go_source.resolve(policy, inventory)
     private = output / 'private'
@@ -227,8 +236,13 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
              '-mod=readonly', '-o', str(instrumented), target], private)
     if inputs(root) != original or inputs(sdk) != sdk_inputs:
         raise ValueError('Go original application or private SDK changed during compilation')
-    receipt = {'schema_version': 1, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
+    receipt = {'schema_version': 2, 'kind': 'otelc.go-source-build', 'root': str(root), 'target': target,
                'selection': selection, 'inputs': original, 'sdk_inputs': sdk_inputs,
+               'launch_inputs': {name: original[name] for name in
+                                 sorted(set(inventory['compiler_inputs']) | {'go.mod'} | ({'go.sum'} & set(original)))},
+               'source_roster': source_roster(root),
+               'private_inputs': inputs(private), 'context_inputs': inputs(modules),
+               'inventory': go_source.identity(output / 'inspection/inventory.json'),
                'plain': go_source.identity(plain), 'instrumented': go_source.identity(instrumented),
                'modules_before': before, 'modules_after': after, 'settings': settings,
                'toolchain': tools, 'commands': commands, 'source_complete': False}

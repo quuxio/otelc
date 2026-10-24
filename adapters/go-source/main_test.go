@@ -38,7 +38,10 @@ func TestActualTypeFactsPreserveOriginalInputsWithoutExecutingInitialisers(t *te
 import (
  renamed "example.com/original/model"
  "os"
+ _ "embed"
 )
+//go:embed asset.txt
+var asset string
 func init(){os.WriteFile("executed",nil,0600)}
 func main(){renamed.New()}
 func Identity[T any](v T)T{return v}
@@ -66,9 +69,10 @@ func ConcreteError()*Failure{return nil}
 func ValueError()Failure{return Failure{}}
 func InterfaceError()TypedError{return nil}
 `,
+		"asset.txt": "original embedded value",
 	})
 	before := map[string][]byte{}
-	for _, name := range []string{"main.go", "model/model.go", "go.mod"} {
+	for _, name := range []string{"main.go", "model/model.go", "go.mod", "asset.txt"} {
 		before[name], _ = os.ReadFile(filepath.Join(root, name))
 	}
 	out, err := inspect(request{1, root, "."})
@@ -77,6 +81,9 @@ func InterfaceError()TypedError{return nil}
 	}
 	if out.Main != "example.com/original" || len(out.Files) != 2 || len(out.Types) != 6 || len(out.Functions) != 18 {
 		t.Fatalf("unexpected inventory: %+v", out)
+	}
+	if len(out.CompilerInputs) != 3 || out.CompilerInputs["asset.txt"] != digest(before["asset.txt"]) {
+		t.Fatal("compiler-selected embedded inputs missing", out.CompilerInputs)
 	}
 	facts := map[string]function{}
 	for _, f := range out.Functions {

@@ -90,6 +90,8 @@ test: java-build node-observer node-http go-upstream
 	$(PYTHON) -m coverage report --include='*/otelc/go_runtime_config.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_source.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/prepared_go.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_supervisor.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/build_go_upstream.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 

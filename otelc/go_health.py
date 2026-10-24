@@ -77,3 +77,24 @@ def validate(value: Any) -> dict[str, Any]:
             or value['downstream_receipt'] != 'unavailable' or value['otlp_partial_rejection'] != 'unavailable'):
         raise ValueError('unsupported Go health delivery claim')
     return value
+
+
+def final_clean(value: Any) -> bool:
+    """Assess final SDK drain only; unresolved lifetimes and receipt stay separate."""
+    report = validate(value)
+    probes = report['probe_accounting']
+    if (report['phase'] != 'final' or report['lifecycle'] != {'flush': 'succeeded', 'shutdown': 'succeeded'}
+            or not probes['closed'] or report['metric_flush']['failed_attempts'] != '0'
+            or any(probes[key] != '0' for key in ('function_active', 'observer_active',
+                'function_lost', 'observer_lost', 'unwind_unknown', 'lifetime_lost'))
+            or probes['function_started'] != probes['function_ended']
+            or probes['observer_started'] != probes['observer_ended']):
+        return False
+    for name in ('metric_exports', 'trace_exports'):
+        exports = report[name]
+        if not exports['observed']:
+            continue
+        if (not exports['closed'] or exports['failed'] != '0' or exports['attempts'] != exports['succeeded']
+                or name == 'trace_exports' and any(exports[key] != '0' for key in ('queue_pending', 'queue_dropped'))):
+            return False
+    return True

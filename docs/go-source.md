@@ -1,6 +1,6 @@
 # Go source adapter
 
-Status: implementation in progress. The [SDK controls](go-sdk-controls.md) are delivered as a foundation. Internal compiler fixtures connect the owned SDK/runtime, generated function/error/lifetime hooks, common-policy translation, live controls, decoded OTLP and health. A policy-driven private source/module builder is now an internal candidate. Public build/launch commands, broader integration, paired benchmarks and independent oteleq qualification remain work. `plan` continues to report Go as remaining.
+Status: implementation in progress. The [SDK controls](go-sdk-controls.md) are delivered as a foundation. Candidate public `go-build` and `go` commands connect the official weaver, original-source selection, owned runtime, allocation/release probes, live controls and retained process/health evidence. The ordinary Go example uses the same common policy as the other languages. HTTP/library integration, broader source/storage profiles, paired benchmarks, final gates and independent oteleq qualification remain work. `plan` reports Go as a candidate and keeps it in `remaining`.
 
 ## Upstream compiler and context reuse
 
@@ -82,11 +82,11 @@ PYTHONPATH=tests .venv/bin/python -m unittest -v \
 
 The compiler/runtime fixture uses an ordinary interactive application. Four plain/instrumented process pairs cover every initial collection/emission combination and then change all four states in the same instrumented PID. It compares complete application output, failed/panicking release behaviour and formatter counts, checks actual raw metric/span receipt and lifetime construction links, and validates live/final health through the common Python clients. Original/private application sources, the original module and private SDK are checked unchanged. Compiler intermediates stay in an owned temporary directory and are removed with the fixture.
 
-This is an internal exact-toolchain integration. Public immutable build products and compiler-free prepared commands, dependency/build qualification, official HTTP integration, broader allocation/release shapes, equivalent benchmarks/Collector/Grafana, final full gates, independent review and oteleq admission remain required. SDK and control implementation does not close the Go language gap on its own.
+This is an exact-toolchain integration. Dependency/build qualification, official HTTP integration, broader allocation/release shapes, equivalent benchmarks/Collector/Grafana, final full gates, independent review and oteleq admission remain required. SDK and control implementation does not close the Go language gap on its own.
 
 ## Policy-driven private source builds
 
-The internal `go_source` inspector uses the pinned `golang.org/x/tools/go/packages` loader with the selected Go compiler. Its separate tooling module keeps that parser dependency out of application modules. It records exact parser input bytes, compiler-selected packages, real type identities, named/unnamed result expressions and error nilability. Inspection does not execute application initialisers. Function identities use `module/package.Function` and `module/package.Type.Method`; lifetime identities use `module/package.Type`. Common source globs use paths relative to the original module root.
+The `go_source` inspector uses the pinned `golang.org/x/tools/go/packages` loader with the selected Go compiler. Its separate tooling module keeps that parser dependency out of application modules. It records exact parser input bytes, compiler-selected Go/other/embedded inputs, real type identities, named/unnamed result expressions and error nilability. Inspection does not execute application initialisers. Function identities use `module/package.Function` and `module/package.Type.Method`; lifetime identities use `module/package.Type`. Common source globs use paths relative to the original module root. The shared example policy includes `**/*.go` for these module-relative paths and both `close` and `Close` release names.
 
 `go_build.build_project` copies checked original inputs to a private tree, resolves the common selectors and generates rules for the official weaver. Source exclusion takes precedence over function, allocation and release selection. Lifetime selection does not add function spans for otherwise excluded constructors or release methods. Typed `new(T)` and `&T{...}` expressions are wrapped only in the private copy, including nested expressions and package initialisers. The original files have no telemetry imports or hooks. Pointer-receiver release methods require no arguments and either no result or one declared error-compatible result. Selected unsupported bindings fail preparation instead of becoming successful omissions.
 
@@ -98,4 +98,55 @@ PYTHONPATH=tests .venv/bin/python -m unittest -v test_go_source test_go_build
 
 These tests exercise an ordinary multi-package application, imported aliases, a generic function, named error returns, independent function/lifetime selection, automatic allocation/release spans, construction links, complete stdout/stderr and untouched original source/module files. Inspector tests also cover concrete/interface/value error results, type aliases, generic receivers and storage-address refusals. The source inspector and Python builder/resolver each have an independent 80% coverage floor.
 
-This remains a native single-module candidate with the fixed Go compiler. Workspaces, vendor trees, local module replacements, generated Cgo application files and pre-existing instrumentation need separate profiles. Addresses of existing storage, tiny objects, generic lifetime types, value-object storage, reflective/external allocations and arbitrary release signatures remain unsupported. The compiler-selected original module is the current source scope; dependencies and whole-program source closure are not established. `source_complete=false` stays explicit. Public prepared execution, original-build-system integration, full provider qualification and final protected delivery remain open.
+This remains a native single-module candidate with the fixed Go compiler. Workspaces, vendor trees, local module replacements, generated Cgo application files and pre-existing instrumentation need separate profiles. Addresses of existing storage, tiny objects, generic lifetime types, value-object storage, reflective/external allocations and arbitrary release signatures remain unsupported. The compiler-selected original module is the current source scope; dependencies and whole-program source closure are not established. `source_complete=false` stays explicit. Original-build-system integration, full provider qualification and final protected delivery remain open.
+
+## Build once, prepare and launch without a compiler
+
+Use the public candidate commands from the checkout after installing its locked tooling. The base Go command selects the pinned native Go 1.27.3 toolchain. This profile preserves module language settings and needs an application module compatible with the SDK's Go 1.26 minimum. Build and runtime outputs must be new directories outside the original application inputs.
+
+```sh
+bin/quux-otelc go-protocols
+bin/quux-otelc --config examples/otelc.toml go-build \
+  --root examples/go --output /absolute/path/to/new-go-build
+
+printf '10\nthrow\nlifecycle\ngc\nquit\n' | \
+  bin/quux-otelc --config examples/otelc.toml go \
+    --build /absolute/path/to/new-go-build \
+    --runtime /absolute/path/to/new-go-runtime
+```
+
+The example has no telemetry imports or annotations. Its ten-operation checksum is `41284864`. It retains the same seeded 128-step workload as Java, Python and JavaScript/TypeScript, plus ordinary failure/release and explicit fixture-GC commands. Go GC duration starts at a successful typed allocation; it does not claim a language-level constructor or an exact collection time. The resource boundary ends only after a successful selected `Close` method.
+
+`go-build` emits the binary identities and resolved function/type/hook counts. It retains a schema-2 `build.json`, both binaries, original/private input identities, module graphs, tool identities and compiler-selected inventory. The build is separate from launch; no compiler or weaver is invoked by `go`, preparation, command verification or post-run reading.
+
+For an existing application, replace `--root` with its canonical module root and use `--target ./cmd/app` where appropriate. Adjust the common selectors to its existing function/type names. Pass literal application arguments after `--`. Use `--plain` for the stock binary, or `--prepare-only` to emit the fixed recipe without starting an application or SDK. A prepared runtime is single-use; subsequent launches require a new runtime directory, while the same binaries can be reused.
+
+For interactive live controls, launch without piping `quit`, then use another terminal:
+
+```sh
+bin/quux-otelc metrics --socket /absolute/path/to/new-go-runtime/control.json status
+bin/quux-otelc metrics --socket /absolute/path/to/new-go-runtime/control.json off
+bin/quux-otelc metrics --socket /absolute/path/to/new-go-runtime/control.json collection on
+bin/quux-otelc metrics --socket /absolute/path/to/new-go-runtime/control.json emission on
+bin/quux-otelc health --report /absolute/path/to/new-go-runtime/health.json
+```
+
+Use `health --socket .../control.json` while running; `health.json` is the retained final checkpoint. Metric switches do not require a restart or rebuild and do not change tracing. Initial metric flags, service/export settings and trace sampling can differ between launches if the compiled source/context/lifetime selection is unchanged. A mismatched selection, changed binary, changed original compiler input or altered private build product is refused before starting the application. Ordinary non-compiler data such as application log files may change. Source/native file additions require a new build.
+
+## Prepared API and execution records
+
+`otelc.prepared_go.protocols()` describes the explicit `go-source-v1` profile: build 2; request, plan, prepared, command and execution 1; health 3. Earlier internal build-1 records are refused. Discovery does not compile anything or establish source closure or provider admission.
+
+Tooling consumers call `prepare(policy, runtime, build_directory=..., plain=..., arguments=(...))`, then `command(runtime)`. The command is a fixed isolated Python supervisor. Start it with `subprocess.Popen(..., start_new_session=True)` and retain the caller's actual PID, supervisor PID and return code. The supervisor starts exactly one prebuilt stock/woven binary. The Go application and embedded SDK share a PID; the supervisor has a separate PID. Standard input/output/error pass through to the application. No startup hooks run in the tooling supervisor.
+
+After exit, `execution(runtime, supervisor_pid=..., parent_pid=..., returncode=...)` independently rechecks the prepared recipe and fixed inputs, joins the caller-observed owner to `go-supervisor-start.json`, `go-application-start.json` and `go-execution.json`, and compares the exact final SDK report. The reader starts no target, invokes no compiler and performs no live flush. Consumers must retain and inspect `failures`; an execution record containing failures is incomplete evidence.
+
+The records preserve the application's original exit code separately from the supervisor's instrumentation status. Export failure can fail the instrumentation run while the application returned zero. Abrupt exit or termination preserves its native exit/signal and leaves missing SDK evidence unavailable. A failed metadata publication triggers bounded termination/kill/reap of the owned child. The outer caller owns cleanup of the supervisor's complete process group, including after a killed supervisor.
+
+Final SDK drain checks require closed providers, matched function/observer completions, no recorded loss, failed exports or pending trace queue. Uncompleted object/resource observations remain censored counts; the reader does not fabricate release or GC completion. A clean SDK drain is separate from decoded downstream receipt and whole-program/source qualification.
+
+```sh
+PYTHONPATH=tests .venv/bin/python -m unittest -v test_prepared_go test_go_health test_cli
+```
+
+The checks use the real public commands and owned native processes. They cover the common unedited example, all four startup states and live switches, retained emission-off measurements, collection-off silence on flush, raw metrics, typed errors, caught panics, formatter preservation, literal arguments, process/exit tampering, source/embedded-input/product/config changes, original abrupt exit and signal forwarding. A separate coverage harness executes the unchanged supervisor source for SDK lifecycle and simulated metadata-disk-full cleanup; it is not evidence for fixed-command provenance or performance. Required final gates, independent review, oteleq qualification and Go benchmark/dashboard acceptance remain open.
