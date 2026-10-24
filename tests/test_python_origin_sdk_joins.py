@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import unittest
 from pathlib import Path
+from unittest import mock
 
 from ci import build_python_inputs as tooling
 from otelc import python_origin_journal as journal
@@ -19,10 +21,30 @@ class PythonOriginSdkJoinTests(NativeInputCase):
         super().setUpClass()
         cls.tool = tooling.build(coverage=bool(os.environ.get('OTELC_NATIVE_COVERAGE')), origin_entry=True)
 
-    def run_join(self, body: str, *, occupied: bool = False) -> tuple[list, journal.OriginJournal]:
+    def test_unavailable_image_skips_callback_order_test_before_launch(self) -> None:
+        tool = self.root / 'unavailable' / 'observer'
+        tool.parent.mkdir()
+        (tool.parent / 'build.json').write_text(json.dumps({
+            'inputs': {'origin_chain': {'available': False}},
+        }))
+        subject = type(self)(
+            'test_repeated_sdk_starts_have_one_identity_join_in_either_callback_order')
+        subject.tool = tool
+        result = unittest.TestResult()
+        with mock.patch.object(subject, 'run_join', wraps=subject.run_join) as run_join:
+            subject.run(result)
+        self.assertEqual(result.failures, [])
+        self.assertEqual(result.errors, [])
+        self.assertEqual(len(result.skipped), 1)
+        run_join.assert_not_called()
+
+    def require_origin_image(self) -> None:
         metadata = json.loads((self.tool.parent / 'build.json').read_bytes())
         if not metadata['inputs']['origin_chain']['available']:
             self.skipTest('the selected native source image is unavailable')
+
+    def run_join(self, body: str, *, occupied: bool = False) -> tuple[list, journal.OriginJournal]:
+        self.require_origin_image()
         environment = None
         if occupied:
             (self.root / 'sitecustomize.py').write_text("import sys\nsys.monitoring.use_tool_id(2,'application-tool')\n")
@@ -35,6 +57,7 @@ class PythonOriginSdkJoinTests(NativeInputCase):
         return json.loads(out), journal.read(path, expected_pid=pid)
 
     def test_repeated_sdk_starts_have_one_identity_join_in_either_callback_order(self) -> None:
+        self.require_origin_image()
         orders = set()
         for occupied in (False, True):
             with self.subTest(occupied=occupied):
@@ -98,9 +121,7 @@ generator.close()
         self.assertEqual(value.sdk_joins, ())
 
     def test_actual_sdk_monitor_exports_the_joined_code_id_on_main_and_worker(self) -> None:
-        metadata = json.loads((self.tool.parent / 'build.json').read_bytes())
-        if not metadata['inputs']['origin_chain']['available']:
-            self.skipTest('the selected native source image is unavailable')
+        self.require_origin_image()
         capture = Capture()
         self.addCleanup(capture.close)
         entry = self.root / 'original.py'
