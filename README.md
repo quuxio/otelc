@@ -28,7 +28,9 @@ The [Go SDK controls component](docs/go-sdk-controls.md) adds independent live g
 
 The [LLVM compiler component](docs/llvm-backend.md) is a candidate for original C/C++ compilation and a separate ordinary IR example. It preserves tested exception cleanup and applies common function selection. Its explicit registered profile supplies selected function addresses and UTF-8 names before ordinary application initialisers. The [native function SDK engine](docs/native-functions.md) now connects compiler-inserted calls in unedited C/C++ fixtures to actual SDK spans and call/error/duration metrics, with SDK context restoration and independent metric gates. Public generated bootstrap/launch, OTLP export, task/service propagation and lifetime instrumentation remain work.
 
-The [native SDK control component](docs/native-sdk-controls.md) reuses official C++ SDK meter configuration and filtering for live collection, with a separate emission delegate. Its [native analysis pipeline](docs/native-analysis.md) retains actual compiler context and exact-source coverage for Sonar. Native application launch, OTLP integration and complete C/C++ lifetime support remain work.
+The [native SDK control component](docs/native-sdk-controls.md) reuses official C++ SDK meter configuration and filtering for live collection, with a separate emission delegate. Its [native analysis pipeline](docs/native-analysis.md) retains actual compiler context and exact-source coverage for Sonar. Complete native language launch/export qualification and C/C++ lifetime support remain work.
+
+The explicit [native launch candidate](docs/native-launch.md) connects original C/C++ compilation to official SDK OTLP/HTTP export, live metric controls and retained health. It uses source-qualified function identities and a generated startup object, preserving developer source. Native task/service propagation, automatic lifetimes, general build recipes and final independent language qualification remain work.
 
 ## Java example and Grafana
 

@@ -20,6 +20,7 @@ from typing import Any
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java, witness
 from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe
+from otelc import native_launch
 from otelc.config import LANGUAGES, Policy
 
 
@@ -75,6 +76,15 @@ def main() -> int:
     original.add_argument("--backend", choices=("native", "api"), default="native")
     original.add_argument("--plain", action="store_true")
     original.add_argument("arguments", nargs=argparse.REMAINDER)
+    native = commands.add_parser("native", help="candidate: compile and launch original C/C++ translation units")
+    native.add_argument("--language", choices=("c", "cpp"), required=True)
+    native.add_argument("--root", type=Path, required=True)
+    native.add_argument("--source", type=Path, action="append", required=True)
+    native.add_argument("--build", type=Path, required=True, help="new output directory outside the application root")
+    native.add_argument("--runtime", type=Path, required=True, help="new private runtime directory")
+    native.add_argument("--sdk-library", type=Path, required=True, help="explicit built native SDK launch library")
+    native.add_argument("--plain", action="store_true")
+    native.add_argument("arguments", nargs=argparse.REMAINDER)
     python = commands.add_parser("python", help="candidate: launch original CPython sources")
     python.add_argument("--root", default=str(Path.cwd()))
     python_entry = python.add_mutually_exclusive_group(required=True)
@@ -103,6 +113,14 @@ def main() -> int:
             print(json.dumps(value, indent=2))
             return 0
         policy = Policy.load(args.config)
+        if args.command == 'native':
+            built = native_launch.build(policy, args.language, args.root, args.source, args.build,
+                                        library=args.sdk_library)
+            if not args.plain:
+                print(f'Control descriptor: {args.runtime}/control.json', file=sys.stderr)
+            process = native_launch.start(built, args.runtime, plain=args.plain,
+                                          arguments=application_arguments(args.arguments))
+            return process.wait()
         if args.command == "python":
             arguments = application_arguments(args.arguments)
             return python_adapter.run(policy, args.runtime, root=args.root, entry=args.entry,

@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development component. The native engine connects registered LLVM function descriptors to official OpenTelemetry C++ SDK spans and call/error/duration instruments. The internal C/C++ fixtures are compiled by the registered LLVM profile and linked to a test-owned SDK bootstrap. A public native launcher, generated application bootstrap, OTLP export, common-policy runtime controls, task/service propagation, automatic object/resource lifetimes and equivalent application benchmarks remain work. This component does not deliver a C/C++ application adapter.
+Status: development component. The native engine connects registered LLVM function descriptors to official OpenTelemetry C++ SDK spans and call/error/duration instruments. The internal C/C++ fixtures are compiled by the registered LLVM profile and linked to a test-owned SDK bootstrap. The separate [native launch candidate](native-launch.md) adds generated application bootstrap, official OTLP/HTTP export, common-policy live controls and retained health. Broader native language qualification, task/service propagation, automatic object/resource lifetimes and equivalent application benchmarks remain work. This component does not by itself deliver a C/C++ application adapter.
 
 Application developers will not add this engine, SDK imports or probe callbacks. The fixture source files contain ordinary C/C++ only. The tooling must eventually generate and own the bootstrap, providers and versioned ABI callbacks.
 
@@ -21,6 +21,8 @@ Metric collection must be enabled at both entry and exit for the completed call 
 Function registration defaults to a maximum of 4,096 functions and 512 active calls. Smaller positive limits can be selected by the tooling. Capacity, unknown-function and re-entry refusals return zero and increment loss accounting. SDK processor/exporter callbacks may inspect status without a bookkeeping lock being held across SDK calls. A callback that invokes another selected function is refused with visible loss, rather than recursively entering instrumentation.
 
 `Close()` stops admission and returns false while any admitted call is still active, including an exit inside an SDK callback. The owner must retain the engine and providers until those calls leave on their owning threads and `Close()` succeeds. Active calls are not converted into successful completions. This API is a component lifetime contract, not a process-shutdown or network-drain implementation.
+
+The default `FunctionContext::ambient` mode attaches SDK scopes, joining and restoring application SDK context. It requires the SDK thread-local stack to remain alive. `FunctionContext::owned` instead passes an explicit SDK root or the preceding selected function's context, without reading or changing ambient scopes. The native launch candidate uses owned mode so late global/TLS destructors can call selected functions after the SDK's thread-local stack has been destroyed. Owned mode does not inherit an independently installed application SDK scope.
 
 ## Checks
 

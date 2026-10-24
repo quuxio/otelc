@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "opentelemetry/trace/scope.h"
+#include "opentelemetry/trace/context.h"
 #include "opentelemetry/sdk/metrics/aggregation/aggregation_config.h"
 #include "opentelemetry/sdk/metrics/view/instrument_selector.h"
 #include "opentelemetry/sdk/metrics/view/meter_selector.h"
@@ -89,7 +90,8 @@ struct FunctionRuntime::Impl {
        opentelemetry::nostd::shared_ptr<trace::Tracer> selected_tracer, FunctionLimits selected_limits)
       : state(std::move(selected_state)), tracer(std::move(selected_tracer)), limits(selected_limits) {
     if (!state || !meter || state->Status().closing || limits.functions == 0
-        || limits.functions > MaxFunctions || limits.active == 0 || limits.active > MaxActive)
+        || limits.functions > MaxFunctions || limits.active == 0 || limits.active > MaxActive
+        || (limits.context != FunctionContext::ambient && limits.context != FunctionContext::owned))
       throw std::invalid_argument("native function engine requires open SDK inputs and bounded limits");
     calls = meter->CreateUInt64Counter("otelc.function.calls", "Completed selected calls", "{call}");
     errors = meter->CreateUInt64Counter("otelc.function.errors", "Selected exception exits", "{error}");
@@ -165,6 +167,7 @@ std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
   }
   ProbeGuard probe;
   Impl::Frame *slot = nullptr;
+  opentelemetry::nostd::shared_ptr<trace::Span> parent;
   try {
     {
       std::lock_guard<std::mutex> guard(impl_->mutex);
@@ -173,6 +176,10 @@ std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
           || function == impl_->functions.end()) {
         ++impl_->lost;
         return 0;
+      }
+      if (impl_->limits.context == FunctionContext::owned) {
+        auto *top = impl_->Top(std::this_thread::get_id());
+        if (top) parent = top->span;
       }
       for (auto &frame : impl_->frames) if (frame.phase == Impl::Phase::free) { slot = &frame; break; }
       slot->phase = Impl::Phase::entering;
@@ -183,11 +190,20 @@ std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
       slot->start = Clock::now();
       ++impl_->active;
     }
-    // The SDK scope supplies normal parentage for nested probes and application
-    // SDK operations. No bookkeeping lock spans a processor or exporter call.
+    // Ambient mode joins application SDK operations. Owned mode also works in
+    // global/TLS destructors after the SDK's thread-local stack has been freed.
+    // No bookkeeping lock spans a processor or exporter call.
     if (impl_->tracer) {
-      slot->span = impl_->tracer->StartSpan(*slot->name, {{"function", *slot->name}});
-      slot->scope = std::make_unique<trace::Scope>(slot->span);
+      if (impl_->limits.context == FunctionContext::owned) {
+        trace::StartSpanOptions options;
+        // An invalid SpanContext alone falls back to ambient context in the SDK.
+        options.parent = opentelemetry::context::Context{}.SetValue(trace::kIsRootSpanKey, true);
+        if (parent && parent->GetContext().IsValid()) options.parent = parent->GetContext();
+        slot->span = impl_->tracer->StartSpan(*slot->name, {{"function", *slot->name}}, options);
+      } else {
+        slot->span = impl_->tracer->StartSpan(*slot->name, {{"function", *slot->name}});
+        slot->scope = std::make_unique<trace::Scope>(slot->span);
+      }
     }
     std::lock_guard<std::mutex> guard(impl_->mutex);
     slot->phase = Impl::Phase::active;
