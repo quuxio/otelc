@@ -173,6 +173,33 @@ class LLVMIntegrationTests(unittest.TestCase):
         plain, woven = self.compile(source, 'asterisk', 'cpp', policy=policy)
         self.compare(plain, woven, [], {'entries': 1, 'normal': 1, 'unwind': 0, 'invalid': 0})
 
+    def test_application_names_with_runtime_like_prefixes_follow_common_selection(self) -> None:
+        source = self.base / 'application-prefixes.c'
+        source.write_text('#include <stdio.h>\n'
+                          '__attribute__((noinline)) int otelc_workload(void){return 20;}\n'
+                          '__attribute__((noinline)) int __cyg_profile_func_workload(void){return 22;}\n'
+                          'int main(void){printf("%d\\n",otelc_workload()+__cyg_profile_func_workload());return 0;}\n')
+        names = ['otelc_workload', '__cyg_profile_func_workload']
+        policy = Policy.parse({'schema_version': 3, 'languages': ['c'],
+                              'functions': {'include': names}})
+        for name in names:
+            self.assertTrue(policy.selection('functions').accepts(name))
+        plain, woven = self.compile(source, 'application-prefixes', 'c', policy=policy)
+        self.compare(plain, woven, [], {'entries': 2, 'normal': 2, 'unwind': 0, 'invalid': 0})
+
+    def test_matching_c_probe_declarations_remain_supported(self) -> None:
+        source, output = self.base / 'compatible-abi.ll', self.base / 'compatible-abi-woven.ll'
+        for attributes in ('', ' nounwind willreturn'):
+            with self.subTest(attributes=attributes):
+                source.write_text('declare i64 @otelc_function_enter_v1(ptr)' + attributes + '\n'
+                                  'declare void @otelc_function_leave_v1(i64, i32)' + attributes + '\n'
+                                  'define i32 @selected(){ret i32 42}\n')
+                self.run_command([self.bin / 'opt', '-load-pass-plugin=' + str(self.library),
+                                  '-passes=default<O0>', '-S', source, '-o', output],
+                                 environment=self.compiler_environment('c'))
+                self.assertIn('call i64 @otelc_function_enter_v1', output.read_text())
+                self.assertIn('call void @otelc_function_leave_v1', output.read_text())
+
     def test_unsupported_ir_and_invalid_selection_refuse_before_output(self) -> None:
         cases = {
             'repeat': '!otelc.instrumented = !{}\ndefine void @selected(){ret void}\n',
@@ -181,6 +208,13 @@ class LLVMIntegrationTests(unittest.TestCase):
             'personality': 'declare i32 @custom_personality(...)\ndefine void @selected() personality ptr @custom_personality {ret void}\n',
             'abi-global': '@otelc_function_enter_v1=global i64 0\ndefine void @selected(){ret void}\n',
             'abi-type': 'declare void @otelc_function_enter_v1()\ndefine void @selected(){ret void}\n',
+            'abi-enter-convention': 'declare fastcc i64 @otelc_function_enter_v1(ptr)\ndefine void @selected(){ret void}\n',
+            'abi-leave-convention': 'declare fastcc void @otelc_function_leave_v1(i64, i32)\ndefine void @selected(){ret void}\n',
+            'abi-enter-memory': 'declare i64 @otelc_function_enter_v1(ptr) memory(none)\ndefine void @selected(){ret void}\n',
+            'abi-leave-memory': 'declare void @otelc_function_leave_v1(i64, i32) memory(none)\ndefine void @selected(){ret void}\n',
+            'abi-no-return': 'declare i64 @otelc_function_enter_v1(ptr) noreturn\ndefine void @selected(){ret void}\n',
+            'abi-by-value': 'declare i64 @otelc_function_enter_v1(ptr byval(i64))\ndefine void @selected(){ret void}\n',
+            'abi-return-attribute': 'declare inreg i64 @otelc_function_enter_v1(ptr)\ndefine void @selected(){ret void}\n',
         }
         for name, text in cases.items():
             with self.subTest(name=name):

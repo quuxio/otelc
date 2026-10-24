@@ -1,5 +1,6 @@
 // Itanium C++ EH instrumentation. Probes cannot throw or inspect arguments.
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/CallingConv.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Demangle/Demangle.h"
@@ -81,8 +82,22 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
     auto Probe = [&](StringRef Name, FunctionType *Type) {
       if (auto *Existing = M.getNamedValue(Name)) {
         auto *Function = dyn_cast<llvm::Function>(Existing);
-        if (!Function || !Function->isDeclaration() || Function->getFunctionType() != Type)
+        if (!Function || !Function->isDeclaration() || Function->getFunctionType() != Type ||
+            Function->getCallingConv() != CallingConv::C)
           report_fatal_error("otelc: application conflicts with the reserved probe ABI");
+        // A type-compatible declaration can still change the ABI or erase probes
+        // (for example byval, noreturn or memory(none)). Accept only the fixed
+        // contract's neutral attributes, not arbitrary application promises.
+        auto Attributes = Function->getAttributes();
+        bool Compatible = !Attributes.getRetAttrs().hasAttributes();
+        for (unsigned Arg = 0; Arg < Function->arg_size(); ++Arg)
+          Compatible &= !Attributes.hasParamAttrs(Arg);
+        for (auto Attribute : Attributes.getFnAttrs())
+          Compatible &= Attribute.isEnumAttribute() &&
+              (Attribute.getKindAsEnum() == Attribute::NoUnwind ||
+               Attribute.getKindAsEnum() == Attribute::WillReturn);
+        if (!Compatible)
+          report_fatal_error("otelc: application conflicts with the reserved probe ABI attributes");
       }
       return M.getOrInsertFunction(Name, Type);
     };
@@ -99,9 +114,7 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
     auto Annotations = annotations(M);
     SmallVector<Function *> Functions;
     for (auto &F : M) {
-      if (F.isDeclaration() || F.getName().starts_with("otelc_") ||
-          F.getName().starts_with("__cyg_profile_func_") ||
-          F.hasFnAttribute("no-instrument-function"))
+      if (F.isDeclaration() || F.hasFnAttribute("no-instrument-function"))
         continue;
       auto Name=llvm::demangle(F.getName().str());
       bool Selected = (Annotations.lookup(&F) & 1) != 0;
