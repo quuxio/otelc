@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Java and the JavaScript/Microsoft TypeScript and Python candidates use the same `integer128-v1` workload and one common policy. Every accepted batch must match the independent checksum. Plain and instrumented application sources remain unchanged. Five measured modes are retained: `plain`, `both_off`, `collection_only`, `emission_only` and `both_on`. All four instrumented modes use the same application PID and build. Tracing and lifetime observation retain their configured settings while metrics change live.
+Java and the JavaScript/Microsoft TypeScript, Python and Go candidates use the same `integer128-v1` workload and one common policy. Every accepted batch must match the independent checksum. Plain and instrumented application sources remain unchanged. Five measured modes are retained: `plain`, `both_off`, `collection_only`, `emission_only` and `both_on`. All four instrumented modes use the same application PID and build. Tracing and lifetime observation retain their configured settings while metrics change live.
 
 ## Run equivalent language comparisons
 
@@ -29,15 +29,22 @@ bin/quux-otelc --config examples/otelc.toml benchmark \
 bin/quux-otelc --config examples/otelc.toml benchmark \
   --language python --comparison-id "$comparison" \
   --output "build/benchmarks/$comparison-python"
+bin/quux-otelc --config examples/otelc.toml go-build \
+  --root "$PWD/examples/go" --output "$PWD/build/$comparison-go-build"
+bin/quux-otelc --config examples/otelc.toml benchmark \
+  --language go --build "$PWD/build/$comparison-go-build" \
+  --comparison-id "$comparison" --output "build/benchmarks/$comparison-go"
 ```
 
 The default TypeScript backend is Microsoft's pinned native compiler. Use `--backend api` for the pinned Microsoft compiler API profile. Compare the two compiler profiles with separate comparison IDs, so the dashboard does not combine their TypeScript samples. Compilation/startup occurs before warmup and is excluded from operation latency. A TypeScript plain lane uses the selected real compiler without probes or an SDK process; JavaScript plain uses Node directly. Python's plain lane now uses CPython directly, with the same ordinary source and interpreter environment. It has no otelc native input observer, generated bootstrap, supervisor or SDK process. The instrumented lane keeps the public prepared native launcher and its independent SDK. Preparation, launch and ordinary startup imports occur before application-body timing; imports triggered inside the measured workload remain timed. No production GC request is added.
+
+Go requires a separately retained `go-build` of the unchanged shared `examples/go` application. The benchmark does not compile. Both binaries use the public `go-source-v1` supervisor; plain is the original stock binary with no probes or SDK, while instrumented is privately woven. Each lane reports its actual supervisor separately. The SDK shares the instrumented application's PID, so application CPU/RSS includes its cost exactly once; no separate SDK resource series is invented. The report binds build/toolchain identity, original/private inputs, final execution, checked SDK drain and first-response evidence, and rechecks both lanes before publication. Raw samples survive a failed acceptance check. This candidate still requires independent Go qualification and downstream dashboard acceptance. `make benchmark BENCHMARK_LANGUAGE=go` builds the example once in `build/go-example`; choose a fresh `GO_BENCHMARK_BUILD` after changing compile-time selection.
 
 Set `[benchmark]` `iterations`, `warmup` and `samples` in a copy of the common policy to change the measurement size. Use the same copy for all compared languages. Use `--no-publish` to retain local reports without sending driver measurements to the Collector. That flag does not change the application's export policy.
 
 ## Read the retained evidence
 
-`report.json` contains raw ns/operation arrays, medians, comparison/run identity, source and policy hashes, runtime/compiler/build identity, host information and state transitions. `responses.jsonl` retains each parsed Java/Node/Python application response before SDK flush or resource sampling can fail. `raw.jsonl` retains complete samples, including the driver-observed PID, checksum and resource windows. A failed later observation never becomes a successful CPU sample. Warmup and state/control/pipe time are excluded from the application's batch timer. Java, Node and Python rotate the four states so that each occupies every position over four samples, then reverse the next four-sample block; the report records this method. Neither schedule removes all host load or time-order bias. Use enough samples and inspect the raw sequence.
+`report.json` contains raw ns/operation arrays, medians, comparison/run identity, source and policy hashes, runtime/compiler/build identity, host information and state transitions. `responses.jsonl` retains each parsed application response before SDK flush or resource sampling can fail. `raw.jsonl` retains complete samples, including the driver-observed PID, checksum and resource windows. A failed later observation never becomes a successful CPU sample. Warmup and state/control/pipe time are excluded from the application's batch timer. Java, Node, Python and Go rotate the four states so that each occupies every position over four samples, then reverse the next four-sample block; the report records this method. Neither schedule removes all host load or time-order bias. Use enough samples and inspect the raw sequence.
 
 Node reports also retain `plain/` and `instrumented/` launch/compiler/input evidence, independent SDK drain reports and stderr. The driver refuses publication on input mutation, incomplete final accounting, handoff/observer/queue loss, failed exports or a failed application. Raw files remain available after failure. A clean SDK report establishes producer accounting; it does not prove downstream receipt or OTLP partial-rejection absence.
 
@@ -57,7 +64,7 @@ Lifetime and trace configuration remain in every raw report. To measure lifecycl
 
 ## View the comparison in Grafana
 
-Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate resource panels show Java/Node/Python CPU/operation and RSS by role, including the Python supervisor. Compare Java's instrumented JVM with the other languages' application and SDK roles together when assessing total instrumentation cost. The dashboard uses exported driver measurements rather than sampled function-duration histograms.
+Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate resource panels show CPU/operation and RSS by actual process role, including supervisors where present. Java and Go embed their SDK in the application; add the separate application and SDK roles for Node/Python when assessing their cost. The dashboard uses exported driver measurements rather than sampled function-duration histograms.
 
 Use [function metrics and lifetimes](http://localhost:3001/d/otelc-lifetimes) for application telemetry and [task/service traces](http://localhost:3001/d/otelc-traces) for trace trees. The local stack uses OTLP/HTTP port 4320, Prometheus 9091, Tempo 3201 and Grafana 3001. Export success alone is insufficient: check the Collector, Prometheus samples and, when traces are enabled, decoded Tempo spans. Missing language series mean that no qualified results were published for that selection; they are never filled with synthetic values.
 
@@ -67,4 +74,4 @@ Select a dashboard time range that includes the run, then choose its comparison 
 
 The local Collector expires inactive metric series after one hour, while Prometheus retains scraped history for seven days. For older results, retain the raw report and sample files. Stopping the stack preserves its named data volumes. Historical throughput and overhead still describe the recorded workload; they are not current application rates.
 
-The Python launch-to-first-response panel shows the separately scoped launch observation for each lane. Its values include readiness, controls and IPC; compare them separately from body latency. RSS is a snapshot of each real process, not peak memory or allocated bytes. The plain Python lane has no synthetic zero-cost supervisor or SDK series.
+The launch-to-first-response panel shows the separately scoped Python/Go launch observation for each lane. Its values include readiness, controls and IPC; compare them separately from body latency and inspect each profile's launch boundary. Go includes a supervisor in both lanes; plain Python starts directly. RSS is a snapshot of each real process, not peak memory or allocated bytes. The plain Python lane has no synthetic zero-cost supervisor or SDK series.

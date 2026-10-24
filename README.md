@@ -24,9 +24,7 @@ Native launch also retains the selected interpreter's pre-site executable identi
 
 The [native input observer](docs/python-input-journal.md#evidence-and-failure-boundary) also retains ordinary raw `FileIO` loader reads, including older CPython sourceless imports. Its tests compare original output, errors, file lifetimes, nested/concurrent reads and profiling metadata. This remains input evidence; compiler-origin and complete-source qualification are separate work.
 
-The [Go SDK controls component](docs/go-sdk-controls.md) adds independent live gates around an isolated official Go metric pipeline. The [source candidate](docs/go-source.md) connects the official weaver, owned runtime, common-policy source/type selection, automatic allocation/release probes and private stock/woven builds. Candidate public `go-build` and `go` commands retain binaries and launch them without a compiler, with actual process/health records and live controls. The ordinary Go example consumes the same policy. HTTP integration, broader source/library profiles, benchmarks and final qualification remain work. Go is not yet a delivered adapter.
-
-The [Go source candidate](docs/go-source.md) reuses the pinned official compiler/context hooks and adds owned SDK export scheduling with HTTP/protobuf acknowledgement checks. Compiler and component tests cover the declared foundation; public Go application launching and complete language qualification remain work.
+The [Go source candidate](docs/go-source.md) connects the official weaver/context hooks, owned runtime, common-policy source/type selection, automatic allocation/release probes and private stock/woven builds. Public candidate `go-build` and `go` commands retain binaries and launch them without a compiler, with actual process/health records and independent live metric controls. Its ordinary example and [paired benchmark](docs/benchmarks.md) consume the same policy as the other languages. HTTP integration, broader source/library profiles, downstream dashboard acceptance and independent qualification remain work. Go is not yet a delivered adapter.
 
 ## Java example and Grafana
 

@@ -6,6 +6,7 @@ NODE ?= $(if $(CI),node,$(if $(wildcard /opt/homebrew/opt/node@24/bin/node),/opt
 NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
 BENCHMARK_LANGUAGE ?= java
+GO_BENCHMARK_BUILD ?= build/go-example
 
 .PHONY: help setup check lint test go-check go-upstream node-check node-observer node-native-coverage node-http python-inputs python-inputs-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
@@ -92,6 +93,7 @@ test: java-build node-observer node-http go-upstream
 	$(PYTHON) -m coverage report --include='*/otelc/go_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/prepared_go.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_supervisor.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_benchmark.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/build_go_upstream.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 
@@ -106,8 +108,11 @@ stack-up: stack-check
 stack-down:
 	docker compose down
 
-benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http)
-	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc benchmark --language $(BENCHMARK_LANGUAGE) --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
+$(GO_BENCHMARK_BUILD)/build.json:
+	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc go-build --root "$(CURDIR)/examples/go" --output "$(abspath $(GO_BENCHMARK_BUILD))" --go "$(GO)"
+
+benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http) $(if $(filter go,$(BENCHMARK_LANGUAGE)),$(GO_BENCHMARK_BUILD)/build.json)
+	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc benchmark --language $(BENCHMARK_LANGUAGE) $(if $(filter go,$(BENCHMARK_LANGUAGE)),--build "$(abspath $(GO_BENCHMARK_BUILD))") --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
 
 sonar-policy:
 	$(PYTHON) ci/verify_sonar_policy.py
