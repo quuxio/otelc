@@ -1,4 +1,5 @@
 // Itanium C++ EH instrumentation. Probes cannot throw or inspect arguments.
+#include "function_abi.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/ADT/DenseMap.h"
@@ -16,6 +17,9 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <cstdlib>
+#include <cstddef>
+static_assert(sizeof(otelc_function_descriptor_v1) == 2 * sizeof(void *));
+static_assert(offsetof(otelc_function_descriptor_v1, name) == sizeof(void *));
 using namespace llvm;
 namespace {
 // Only * and ? are wildcards; C++ punctuation remains literal.
@@ -71,6 +75,41 @@ DenseMap<Function *, unsigned> annotations(Module &M) {
   }
   return Result;
 }
+#ifdef OTELC_FUNCTION_REGISTRY_V1
+void registerFunctions(Module &M, ArrayRef<Function *> Functions, FunctionCallee Register) {
+  if (Functions.empty()) return;
+  if (auto *Ctors = M.getNamedGlobal("llvm.global_ctors"); Ctors && Ctors->hasInitializer()) {
+    for (auto &Operand : Ctors->getInitializer()->operands()) {
+      auto *Row = dyn_cast<ConstantStruct>(Operand.get());
+      if (Row && cast<ConstantInt>(Row->getOperand(0))->isZero())
+        report_fatal_error("otelc: application initialiser uses the reserved registry priority");
+    }
+  }
+  auto &C = M.getContext();
+  auto *Ptr = PointerType::getUnqual(C);
+  auto *Descriptor = StructType::get(Ptr, Ptr);
+  SmallVector<Constant *> Records;
+  for (auto *F : Functions) {
+    auto *Text = ConstantDataArray::getString(C, llvm::demangle(F->getName().str()), true);
+    auto *Name = new GlobalVariable(M, Text->getType(), true, GlobalValue::PrivateLinkage,
+                                    Text, "otelc.function.name");
+    Name->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    Records.push_back(ConstantStruct::get(Descriptor, {F, Name}));
+  }
+  auto *Array = ConstantArray::get(ArrayType::get(Descriptor, Records.size()), Records);
+  auto *Table = new GlobalVariable(M, Array->getType(), true, GlobalValue::PrivateLinkage,
+                                   Array, "otelc.function.descriptors");
+  auto *Init = Function::Create(FunctionType::get(Type::getVoidTy(C), false),
+                                GlobalValue::InternalLinkage, "otelc.function.registration", M);
+  Init->addFnAttr(Attribute::NoUnwind);
+  Init->addFnAttr(Attribute::WillReturn);
+  IRBuilder<> Builder(BasicBlock::Create(C, "entry", Init));
+  Builder.CreateCall(Register, {Table, Builder.getInt64(Records.size())})->setDoesNotThrow();
+  Builder.CreateRetVoid();
+  // Implementation-reserved priority: no application initialiser needs to enrol probes.
+  appendToGlobalCtors(M, Init, 0);
+}
+#endif
 struct OtelcPass : PassInfoMixin<OtelcPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
     if (M.getNamedMetadata("otelc.instrumented"))
@@ -103,7 +142,12 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
     };
     auto Enter = Probe("otelc_function_enter_v1", FunctionType::get(I64, {Ptr}, false));
     auto Leave = Probe("otelc_function_leave_v1", FunctionType::get(Type::getVoidTy(C), {I64, I32}, false));
-    for (auto Callee : {Enter, Leave}) {
+    SmallVector<FunctionCallee> Probes{Enter, Leave};
+#ifdef OTELC_FUNCTION_REGISTRY_V1
+    auto Register = Probe("otelc_function_register_v1", FunctionType::get(Type::getVoidTy(C), {Ptr, I64}, false));
+    Probes.push_back(Register);
+#endif
+    for (auto Callee : Probes) {
       auto *F = cast<Function>(Callee.getCallee());
       F->addFnAttr(Attribute::NoUnwind);
       F->addFnAttr(Attribute::WillReturn);
@@ -186,6 +230,9 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
     bool Darwin = M.getTargetTriple().isOSDarwin();
     Retain(Inventory, "otelc.inventory", Darwin ? "__DATA,__otelc" : ".otelc");
     Retain(AnnotatedInventory, "otelc.annotations", Darwin ? "__DATA,__otela" : ".otela");
+#ifdef OTELC_FUNCTION_REGISTRY_V1
+    registerFunctions(M, Functions, Register);
+#endif
     M.getOrInsertNamedMetadata("otelc.instrumented");
     if (verifyModule(M, &errs())) report_fatal_error("otelc: invalid instrumented module");
     return PreservedAnalyses::none();

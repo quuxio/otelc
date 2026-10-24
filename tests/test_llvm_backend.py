@@ -24,6 +24,8 @@ class LLVMBackendTests(unittest.TestCase):
             (self.root / name).write_text('fixed ' + name)
         self.source = self.root / 'pass.cpp'
         self.source.write_text('fixed source')
+        self.header = self.root / 'function_abi.h'
+        self.header.write_text('fixed ABI header')
         self.config = self.root / 'llvm-config'
         self.version = '22.1.8'
         self.compiler_version = '22.1.8'
@@ -31,6 +33,8 @@ class LLVMBackendTests(unittest.TestCase):
         self.change = None
         source = patch.object(backend, 'SOURCE', self.source)
         source.start(); self.addCleanup(source.stop)
+        header = patch.object(backend, 'HEADER', self.header)
+        header.start(); self.addCleanup(header.stop)
         run = patch.object(backend.subprocess, 'run', side_effect=self.fake_run)
         self.run_mock = run.start(); self.addCleanup(run.stop)
 
@@ -52,8 +56,8 @@ class LLVMBackendTests(unittest.TestCase):
             value = '-L"/libraries with spaces" -lLLVM-22'
         return subprocess.CompletedProcess(command, 0, value, '')
 
-    def build(self, name: str = 'output', *, coverage: bool = False) -> backend.Plugin:
-        return backend.build(self.root / name, config=self.config, coverage=coverage)
+    def build(self, name: str = 'output', *, coverage: bool = False, registry: bool = False) -> backend.Plugin:
+        return backend.build(self.root / name, config=self.config, coverage=coverage, function_registry=registry)
 
     def test_matched_build_keeps_literal_flags_and_all_input_product_identities(self) -> None:
         plugin = self.build(coverage=True)
@@ -62,6 +66,9 @@ class LLVMBackendTests(unittest.TestCase):
         self.assertIn('-I/headers with spaces', self.compilation)
         self.assertIn('-L/libraries with spaces', self.compilation)
         self.assertIn('-fcoverage-mapping', self.compilation)
+        self.assertEqual(value['headers'], [backend.identity(self.header)])
+        self.assertEqual((value['profile'], value['probe_abi']), (backend.PROFILE, 'otelc.function.v1'))
+        self.assertNotIn('-DOTELC_FUNCTION_REGISTRY_V1=1', self.compilation)
         database = json.loads((plugin.directory / 'compile_commands.json').read_text())
         self.assertEqual(database, [{'directory': str(backend.ROOT), 'file': str(self.source),
                                      'arguments': self.compilation}])
@@ -97,9 +104,10 @@ class LLVMBackendTests(unittest.TestCase):
             backend.verify(value)
 
     def test_changed_source_tool_or_audit_record_refuses(self) -> None:
-        for name in ('source', 'clang', 'build.stdout', 'command.json', 'compile_commands.json'):
+        for name in ('source', 'header', 'clang', 'build.stdout', 'command.json', 'compile_commands.json'):
             plugin = self.build('output-' + name.replace('.', '-'))
-            path = self.source if name == 'source' else self.root / name if name == 'clang' else plugin.directory / name
+            path = (self.source if name == 'source' else self.header if name == 'header'
+                    else self.root / name if name == 'clang' else plugin.directory / name)
             original = path.read_bytes()
             path.write_bytes(original + b'changed')
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -129,6 +137,18 @@ class LLVMBackendTests(unittest.TestCase):
             self.build('wrong-clang')
         with self.assertRaisesRegex(ValueError, 'boolean'):
             self.build(coverage=1)
+
+    def test_registry_profile_is_explicit_and_header_changes_cannot_reuse_a_plugin(self) -> None:
+        plugin = self.build(registry=True)
+        value = backend.verify(plugin)
+        self.assertEqual((value['profile'], value['probe_abi']),
+                         (backend.REGISTERED_PROFILE, 'otelc.function.v2'))
+        self.assertIn('-DOTELC_FUNCTION_REGISTRY_V1=1', self.compilation)
+        with self.assertRaisesRegex(ValueError, 'registry'):
+            self.build('invalid-registry', registry=1)
+        self.header.write_text('changed header')
+        with self.assertRaisesRegex(ValueError, 'product'):
+            backend.verify(plugin)
 
     def test_default_tool_selection_respects_operator_paths(self) -> None:
         with patch.dict(backend.os.environ, {'LLVM_CONFIG': str(self.config)}, clear=True):

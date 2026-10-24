@@ -23,7 +23,21 @@ Linux CI uses Ubuntu 24.04 and `bash ci/install_llvm22.sh`, selecting `/usr/lib/
 make llvm-plugin LLVM_OUTPUT=build/llvm-plugin-second
 ```
 
-The record binds the compiler/plugin source, compiler identities, actual compile command, compilation database, diagnostics and resulting library. The Python API retains an immutable caller-held build result; an edited on-disk record does not replace it. The [native analysis pipeline](native-analysis.md) uses that actual build context for C++ scanning. This is a local component binding, not a signature or whole-program provenance claim. `source_complete=false` stays explicit.
+The record binds the compiler/plugin source, owned ABI header, compiler identities, actual compile command, compilation database, diagnostics and resulting library. The Python API retains an immutable caller-held build result; an edited on-disk record does not replace it. The [native analysis pipeline](native-analysis.md) uses that actual build context for C++ scanning. This is a local component binding, not a signature or whole-program provenance claim. `source_complete=false` stays explicit.
+
+## Explicit function registry
+
+The default `llvm22-itanium-v1` profile keeps probe ABI1: `otelc_function_enter_v1` and `otelc_function_leave_v1`. A separately built `llvm22-itanium-registered-v1` profile uses probe ABI2 and additionally requires `otelc_function_register_v1`. Select it explicitly:
+
+```sh
+.venv/bin/python -m otelc.llvm_backend --function-registry --output build/llvm-registered
+```
+
+The Python build API takes `function_registry=True`. Its immutable manifest identifies the distinct profile and ABI; there is no implicit registration upgrade or fallback. Both variants use the same common function selectors and exception-aware probes.
+
+The compiler emits a read-only array of selected function addresses and NUL-terminated UTF-8 demangled names, using the C-compatible descriptor in `native/llvm/function_abi.h`. It generates a priority-zero module constructor that passes this array and its count to the registration callback. Ordinary application initialisers can then call selected functions without authoring registration or bootstrap code. Original priority-zero initialisers are refused in this profile because their ordering could precede registration. Empty selection emits no registration table, constructor or additional link dependency.
+
+Tooling-supplied callbacks must honour the header's non-throwing ABI and retain only data valid for the loaded image lifetime. The existing calling-convention, definition, return/parameter and function-attribute checks apply to the new callback. Function registration describes compiler selection; it does not prove a function ran. Native runtime/export/control wiring, object/resource lifetimes, dynamic-image unload and broader source/build profiles remain required work.
 
 ## Common selection and probe contract
 
@@ -59,7 +73,7 @@ Clang semantic annotations can be read by the internal pass: `__attribute__((ann
 
 ## Evidence and remaining work
 
-`make llvm-check` runs the matched real compiler and enforces at least 80% line coverage independently for the Python component and the native pass. The full `make check` also discovers these tests and enforces both floors. Native profiles, retained library identity and coverage reports are written under `build/llvm-pass*`; Python component coverage is under `build/llvm-python.coverage`.
+`make llvm-check` runs the matched real compiler and enforces at least 80% line coverage independently for the Python component and each native pass variant. The registered variant repeats the base compiler corpus and additionally checks selected address/name agreement, UTF-8 and demangled C++ names, exclusions, ordinary pre-main initialisers, empty selection and incompatible registration declarations. The full `make check` also discovers these tests and enforces the floors. Default artifacts use `build/llvm-pass*`; registered artifacts use `build/llvm-pass-registry*` and a separately retained plugin. Python component coverage is under `build/llvm-python.coverage`. C++ Sonar uses the registered compilation context, which includes the base implementation and registration code.
 
 The ordinary fixtures cover C, C++ exceptions, recursion, threads, `-O0`/`-O2`, Unicode and C++ operator selection, exclusions, annotations and compiler refusals. `examples/llvm/workload.ll` is a separate ordinary IR example with no telemetry calls; stock and instrumented executables must both print `42`. Tests compare actual application stdout/stderr and balanced diagnostic probe counts, and check that original fixture files remain unchanged.
 

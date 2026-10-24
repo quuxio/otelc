@@ -19,8 +19,10 @@ from otelc.file_inputs import checked_file
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'native/llvm/OtelcPass.cpp'
+HEADER = ROOT / 'native/llvm/function_abi.h'
 MANIFEST = 'llvm-plugin.json'
 PROFILE = 'llvm22-itanium-v1'
+REGISTERED_PROFILE = 'llvm22-itanium-registered-v1'
 
 
 def identity(path: Path) -> dict[str, Any]:
@@ -106,12 +108,14 @@ class Plugin:
         return json.loads(self.encoded)
 
 
-def build(output: Path, *, config: Path | None = None, coverage: bool = False) -> Plugin:
+def build(output: Path, *, config: Path | None = None, coverage: bool = False,
+          function_registry: bool = False) -> Plugin:
     """Build a fresh policy-neutral plugin and bind the actual inputs/product."""
-    if type(coverage) is not bool:
-        raise ValueError('LLVM coverage selection must be boolean')
+    if type(coverage) is not bool or type(function_registry) is not bool:
+        raise ValueError('LLVM coverage and function registry selection must be boolean')
     tools = discover(config)
     source = identity(SOURCE)
+    header = identity(HEADER)
     output.mkdir(mode=0o700)
     output = output.resolve(strict=True)
     plugin = output / ('libotelc_llvm.dylib' if sys.platform == 'darwin' else 'libotelc_llvm.so')
@@ -119,6 +123,8 @@ def build(output: Path, *, config: Path | None = None, coverage: bool = False) -
                *tools['cxxflags'], str(SOURCE), *tools['ldflags'], '-o', str(plugin)]
     if coverage:
         command.extend(['-fprofile-instr-generate', '-fcoverage-mapping'])
+    if function_registry:
+        command.append('-DOTELC_FUNCTION_REGISTRY_V1=1')
     result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=180)
     (output / 'build.stdout').write_bytes(result.stdout)
     (output / 'build.stderr').write_bytes(result.stderr)
@@ -127,13 +133,15 @@ def build(output: Path, *, config: Path | None = None, coverage: bool = False) -
         {'directory': str(ROOT), 'file': str(SOURCE), 'arguments': command}], indent=2) + '\n')
     if result.returncode:
         raise ValueError('LLVM plugin compilation failed; see build.stderr')
-    if identity(SOURCE) != source or not unchanged(tools):
+    if identity(SOURCE) != source or identity(HEADER) != header or not unchanged(tools):
         raise ValueError('LLVM source or tooling changed during compilation')
-    value = {'schema_version': 1, 'kind': 'otelc.llvm-plugin', 'profile': PROFILE,
-             'source': source, 'toolchain': tools, 'plugin': identity(plugin),
+    value = {'schema_version': 1, 'kind': 'otelc.llvm-plugin',
+             'profile': REGISTERED_PROFILE if function_registry else PROFILE,
+             'source': source, 'headers': [header], 'toolchain': tools, 'plugin': identity(plugin),
              'evidence': {name: identity(output / name) for name in
                           ('command.json', 'compile_commands.json', 'build.stdout', 'build.stderr')},
-             'coverage': coverage, 'probe_abi': 'otelc.function.v1', 'source_complete': False}
+             'coverage': coverage, 'probe_abi': 'otelc.function.v2' if function_registry else 'otelc.function.v1',
+             'source_complete': False}
     encoded = json.dumps(value, sort_keys=True, indent=2) + '\n'
     (output / MANIFEST).write_text(encoded)
     return Plugin(output, encoded)
@@ -156,7 +164,8 @@ def verify(plugin: Plugin) -> dict[str, Any]:
     value = plugin.manifest()
     tools = value['toolchain']
     name = 'libotelc_llvm.dylib' if sys.platform == 'darwin' else 'libotelc_llvm.so'
-    if (value['source'] != identity(SOURCE) or value['plugin'] != identity(output / name)
+    if (value['source'] != identity(SOURCE) or value['headers'] != [identity(HEADER)]
+            or value['plugin'] != identity(output / name)
             or any(identity(output / name) != expected for name, expected in value['evidence'].items())
             or not unchanged(tools)):
         raise ValueError('LLVM plugin differs from the selected source/toolchain/product')
@@ -172,8 +181,10 @@ def main(arguments: list[str] | None = None) -> None:
                         help='new output directory; existing paths are refused')
     parser.add_argument('--llvm-config', type=Path,
                         help='installed LLVM 22 llvm-config executable')
+    parser.add_argument('--function-registry', action='store_true',
+                        help='explicit ABI2 profile: register selected function addresses and names before initialisers')
     options = parser.parse_args(arguments)
-    plugin = build(options.output, config=options.llvm_config)
+    plugin = build(options.output, config=options.llvm_config, function_registry=options.function_registry)
     print(json.dumps(verify(plugin), sort_keys=True, indent=2))
 
 
