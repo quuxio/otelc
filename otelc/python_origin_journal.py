@@ -25,7 +25,7 @@ EDGE = struct.Struct('!Q')
 
 @dataclass(frozen=True)
 class OriginRoot:
-    """One recorded compiler return and the particular earlier read it owns."""
+    """One source compiler or explicit cache return and its particular earlier read."""
 
     identity: int
     transaction: int
@@ -64,6 +64,7 @@ class OriginJournal:
     journal_failures: int
     python_finalized: bool
     entry_expected: bool
+    schema_version: int = 2
 
     @property
     def capture_complete(self) -> bool:
@@ -76,14 +77,14 @@ def _require(condition: bool, reason: str) -> None:
         raise ValueError('invalid Python origin journal: ' + reason)
 
 
-def _frames(data: bytes) -> Iterator[tuple[int, int, bytes, bytes, bool]]:
+def _frames(data: bytes, version: int = 2) -> Iterator[tuple[int, int, bytes, bytes, bool]]:
     offset = sequence = 0
     while offset < len(data):
         _require(len(data) - offset >= inputs.HEADER.size, 'truncated header')
         magic, kind, flags, reserved, current, path_size, size = inputs.HEADER.unpack_from(data, offset)
         offset += inputs.HEADER.size
         metadata = ROOT.size if kind == 5 else inputs.SOURCE.size
-        _require(magic == MAGIC and 1 <= kind <= 7 and not flags and not reserved
+        _require(magic == (MAGIC if version == 2 else b'OTLCPY3\0') and 1 <= kind <= 7 and not flags and not reserved
                  and current == sequence + 1 and current <= inputs.MAX_RECORDS
                  and path_size <= inputs.MAX_PATH and metadata <= size <= metadata + inputs.MAX_SOURCE
                  and offset + path_size + size <= len(data), 'framing or version')
@@ -112,14 +113,19 @@ def _code(payload: bytes, path: bytes) -> inputs.CodeInput:
     return inputs.CodeInput(path, payload[inputs.CODE.size:], identity, offset, version, descriptor_version)
 
 
-def _root(payload: bytes, path: bytes, reads: dict[int, tuple[int, inputs.SourceInput]]) -> OriginRoot:
+def _root(payload: bytes, path: bytes, reads: dict[int, tuple[int, inputs.SourceInput]], journal_version: int) -> OriginRoot:
     (_, identity, transaction, loader, input_sequence, route, version,
      descriptor_version, flags, optimize) = ROOT.unpack_from(payload)
     _require(identity > 0 and transaction > 0 and input_sequence in reads
-             and route in (1, 2) and flags <= 0x7fffffff and optimize <= 2, 'root metadata')
+             and (route in (1, 2) and flags <= 0x7fffffff and optimize <= 2
+                  or journal_version == 3 and route == 3 and flags == 0 and optimize == 3), 'root metadata')
     kind, source = reads[input_sequence]
-    _require(source.path == path and (kind == 1 and loader == 0 if route == 1 else
-                                     kind == 3 and loader > 0 and path.endswith(b'.py')), 'read route')
+    if route == 3:
+        _require(kind == 3 and loader > 0 and source.path.endswith(b'.pyc')
+                 and path.endswith(b'.py') and len(source.content) >= 16, 'cache read route')
+    else:
+        _require(source.path == path and (kind == 1 and loader == 0 if route == 1 else
+                                         kind == 3 and loader > 0 and path.endswith(b'.py')), 'read route')
     descriptor = decode_code(inputs.CodeInput(path, payload[ROOT.size:], identity, 0,
                                               version, descriptor_version))
     fields = dict(descriptor.nodes[descriptor.root - 1].fields)
@@ -147,13 +153,14 @@ def _execution(payload: bytes, path: bytes, roots: dict[int, OriginRoot]) -> Exe
     return Execution(identity, root, offset, edges, node, path)
 
 
-def decode(data: bytes, *, expected_pid: int) -> OriginJournal:
+def decode(data: bytes, *, expected_pid: int, version: int = 2) -> OriginJournal:
     """Reject forward/reused tokens, malformed graphs, mixed versions and loss masks.
 
     A syntactically valid record cannot prove that a monitoring callback really
     observed its relation. Qualification must independently establish that fact.
     """
-    _require(type(data) is bytes and type(expected_pid) is int and expected_pid > 0
+    _require(type(version) is int and version in (2, 3)
+             and type(data) is bytes and type(expected_pid) is int and expected_pid > 0
              and len(data) <= inputs.MAX_JOURNAL, 'identity or size')
     reads: dict[int, tuple[int, inputs.SourceInput]] = {}
     codes: dict[int, inputs.CodeInput] = {}
@@ -168,7 +175,7 @@ def decode(data: bytes, *, expected_pid: int) -> OriginJournal:
     count = size = 0
     budget = MAX_STEPS
     profile: tuple[int, str, str] | None = None
-    for kind, sequence, path, payload, at_eof in _frames(data):
+    for kind, sequence, path, payload, at_eof in _frames(data, version):
         _require(inputs.FINAL.unpack_from(payload)[0] == expected_pid, 'process identity')
         if kind == 2:
             _, total, total_size, lost, io_lost, finalized, expected = inputs.FINAL.unpack_from(payload)
@@ -180,7 +187,7 @@ def decode(data: bytes, *, expected_pid: int) -> OriginJournal:
                 tuple((key, value) for key, (route, value) in reads.items() if route == 1),
                 tuple((key, value) for key, (route, value) in reads.items() if route == 3),
                 tuple(codes.values()), tuple(roots.values()), tuple(executions.values()),
-                tuple(joins.items()), lost, io_lost, bool(finalized), bool(expected))
+                tuple(joins.items()), lost, io_lost, bool(finalized), bool(expected), version)
         count += 1
         size += len(payload) - (ROOT.size if kind == 5 else inputs.SOURCE.size)
         if kind in (1, 3):
@@ -192,7 +199,7 @@ def decode(data: bytes, *, expected_pid: int) -> OriginJournal:
             codes[code.identity] = code
             descriptors[code.identity] = descriptor
         elif kind == 5:
-            root = _root(payload, path, reads)
+            root = _root(payload, path, reads, version)
             descriptor = root.descriptor
             _require(root.identity not in roots and root.transaction not in transactions
                      and root.input_sequence not in consumed, 'reused root, transaction or read token')
@@ -228,6 +235,6 @@ def decode(data: bytes, *, expected_pid: int) -> OriginJournal:
     raise ValueError('invalid Python origin journal: missing finalization')
 
 
-def read(path: Path, *, expected_pid: int) -> OriginJournal:
-    """Read a sealed private file after its owner exits; never autodetect v1."""
-    return decode(inputs._read_bytes(path), expected_pid=expected_pid)
+def read(path: Path, *, expected_pid: int, version: int = 2) -> OriginJournal:
+    """Read only the explicitly selected format after the owning process exits."""
+    return decode(inputs._read_bytes(path), expected_pid=expected_pid, version=version)

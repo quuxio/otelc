@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     CHECK(otelc_py_journal_open(fd) == -1); /* Empty file, stale offset. */
     CHECK(lseek(fd, 0, SEEK_SET) == 0);
     CHECK(otelc_py_journal_open_version(fd, 0) == -1);
-    CHECK(otelc_py_journal_open_version(fd, 3) == -1);
+    CHECK(otelc_py_journal_open_version(fd, 4) == -1);
     int origins = strcmp(argv[2], "origins") == 0 || strcmp(argv[2], "origin-invalid") == 0;
     CHECK(otelc_py_journal_open_version(fd, origins ? 2 : 1) == 0);
     int other = dup(fd);

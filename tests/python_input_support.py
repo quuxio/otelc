@@ -42,7 +42,7 @@ class NativeInputCase(unittest.TestCase):
 
     def launch(self, arguments: list[str], *, environment: dict | None = None,
                origin_observer: bool = False, entry_origins: bool = False, loader_origins: bool = False,
-               origin_root: Path | None = None
+               origin_root: Path | None = None, cache_origins: bool = False
                ) -> tuple[int, bytes, bytes, Path, int]:
         self.number += 1
         path = self.root / f'input-{self.number}.journal'
@@ -50,7 +50,9 @@ class NativeInputCase(unittest.TestCase):
         try:
             options = []
             if origin_root is not None:
-                options = ['--origin-loader-root', str(origin_root)]
+                options = ['--origin-loader-caches-root' if cache_origins else '--origin-loader-root', str(origin_root)]
+            elif cache_origins:
+                options = ['--origin-loader-caches']
             elif loader_origins:
                 options = ['--origin-loader']
             elif entry_origins:

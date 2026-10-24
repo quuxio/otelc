@@ -7,6 +7,7 @@
 #include "OriginPins.h"
 #include "OriginLoader.h"
 #include "OriginChain.h"
+#include "OriginCache.h"
 
 #if OTELC_ORIGIN_CHAIN_AVAILABLE
 #include <string.h>
@@ -21,8 +22,8 @@ extern const PyConfig *_Py_GetConfig(void);
 
 typedef struct {
     PyFrameObject *frame;
-    PyObject *bytes, *path, *root;
-    uint64_t sequence, loader;
+    PyObject *bytes, *path, *root, *cache_bytes, *cache_path, *source_path;
+    uint64_t sequence, loader, cache_sequence;
     unsigned long thread;
     int compiled, optimization;
 } Pending;
@@ -78,6 +79,8 @@ static void clear(Pending *slot) {
        Genuine local starts invalidate reused addresses before accepting reads. */
     slot->frame = NULL;
     Py_CLEAR(slot->bytes); Py_CLEAR(slot->path); Py_CLEAR(slot->root);
+    Py_CLEAR(slot->cache_bytes); Py_CLEAR(slot->cache_path); Py_CLEAR(slot->source_path);
+    slot->cache_sequence = 0;
     slot->sequence = slot->loader = 0;
     slot->compiled = slot->optimization = 0;
 }
@@ -85,6 +88,7 @@ static void clear(Pending *slot) {
 void otelc_py_origin_loader_cancel(void) {
     if (!active) return;
     active = 0;
+    otelc_py_origin_cache_cancel();
     if (compiler && ((PyCFunctionObject *)compiler)->vectorcall == compile_call) {
         ((PyCFunctionObject *)compiler)->vectorcall = original_compile;
     }
@@ -194,10 +198,13 @@ int otelc_py_origin_loader_read(PyObject *path, PyObject *bytes, uint64_t sequen
     if (!scope) { Py_DECREF(frame); PyErr_SetRaisedException(saved); return 0; }
     int source = PyBytes_CheckExact(path) && PyBytes_GET_SIZE(path) >= 3 &&
         !memcmp(PyBytes_AS_STRING(path) + PyBytes_GET_SIZE(path) - 3, ".py", 3);
-    if (!source) { Py_DECREF(frame); PyErr_SetRaisedException(saved); return 0; }
+    int cached = otelc_py_origin_cache_active() && PyBytes_CheckExact(path) && PyBytes_GET_SIZE(path) >= 4 &&
+        !memcmp(PyBytes_AS_STRING(path) + PyBytes_GET_SIZE(path) - 4, ".pyc", 4);
+    if (!source && !cached) { Py_DECREF(frame); PyErr_SetRaisedException(saved); return 0; }
     Pending *slot = find(frame);
     PyObject *self = PyFrame_GetVarString(frame, "self");
-    int valid = sequence && PyBytes_CheckExact(bytes) && slot && !slot->bytes && self &&
+    int valid = sequence && PyBytes_CheckExact(bytes) && slot &&
+        !(cached ? slot->cache_bytes : slot->bytes) && self &&
         (PyObject *)Py_TYPE(self) == loader_type && otelc_py_origin_loader_type() == loader_type;
     uint64_t identity = valid ? loader_id(self) : 0;
     Py_XDECREF(self);
@@ -205,12 +212,63 @@ int otelc_py_origin_loader_read(PyObject *path, PyObject *bytes, uint64_t sequen
         Py_DECREF(frame);
         return fail(saved, !sequence);
     }
+    if (cached) {
+        PyObject *source_path = PyFrame_GetVarString(frame, "source_path");
+        PyObject *encoded = source_path && PyUnicode_CheckExact(source_path) ? PyUnicode_EncodeFSDefault(source_path) : NULL;
+        Py_XDECREF(source_path);
+        if (!encoded) { Py_DECREF(frame); return fail(saved, 0); }
+        slot->cache_bytes = Py_NewRef(bytes);
+        slot->cache_path = Py_NewRef(path);
+        slot->source_path = encoded;
+        slot->cache_sequence = sequence;
+        slot->loader = identity;
+        Py_DECREF(frame);
+        PyErr_SetRaisedException(saved);
+        return 0;
+    }
     Py_DECREF(frame);
     slot->bytes = Py_NewRef(bytes);
     slot->path = Py_NewRef(path);
     slot->sequence = sequence;
     slot->loader = identity;
     PyErr_SetRaisedException(saved);
+    return 0;
+}
+
+static Pending *cache_slot(PyObject *data, int *status) {
+    *status = 0;
+    if (!same_owner()) return NULL;
+    PyFrameObject *current = PyEval_GetFrame();
+    PyFrameObject *frame = current ? PyFrame_GetBack(current) : NULL;
+    if (!frame_is(frame, helpers[0])) { Py_XDECREF(frame); return NULL; }
+    int scope = in_scope(frame);
+    if (!scope) { Py_DECREF(frame); return NULL; }
+    Pending *slot = scope > 0 ? find(frame) : NULL;
+    Py_DECREF(frame);
+    *status = -1;
+    if (!slot || !slot->cache_bytes || !slot->cache_sequence || !PyMemoryView_Check(data)) return NULL;
+    Py_buffer *view = PyMemoryView_GET_BUFFER(data);
+    Py_ssize_t size = PyBytes_GET_SIZE(slot->cache_bytes);
+    if (size < 16 || PyMemoryView_GET_BASE(data) != slot->cache_bytes ||
+            view->buf != PyBytes_AS_STRING(slot->cache_bytes) + 16 || view->len != size - 16 ||
+            !view->readonly || view->itemsize != 1 || view->ndim != 1 || !PyBuffer_IsContiguous(view, 'C')) return NULL;
+    *status = 1;
+    return slot;
+}
+
+int otelc_py_origin_loader_cache_input(PyObject *data) {
+    int status;
+    Pending *slot = cache_slot(data, &status);
+    return slot && slot->compiled ? -1 : status;
+}
+
+int otelc_py_origin_loader_cache_return(PyObject *data, PyObject *code) {
+    int status;
+    Pending *slot = cache_slot(data, &status);
+    if (!slot || status != 1 || slot->compiled || !PyCode_Check(code)) return -1;
+    slot->root = PyWeakref_NewRef(code, NULL);
+    if (!slot->root) return -1;
+    slot->compiled = 2;
     return 0;
 }
 
@@ -296,12 +354,17 @@ static PyObject *returned(PyObject *unwind, PyObject *arguments) {
     int valid = root && root == result && slot->compiled;
     Py_XDECREF(root);
     if (!valid) goto failed;
-    PyObject *path = Py_NewRef(slot->path);
-    uint64_t sequence = slot->sequence, loader = slot->loader;
+    int cached = slot->compiled == 2;
+    PyObject *path = Py_NewRef(cached ? slot->cache_path : slot->path);
+    PyObject *source_path = cached ? Py_NewRef(slot->source_path) : NULL;
+    uint64_t sequence = cached ? slot->cache_sequence : slot->sequence, loader = slot->loader;
     int optimize = slot->optimization;
     clear(slot);
-    int status = otelc_py_origin_module(result, PyBytes_AS_STRING(path), sequence, loader, 0, optimize);
+    int status = cached ? otelc_py_origin_cached_module(result, PyBytes_AS_STRING(path),
+        PyBytes_AS_STRING(source_path), sequence, loader) :
+        otelc_py_origin_module(result, PyBytes_AS_STRING(path), sequence, loader, 0, optimize);
     Py_DECREF(path);
+    Py_XDECREF(source_path);
     if (status) goto failed;
     PyErr_SetRaisedException(saved);
     Py_RETURN_NONE;
@@ -341,6 +404,8 @@ int otelc_py_origin_loader_active(void) { return active; }
 int otelc_py_origin_loader_root(const char *path) { (void)path; return -1; }
 int otelc_py_origin_loader_ready(void) { return -1; }
 int otelc_py_origin_loader_active(void) { return 0; }
+int otelc_py_origin_loader_cache_input(PyObject *data) { (void)data; return 0; }
+int otelc_py_origin_loader_cache_return(PyObject *data, PyObject *code) { (void)data; (void)code; return -1; }
 int otelc_py_origin_loader_start(PyObject *code) { (void)code; return 0; }
 int otelc_py_origin_loader_read(PyObject *path, PyObject *bytes, uint64_t sequence) {
     (void)path; (void)bytes; (void)sequence;

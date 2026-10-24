@@ -17,5 +17,7 @@ int otelc_py_origin_monitor_enable(void);
 PyObject *otelc_py_origin_monitor_value(unsigned index);
 PyObject *otelc_py_origin_helper_value(unsigned index);
 PyObject *otelc_py_origin_loader_type(void);
+int otelc_py_origin_cache_enable(void);
+PyObject *otelc_py_origin_cache_value(unsigned index);
 
 #endif
