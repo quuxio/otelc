@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  - package-ecosystem: gomod
+    directory: /adapters/go
+    schedule:
+      interval: weekly
   - package-ecosystem: maven
     directory: /adapters/java
     schedule:

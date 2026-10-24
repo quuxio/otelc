@@ -22,6 +22,8 @@ Native launch also retains the selected interpreter's pre-site executable identi
 
 The [native input observer](docs/python-input-journal.md#evidence-and-failure-boundary) also retains ordinary raw `FileIO` loader reads, including older CPython sourceless imports. Its tests compare original output, errors, file lifetimes, nested/concurrent reads and profiling metadata. This remains input evidence; compiler-origin and complete-source qualification are separate work.
 
+The [Go SDK controls component](docs/go-sdk-controls.md) adds independent live gates around an isolated official Go metric pipeline. Source-free Go weaving, public launch/control integration, context/lifetime probes and qualification remain work; this component does not promote Go to a delivered adapter.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
