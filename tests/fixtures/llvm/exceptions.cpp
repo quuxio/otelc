@@ -1,5 +1,6 @@
 #include <atomic>
 #include <cstdio>
+#include <exception>
 #include <thread>
 static std::atomic<int> cleanup{0};
 struct Cleanup { ~Cleanup() { ++cleanup; } };
