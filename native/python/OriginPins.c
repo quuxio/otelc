@@ -10,9 +10,15 @@
 #define FUNCTION_COUNT 4U
 
 static PyObject *functions[HELPER_COUNT], *codes[FUNCTION_COUNT];
+static PyObject *source_loader, *source_loader_mro;
 static PyInterpreterState *owner;
 static pid_t owner_pid;
 static int installed;
+static int monitor_requested;
+static PyObject *monitor_functions[OTELC_MONITOR_METHODS];
+static const char *monitor_names[] = {
+    "get_tool", "use_tool_id", "register_callback", "set_local_events", "free_tool_id", "DISABLE"
+};
 
 static PyObject *named_value(PyObject *dictionary, const char *name) {
     /* Hash lookups can invoke a custom key's __eq__, even with a literal
@@ -53,6 +59,16 @@ static int current(PyObject *values[HELPER_COUNT]) {
     return values[4] && PyCFunction_Check(values[4]);
 }
 
+static int monitor_current(PyObject *values[OTELC_MONITOR_METHODS]) {
+    PyObject *sys = named_value(PyImport_GetModuleDict(), "sys");
+    PyObject *monitor = module_member(sys, "monitoring");
+    for (unsigned index = 0; index < OTELC_MONITOR_METHODS; ++index) {
+        values[index] = module_member(monitor, monitor_names[index]);
+        if (!values[index] || (index != OTELC_MONITOR_DISABLE && !PyCFunction_Check(values[index]))) return 0;
+    }
+    return 1;
+}
+
 static int audit(const char *event, PyObject *arguments, void *unused) {
     (void)arguments;
     (void)unused;
@@ -61,10 +77,22 @@ static int audit(const char *event, PyObject *arguments, void *unused) {
     if (strcmp(event, "import") || owner || getpid() != owner_pid) return 0;
     PyObject *saved = PyErr_GetRaisedException();
     PyObject *values[HELPER_COUNT];
-    if (current(values)) {
+    PyObject *monitor[OTELC_MONITOR_METHODS];
+    if (current(values) && (!monitor_requested || monitor_current(monitor))) {
         for (unsigned index = 0; index < HELPER_COUNT; ++index) functions[index] = Py_NewRef(values[index]);
         for (unsigned index = 0; index < FUNCTION_COUNT; ++index) {
             codes[index] = Py_NewRef(PyFunction_GetCode(values[index]));
+        }
+        PyObject *external = named_value(PyImport_GetModuleDict(), "_frozen_importlib_external");
+        PyObject *type = module_member(external, "SourceFileLoader");
+        if (type && PyType_Check(type) && ((PyTypeObject *)type)->tp_mro) {
+            source_loader = Py_NewRef(type);
+            source_loader_mro = Py_NewRef(((PyTypeObject *)type)->tp_mro);
+        }
+        if (monitor_requested) {
+            for (unsigned index = 0; index < OTELC_MONITOR_METHODS; ++index) {
+                monitor_functions[index] = Py_NewRef(monitor[index]);
+            }
         }
         owner = PyThreadState_GetInterpreter(PyThreadState_Get());
     }
@@ -91,8 +119,50 @@ int otelc_py_origin_pins_ready(void) {
         valid = values[index] == functions[index];
         if (valid && index < FUNCTION_COUNT) valid = PyFunction_GetCode(values[index]) == codes[index];
     }
+    if (valid && monitor_requested) {
+        PyObject *monitor[OTELC_MONITOR_METHODS];
+        valid = monitor_current(monitor);
+        for (unsigned index = 0; valid && index < OTELC_MONITOR_METHODS; ++index) {
+            valid = monitor[index] == monitor_functions[index];
+        }
+    }
     /* Do not leak lookup errors into an application exception in flight. */
     PyErr_Clear();
     PyErr_SetRaisedException(saved);
     return valid ? 0 : -1;
+}
+
+int otelc_py_origin_monitor_enable(void) {
+    if (monitor_requested || installed || Py_IsInitialized()) return -1;
+    monitor_requested = 1;
+    return 0;
+}
+
+PyObject *otelc_py_origin_monitor_value(unsigned index) {
+    if (!monitor_requested || index >= OTELC_MONITOR_METHODS || otelc_py_origin_pins_ready()) return NULL;
+    return monitor_functions[index];
+}
+
+PyObject *otelc_py_origin_helper_value(unsigned index) {
+    return index < HELPER_COUNT && !otelc_py_origin_pins_ready() ? functions[index] : NULL;
+}
+
+PyObject *otelc_py_origin_loader_type(void) {
+    if (!source_loader || otelc_py_origin_pins_ready()) return NULL;
+    PyObject *external = named_value(PyImport_GetModuleDict(), "_frozen_importlib_external");
+    if (module_member(external, "SourceFileLoader") != source_loader ||
+            ((PyTypeObject *)source_loader)->tp_mro != source_loader_mro ||
+            !PyTuple_CheckExact(source_loader_mro)) return NULL;
+    const char *names[] = {"get_code", "source_to_code", "get_data"};
+    for (unsigned index = 0; index < 3; ++index) {
+        PyObject *actual = NULL;
+        for (Py_ssize_t base = 0; base < PyTuple_GET_SIZE(source_loader_mro); ++base) {
+            PyObject *type = PyTuple_GET_ITEM(source_loader_mro, base);
+            if (!PyType_Check(type)) return NULL;
+            actual = named_value(((PyTypeObject *)type)->tp_dict, names[index]);
+            if (actual) break;
+        }
+        if (actual != functions[index]) return NULL;
+    }
+    return source_loader;
 }

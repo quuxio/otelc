@@ -49,10 +49,13 @@ class PythonInputCoverageTests(unittest.TestCase):
         result = gate.check()
         self.assertEqual(result['version'], sys.version)
         self.assertEqual(set(result['sources']), set(gate.NATIVE_SOURCES))
-        for summary in result['sources'].values():
+        for name, summary in result['sources'].items():
             self.assertGreater(summary['lines']['count'], 0)
             self.assertGreaterEqual(summary['lines']['percent'], 80)
-            self.assertGreater(summary['branches']['count'], 0)
+            if name not in ('OriginChain.c', 'OriginEntry.c', 'OriginLoader.c') or result['origin_chain_available']:
+                self.assertGreater(summary['branches']['count'], 0)
+            else:
+                self.assertEqual(summary['branches']['count'], 0)
 
     def test_low_empty_missing_or_duplicate_actual_sources_cannot_pass(self) -> None:
         rows = [{'filename': str(gate.ROOT / 'native/python' / name),

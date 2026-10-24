@@ -3,6 +3,7 @@
 #define _DARWIN_UNLIMITED_STREAMS 1
 #include <Python.h>
 #include "InputJournal.h"
+#include "OriginEntry.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -54,13 +55,26 @@ static FILE *snapshot(FILE *input, const char *path) {
             fflush(copy) || fseek(copy, 0, SEEK_SET)) goto failed;
     /* Record only after the exact FILE to be consumed is ready. If evidence
        fails, native execution still consumes that snapshot; the journal fails. */
-    (void)otelc_py_journal_source(path, bytes, length, &metadata);
+    uint64_t sequence = 0;
+    (void)otelc_py_journal_source_event(path, bytes, length, &metadata, &sequence);
+    /* fopen is called with the GIL released. The raw writer lock is already
+       released before touching the owning interpreter's observer state. */
+    if (otelc_py_origin_entry_active()) {
+        PyGILState_STATE gil = PyGILState_Ensure();
+        otelc_py_origin_entry_read(path, bytes, length, sequence);
+        PyGILState_Release(gil);
+    }
     free(bytes);
     fclose(input);
     return copy;
 
 failed:
     otelc_py_journal_capture_failed();
+    if (otelc_py_origin_entry_active()) {
+        PyGILState_STATE gil = PyGILState_Ensure();
+        otelc_py_origin_entry_cancel();
+        PyGILState_Release(gil);
+    }
     if (copy) fclose(copy);
     free(bytes);
     rewind(input);

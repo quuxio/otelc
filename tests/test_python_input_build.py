@@ -90,6 +90,12 @@ class PythonInputBuildTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'product changed'):
                 tooling.build(parent)
             generated.write_bytes(original_header)
+            origin_header = binary.parent / 'OriginChain.h'
+            origin_bytes = origin_header.read_bytes()
+            origin_header.write_bytes(origin_bytes + b'changed')
+            with self.assertRaisesRegex(ValueError, 'product changed'):
+                tooling.build(parent)
+            origin_header.write_bytes(origin_bytes)
             manifest_path.write_text(json.dumps({**manifest, 'library': '../foreign'}))
             with self.assertRaisesRegex(ValueError, 'inputs differ'):
                 tooling.build(parent)

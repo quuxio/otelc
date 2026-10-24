@@ -24,12 +24,17 @@ int main(int argc, char **argv) {
     } else if (otelc_py_origin_pins_ready()) {
         result = 2;
     } else if (!strcmp(mode, "ordinary")) {
+        int helpers = otelc_py_origin_loader_type() != NULL && otelc_py_origin_helper_value(5) == NULL;
+        for (unsigned index = 0; index < 5; ++index) {
+            PyObject *helper = otelc_py_origin_helper_value(index);
+            helpers = helpers && helper && (index < 4 ? PyFunction_Check(helper) : PyCFunction_Check(helper));
+        }
         PyErr_SetString(PyExc_ValueError, "preserve the application exception");
         PyObject *error = PyErr_GetRaisedException();
         PyErr_SetRaisedException(Py_NewRef(error));
         int ready = otelc_py_origin_pins_ready();
         PyObject *after = PyErr_GetRaisedException();
-        result = !ready && after == error ? 0 : 1;
+        result = helpers && !ready && after == error ? 0 : 1;
         Py_XDECREF(after);
         Py_DECREF(error);
     } else if (!strcmp(mode, "fork")) {

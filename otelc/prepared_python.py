@@ -25,19 +25,26 @@ PLAN = 'python-resolved-plan.json'
 PREPARED = 'python-prepared.json'
 
 
-def protocols() -> dict[str, Any]:
+def protocols(*, profile: str = recipe.INPUT_PROFILE) -> dict[str, Any]:
     """Describe readable/written formats without preparing or launching an app.
 
     This handshake is format metadata, not source closure, toolchain support,
     successful export or independent qualification of a provider.
     """
-    return {'schema_version': 1, 'kind': 'otelc.python.protocols',
-            'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
-            'execution': 1,
-            'journal': {'schema_version': 1, 'record_kinds': [1, 2, 3, 4]},
+    selected = recipe.version(profile)
+    result = {'schema_version': selected, 'kind': 'otelc.python.protocols',
+            'request': selected, 'plan': selected, 'prepared': selected, 'command': selected,
+            'execution': selected,
+            'journal': {'schema_version': selected, 'record_kinds': list(range(1, 8 if selected == 2 else 5))},
             'code': {'written': 2, 'readable': [2]},
             'health': 2, 'sdk': 1, 'code_comparisons': 1,
             'source_complete': False}
+    if selected == 2:
+        result['profile'] = profile
+        result['origin_scope'] = 'native-entry-and-application-root-source-loaders'
+        # The separate post-run comparison API currently accepts journal 1.
+        result['code_comparisons'] = None
+    return result
 
 
 def digest(value: dict[str, Any]) -> str:
@@ -45,9 +52,12 @@ def digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(recipe.encoded(value).encode()).hexdigest()
 
 
-def native_tool() -> Path:
+def native_tool(profile: str = recipe.INPUT_PROFILE) -> Path:
     """Recompute the fixed tool namespace and verify existing native products."""
-    inputs, flags = tooling.toolchain()
+    recipe.version(profile)
+    inputs, flags = tooling.toolchain(origin_entry=profile == recipe.ORIGIN_PROFILE)
+    if profile == recipe.ORIGIN_PROFILE and not inputs['origin_chain']['available']:
+        raise ValueError('native Python origins are unavailable for the selected image')
     inputs.update(flags=flags, coverage=False)
     key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
     return tooling.verify(ROOT / 'build/tools/python-inputs' / key, inputs)
@@ -55,12 +65,13 @@ def native_tool() -> Path:
 
 def manifest(original: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     """Derive maintained tooling/entry identities without executing app code."""
-    driver = native_tool()
+    driver = native_tool(original['profile'])
     maintained = [ROOT / 'bin/quux-otelc', *sorted((ROOT / 'otelc').glob('*.py')),
-                  ROOT / 'ci/build_python_inputs.py', ROOT / 'ci/native_encoder.py', ROOT / 'requirements.txt',
+                  ROOT / 'ci/build_python_inputs.py', ROOT / 'ci/native_encoder.py',
+                  ROOT / 'ci/native_origin_chain.py', ROOT / 'requirements.txt',
                   ROOT / 'requirements-dev.txt']
     entry = original['paths'].get('entry')
-    return {'schema_version': 1, 'kind': 'otelc.python.prepared',
+    return {'schema_version': recipe.version(original['profile']), 'kind': 'otelc.python.prepared',
             'request_sha256': digest(original), 'plan_sha256': digest(plan),
             'driver': identity(driver), 'build_manifest': identity(driver.parent / 'build.json'),
             'producer': [identity(path) for path in maintained],
@@ -70,8 +81,10 @@ def manifest(original: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
 
 def prepare(policy: Policy, runtime: Path | str, *, root: Path | str,
             entry: Path | str | None = None, module: str | None = None,
-            arguments: tuple[str, ...] = (), plain: bool = False) -> dict[str, Any]:
+            arguments: tuple[str, ...] = (), plain: bool = False,
+            profile: str = recipe.INPUT_PROFILE) -> dict[str, Any]:
     """Prepare fixed tooling and metadata without starting an application or SDK."""
+    selected = recipe.version(profile)
     application = Path(root).resolve(strict=True)
     frontend.validate_policy(policy)
     frontend.invocation(application, entry=Path(entry) if entry is not None else None,
@@ -80,17 +93,17 @@ def prepare(policy: Policy, runtime: Path | str, *, root: Path | str,
     directory.mkdir(mode=0o700)
     directory = files.private_directory(directory)
     original = recipe.request(policy, runtime, root=root, entry=entry, module=module,
-                              arguments=arguments, plain=plain)
+                              arguments=arguments, plain=plain, profile=profile)
     plan = recipe.resolve_plan(original)
     recipe.verify(original, plan)
-    tooling.build()
+    tooling.build(origin_entry=profile == recipe.ORIGIN_PROFILE)
     prepared = manifest(original, plan)
     files.write(directory / REQUEST, original)
     files.write(directory / PLAN, plan)
     # This last file is the completed-prepare marker. A partial preparation
     # remains refused; it is never repaired by silently overwriting its files.
     files.write(directory / PREPARED, prepared)
-    return {'schema_version': 1, 'kind': 'otelc.python.command',
+    return {'schema_version': selected, 'kind': 'otelc.python.command',
             'request': original, 'plan': plan, 'prepared': prepared,
             'command': invocation(directory), 'source_complete': False}
 
@@ -121,20 +134,21 @@ def verify(runtime: Path, *, environment: dict[str, str] | None = None
 
 def command(policy: Policy, runtime: Path | str, *, root: Path | str,
             entry: Path | str | None = None, module: str | None = None,
-            arguments: tuple[str, ...] = (), plain: bool = False) -> list[str]:
+            arguments: tuple[str, ...] = (), plain: bool = False,
+            profile: str = recipe.INPUT_PROFILE) -> list[str]:
     """Prepare and return the derived supervisor command, without launching it."""
     prepared = prepare(policy, runtime, root=root, entry=entry, module=module,
-                       arguments=arguments, plain=plain)
+                       arguments=arguments, plain=plain, profile=profile)
     return prepared['command']
 
 
 def run(policy: Policy, runtime: Path | str, *, root: Path | str,
         entry: Path | str | None = None, module: str | None = None,
         arguments: tuple[str, ...] = (), plain: bool = False,
-        prepare_only: bool = False) -> int:
+        prepare_only: bool = False, profile: str = recipe.INPUT_PROFILE) -> int:
     """Keep an owned process group through app completion and independent SDK drain."""
     prepared = prepare(policy, runtime, root=root, entry=entry, module=module,
-                       arguments=arguments, plain=plain)
+                       arguments=arguments, plain=plain, profile=profile)
     if prepare_only:
         print(json.dumps(prepared, indent=2))
         return 0

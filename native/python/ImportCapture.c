@@ -3,6 +3,7 @@
 #include <Python.h>
 #include "InputJournal.h"
 #include "FileIOCapture.h"
+#include "OriginLoader.h"
 
 /* One native entry owns one interpreter lifetime. Cached objects are frozen or
    builtin toolchain objects, never application values. Other interpreters pass
@@ -59,8 +60,18 @@ static PyObject *file_read(InputFile *self, PyObject *unused) {
     }
     if (valid) {
         if (PyBytes_CheckExact(payload)) {
-            (void)otelc_py_journal_import(PyBytes_AS_STRING(self->path),
-                (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), &info);
+            if (otelc_py_origin_loader_active()) {
+                uint64_t sequence = 0;
+                (void)otelc_py_journal_import_event(PyBytes_AS_STRING(self->path),
+                    (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), &info, &sequence);
+                if (otelc_py_origin_loader_read(self->path, payload, sequence)) {
+                    Py_DECREF(payload);
+                    return NULL;
+                }
+            } else {
+                (void)otelc_py_journal_import(PyBytes_AS_STRING(self->path),
+                    (const unsigned char *)PyBytes_AS_STRING(payload), (size_t)PyBytes_GET_SIZE(payload), &info);
+            }
         } else {
             otelc_py_journal_capture_failed();
         }

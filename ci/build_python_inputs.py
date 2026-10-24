@@ -16,12 +16,13 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-from ci import native_encoder
+from ci import native_encoder, native_origin_chain
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ('CodeCapture.c', 'EntryCapture.c', 'ImportCapture.c', 'InputJournal.c', 'InputJournal.h',
            'NativeMain.c', 'NativeEncoder.c', 'NativeEncoder.h',
-           'FileIOCapture.c', 'FileIOCapture.h', 'OriginPins.c', 'OriginPins.h')
+           'FileIOCapture.c', 'FileIOCapture.h', 'OriginPins.c', 'OriginPins.h',
+           'OriginChain.c', 'OriginEntry.c', 'OriginEntry.h', 'OriginLoader.c', 'OriginLoader.h')
 
 
 def digest(path: Path) -> dict[str, str]:
@@ -63,7 +64,7 @@ def initial_configuration() -> dict[str, dict[str, str]]:
     return {name: digest(Path(spelling)) for name, spelling in value.items()}
 
 
-def toolchain() -> tuple[dict, list[str]]:
+def toolchain(*, origin_entry: bool = False) -> tuple[dict, list[str]]:
     """Refuse mismatched headers and free-threaded/unsupported interpreter profiles."""
     if (sys.implementation.name != 'cpython' or sys.version_info < (3, 12)
             or sys.platform not in ('darwin', 'linux')
@@ -98,6 +99,10 @@ def toolchain() -> tuple[dict, list[str]]:
                 'compiler': digest(Path(compiler())),
                 'sources': [digest(ROOT / 'native/python' / name) for name in SOURCES]}
     identity['encoder'] = native_encoder.inputs(ROOT)
+    origin_header, origin = native_origin_chain.prepare(python_library.resolve(strict=True),
+        platform=sys.platform, machine=platform.machine(), version=sys.version_info[:2],
+        llvm=Path(compiler()).parent) if origin_entry else native_origin_chain.disabled('not_requested')
+    identity['origin_chain'] = {**origin, 'header_sha256': hashlib.sha256(origin_header).hexdigest()}
     return identity, flags
 
 
@@ -106,18 +111,19 @@ def verify(directory: Path, expected: dict) -> Path:
     manifest = json.loads((directory / 'build.json').read_text())
     library = 'libotelc_python_inputs' + ('.dylib' if sys.platform == 'darwin' else '.so')
     if (manifest['inputs'] != expected or manifest['library'] != library
-            or set(manifest['products']) != {'otelc-python-inputs', library, 'EncoderFactory.h'}
-            or manifest['products']['EncoderFactory.h']['sha256'] != expected['encoder']['header_sha256']):
+            or set(manifest['products']) != {'otelc-python-inputs', library, 'EncoderFactory.h', 'OriginChain.h'}
+            or manifest['products']['EncoderFactory.h']['sha256'] != expected['encoder']['header_sha256']
+            or manifest['products']['OriginChain.h']['sha256'] != expected['origin_chain']['header_sha256']):
         raise ValueError('native Python build inputs differ')
-    for name in ('otelc-python-inputs', library, 'EncoderFactory.h'):
+    for name in ('otelc-python-inputs', library, 'EncoderFactory.h', 'OriginChain.h'):
         if (directory / name).is_symlink() or digest(directory / name) != manifest['products'][name]:
             raise ValueError('native Python build product changed')
     return directory / 'otelc-python-inputs'
 
 
-def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
+def build(directory: Path | None = None, *, coverage: bool = False, origin_entry: bool = False) -> Path:
     """Publish a complete tool pair once; running processes keep their original inode."""
-    identity, flags = toolchain()
+    identity, flags = toolchain(origin_entry=origin_entry)
     identity.update(flags=flags, coverage=coverage)
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     parent = (directory or ROOT / 'build/tools/python-inputs').resolve()
@@ -134,6 +140,14 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
         if encoder_inputs != identity['encoder']:
             raise ValueError('native encoder inputs changed while preparing')
         (candidate / 'EncoderFactory.h').write_bytes(generated)
+        origin_header, origin = native_origin_chain.prepare(
+            Path(identity['python_library']['resolved_path']), platform=sys.platform,
+            machine=platform.machine(), version=sys.version_info[:2], llvm=Path(identity['compiler']['path']).parent
+            ) if origin_entry else native_origin_chain.disabled('not_requested')
+        origin['header_sha256'] = hashlib.sha256(origin_header).hexdigest()
+        if origin != identity['origin_chain']:
+            raise ValueError('native origin inputs changed while preparing')
+        (candidate / 'OriginChain.h').write_bytes(origin_header)
         sources = ROOT / 'native/python'
         link = (['-dynamiclib', '-install_name', '@rpath/' + library] if sys.platform == 'darwin'
                 else ['-shared', '-fPIC', '-Wl,-soname,' + library])
@@ -147,6 +161,7 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
                      str(sources / 'EntryCapture.c'), str(sources / 'ImportCapture.c'),
                      str(sources / 'InputJournal.c'), str(sources / 'NativeEncoder.c'),
                      str(sources / 'FileIOCapture.c'), str(sources / 'OriginPins.c'),
+                     str(sources / 'OriginChain.c'), str(sources / 'OriginEntry.c'), str(sources / 'OriginLoader.c'),
                      '-I', str(candidate),
                      '-o', str(candidate / library), *options],
                     [selected, str(sources / 'NativeMain.c'), str(candidate / library),
@@ -155,11 +170,11 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
                      '-o', str(candidate / 'otelc-python-inputs'), *options]]
         for command in commands:
             subprocess.run(command, check=True)
-        current, current_flags = toolchain()
+        current, current_flags = toolchain(origin_entry=origin_entry)
         current.update(flags=current_flags, coverage=coverage)
         if current != identity:
             raise ValueError('native Python build inputs changed while compiling')
-        products = {name: digest(candidate / name) for name in ('otelc-python-inputs', library, 'EncoderFactory.h')}
+        products = {name: digest(candidate / name) for name in ('otelc-python-inputs', library, 'EncoderFactory.h', 'OriginChain.h')}
         for name, value in products.items():
             value.update(path=str(destination / name), resolved_path=str(destination / name))
         (candidate / 'build.json').write_text(json.dumps({'inputs': identity, 'library': library,
@@ -173,4 +188,8 @@ def build(directory: Path | None = None, *, coverage: bool = False) -> Path:
 
 
 if __name__ == '__main__':
-    print(build(coverage=bool(os.environ.get('OTELC_NATIVE_COVERAGE'))))
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--origin-entry', action='store_true', help='build the explicit native source-entry observer')
+    options = parser.parse_args()
+    print(build(coverage=bool(os.environ.get('OTELC_NATIVE_COVERAGE')), origin_entry=options.origin_entry))

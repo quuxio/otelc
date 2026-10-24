@@ -64,7 +64,9 @@ test: java-build node-observer node-http
 	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
 	$(PYTHON) -m coverage report --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_encoder.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/native_origin_chain.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_journal.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/python_origin_execution.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 
 check: lint java-check node-check python-inputs-check test
