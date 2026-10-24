@@ -41,6 +41,11 @@ func (p *Traces) OnStart(context.Context, sdk.ReadWriteSpan) {}
 
 // OnEnd never calls application code or performs network IO.
 func (p *Traces) OnEnd(span sdk.ReadOnlySpan) {
+	// Record-only sampling exposes the span to processors without permitting
+	// export. Match the official SDK's simple and batch processors.
+	if !span.SpanContext().IsSampled() {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed || len(p.queue) == p.capacity {

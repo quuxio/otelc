@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	traceapi "go.opentelemetry.io/otel/trace"
 	"io.quux.otelc/go/metriccontrol"
 )
 
@@ -199,6 +200,12 @@ func (s *traceSink) Shutdown(context.Context) error {
 	return nil
 }
 
+func sampledSnapshot(name string) sdktrace.ReadOnlySpan {
+	return tracetest.SpanStub{Name: name, SpanContext: traceapi.NewSpanContext(traceapi.SpanContextConfig{
+		TraceID: traceapi.TraceID{1}, SpanID: traceapi.SpanID{1}, TraceFlags: traceapi.FlagsSampled,
+	})}.Snapshot()
+}
+
 func TestTraceQueueRetainsFailedBatchesAndReportsCapacityLoss(t *testing.T) {
 	ctx := context.Background()
 	sink := &traceSink{fail: true}
@@ -228,22 +235,40 @@ func TestTraceQueueRetainsFailedBatchesAndReportsCapacityLoss(t *testing.T) {
 	if sink.closed.Load() != 1 || p.ForceFlush(ctx) == nil {
 		t.Fatal("shutdown not retained")
 	}
-	p.OnEnd(tracetest.SpanStub{Name: "late"}.Snapshot())
+	p.OnEnd(sampledSnapshot("late"))
 	if p.Health().Dropped != 3 {
 		t.Fatal("late completion omitted from loss accounting")
 	}
+}
+
+func TestTraceProcessorHonoursSDKRecordOnlySampling(t *testing.T) {
+	sink := &traceSink{}
+	p, err := NewTraces(sink, 8, 2, 0, time.Second)
+	check(t, err)
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(p),
+		sdktrace.WithSampler(sdktrace.AlwaysRecord(sdktrace.NeverSample())))
+	_, span := provider.Tracer(Scope).Start(context.Background(), "record-only")
+	if !span.IsRecording() || span.SpanContext().IsSampled() {
+		t.Fatal("fixture did not produce record-only SDK span")
+	}
+	span.End()
+	check(t, p.ForceFlush(context.Background()))
+	if len(sink.names) != 0 || p.Health().Attempts != 0 || p.Health().Dropped != 0 {
+		t.Fatal("exported a record-only span or counted sampling as loss", sink.names, p.Health())
+	}
+	check(t, provider.Shutdown(context.Background()))
 }
 
 func TestTraceDrainIsFiniteWithConcurrentProducersAndCancellation(t *testing.T) {
 	sink := &traceSink{started: make(chan struct{}, 1), release: make(chan struct{})}
 	p, err := NewTraces(sink, 8, 1, 0, time.Second)
 	check(t, err)
-	p.OnEnd(tracetest.SpanStub{Name: "first"}.Snapshot())
+	p.OnEnd(sampledSnapshot("first"))
 	phase, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() { result <- p.ForceFlush(phase) }()
 	<-sink.started
-	p.OnEnd(tracetest.SpanStub{Name: "second"}.Snapshot())
+	p.OnEnd(sampledSnapshot("second"))
 	limited, stop := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer stop()
 	if err := p.ForceFlush(limited); !errors.Is(err, context.DeadlineExceeded) {
@@ -265,11 +290,11 @@ func TestTraceFlushDoesNotWaitForNewCompletions(t *testing.T) {
 	sink := &traceSink{started: make(chan struct{}, 1), release: make(chan struct{})}
 	p, err := NewTraces(sink, 8, 1, 0, time.Second)
 	check(t, err)
-	p.OnEnd(tracetest.SpanStub{Name: "first"}.Snapshot())
+	p.OnEnd(sampledSnapshot("first"))
 	result := make(chan error, 1)
 	go func() { result <- p.ForceFlush(context.Background()) }()
 	<-sink.started
-	p.OnEnd(tracetest.SpanStub{Name: "later"}.Snapshot())
+	p.OnEnd(sampledSnapshot("later"))
 	close(sink.release)
 	check(t, <-result)
 	if h := p.Health(); h.Exported != 1 || h.Pending != 1 {
@@ -300,7 +325,7 @@ func TestOwnedSchedulersDoNotCallGlobalHandlerOrReplaceProviders(t *testing.T) {
 	close(spans.release)
 	p, err := NewTraces(spans, 8, 2, time.Millisecond, time.Second)
 	check(t, err)
-	p.OnEnd(tracetest.SpanStub{Name: "retry"}.Snapshot())
+	p.OnEnd(sampledSnapshot("retry"))
 	for _, event := range []chan struct{}{metricEvents, spans.started} {
 		select {
 		case <-event:
