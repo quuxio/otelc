@@ -44,6 +44,7 @@ class Capture:
         self.trace_response_gate = threading.Event()
         self.trace_response_gate.set()
         self.trace_request_seen = threading.Event()
+        self.trace_response_code = 200
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -66,6 +67,7 @@ class Capture:
                     payload.extend(chunk)
 
             def do_POST(self) -> None:
+                response_code = 200
                 payload = self.request_payload()
                 if self.headers.get("Content-Encoding") == "gzip":
                     payload = gzip.decompress(payload)
@@ -81,10 +83,11 @@ class Capture:
                     owner.traces.append(message)
                     owner.trace_request_seen.set()
                     owner.trace_response_gate.wait(timeout=10)
+                    response_code = owner.trace_response_code
                 else:
                     self.send_error(404)
                     return
-                self.send_response(200)
+                self.send_response(response_code)
                 self.send_header("Content-Type", "application/x-protobuf")
                 self.send_header("Content-Length", "0")
                 self.end_headers()

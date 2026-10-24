@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java
+from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java, witness
 from otelc import prepared_python as python_adapter
 from otelc import python_benchmark
 from otelc.config import LANGUAGES, Policy
@@ -63,6 +63,9 @@ def main() -> int:
     prepared.add_argument("--plain", action="store_true")
     prepared.add_argument("--prepare-only", action="store_true", help="emit JSON launch identity without starting Java")
     prepared.add_argument("--diagnostic-profile", action="store_true", help="disable JVM CDS in both comparison lanes")
+    prepared.add_argument("--witness-bindings", type=Path, help="explicit frozen synchronous Java invocation bindings")
+    prepared.add_argument("--witness-profile", choices=(witness.PROFILE, witness.HANDLE_PROFILE),
+                          help="explicit diagnostic binding profile; requires --witness-bindings")
     prepared.add_argument("arguments", nargs=argparse.REMAINDER)
     original = commands.add_parser("node", help="launch original JavaScript or Microsoft TypeScript sources")
     original.add_argument("--language", choices=("javascript", "typescript"), required=True)
@@ -109,9 +112,14 @@ def main() -> int:
                             backend=args.backend, plain=args.plain, arguments=tuple(arguments))
         if args.command == "java":
             arguments = application_arguments(args.arguments)
+            witness_options = {} if args.witness_bindings is None else {"witness_bindings": args.witness_bindings}
+            if args.witness_profile is not None:
+                if args.witness_bindings is None:
+                    raise ValueError("--witness-profile requires --witness-bindings")
+                witness_options["witness_profile"] = args.witness_profile
             return prepared_java.run(args.manifest, policy, args.runtime, plain=args.plain,
                                      prepare_only=args.prepare_only, arguments=tuple(arguments),
-                                     diagnostic_profile=args.diagnostic_profile)
+                                     diagnostic_profile=args.diagnostic_profile, **witness_options)
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"],
                               "candidates": ["typescript", "javascript", "python"],

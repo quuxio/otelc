@@ -143,11 +143,15 @@ final class RuntimeHealth {
     return encode(false);
   }
 
-  private String encode(boolean finished) {
-    boolean drained = finished && SUCCEEDED.equals(flushOutcome)
+  private synchronized boolean drained() {
+    return SUCCEEDED.equals(flushOutcome)
         && SUCCEEDED.equals(shutdownOutcome) && processors == 1 && batchProcessors == 1
         && closedProcessors == 1 && traces.observers == 1 && traces.pending() == 0
         && started == ended && ended >= traces.units;
+  }
+
+  private String encode(boolean finished) {
+    boolean drained = finished && drained();
     return "{\"schema_version\":1,\"kind\":\"otelc.runtime-health\",\"language\":\"java\""
         + ",\"pid\":" + ProcessHandle.current().pid()
         + ",\"policy_sha256\":\"" + policyHash + "\",\"selection_sha256\":\"" + selectionHash + "\""
@@ -270,6 +274,8 @@ final class RuntimeHealth {
     catch (IOException ignored) {
       // Leave the non-final report in place. A consumer must reject missing final evidence.
     }
+    var witness = io.quux.otelc.witness.WitnessRuntime.get();
+    if (witness != null) witness.finish(drained());
   }
 
   private void write(String value) throws IOException {
