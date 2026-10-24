@@ -41,13 +41,17 @@ class NativeInputCase(unittest.TestCase):
         self.number = 0
 
     def launch(self, arguments: list[str], *, environment: dict | None = None,
-               origin_observer: bool = False
+               origin_observer: bool = False, entry_origins: bool = False
                ) -> tuple[int, bytes, bytes, Path, int]:
         self.number += 1
         path = self.root / f'input-{self.number}.journal'
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            options = ['--origin-observer'] if origin_observer else []
+            options = []
+            if entry_origins:
+                options = ['--origin-entry']
+            elif origin_observer:
+                options = ['--origin-observer']
             process = subprocess.Popen([str(self.tool), *options, str(descriptor), sys.executable,
                 self.argv0, *arguments], cwd=self.root, env=environment, pass_fds=(descriptor,),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)

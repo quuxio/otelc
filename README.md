@@ -16,7 +16,7 @@ The [Python frontend candidate](docs/python-native.md) launches original CPython
 
 `plan` lists Python as a candidate and keeps it in `remaining`; it is not reported as implemented. Tooling consumers can inspect `otelc.prepared_python.protocols()` before launch to negotiate Python formats. These discovery responses do not establish source origin or provider qualification; see the [prepared launcher guide](docs/python-prepared-launch.md#negotiate-formats-without-launching).
 
-The [native input component](docs/python-input-journal.md#validation-scope) includes an SDK-independent descriptor encoder for source-origin work. The separate [origin-journal component](docs/python-origin-journal.md) defines and validates versioned read/root/execution relations; its runtime observer and both-lane wiring remain work. These components do not yet bind application source reads to selected code or enable a new provider capability.
+The [native input component](docs/python-input-journal.md#validation-scope) includes an SDK-independent descriptor encoder for source-origin work. The [origin-journal component](docs/python-origin-journal.md) defines versioned read/root/execution relations. Its explicit [native source-entry producer](docs/python-native-entry.md) observes checked compiler roots and weak code descendants for its declared image profile. Loader transactions, SDK joins, both-lane integration and provider qualification remain work. Public launches still negotiate journal 1 and report `source_complete=false`.
 
 Native launch also retains the selected interpreter's pre-site executable identities, preserving the tested Homebrew alias and copied-venv metadata under ordinary and `-S` startup.
 

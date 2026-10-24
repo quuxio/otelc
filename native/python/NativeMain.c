@@ -4,6 +4,7 @@
 #include "InputJournal.h"
 #include "NativeEncoder.h"
 #include "OriginPins.h"
+#include "OriginEntry.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -24,7 +25,8 @@ static void checked(PyStatus status, PyConfig *config) {
 }
 
 int main(int argc, char **argv) {
-    int origins = argc > 1 && !strcmp(argv[1], "--origin-observer");
+    int entry_origins = argc > 1 && !strcmp(argv[1], "--origin-entry");
+    int origins = entry_origins || (argc > 1 && !strcmp(argv[1], "--origin-observer"));
     if (origins) { --argc; ++argv; }
     /* driver inherited-journal-fd selected-python original-argv0 [native args] */
     if (argc < 5 || strcmp(argv[2], OTELC_PY_SELECTED_EXECUTABLE)) return 64;
@@ -32,9 +34,11 @@ int main(int argc, char **argv) {
     errno = 0;
     long descriptor = strtol(argv[1], &end, 10);
     if (errno || end == argv[1] || *end || descriptor < 0 || descriptor > INT_MAX ||
-            otelc_py_journal_open((int)descriptor)) return 64;
+            otelc_py_journal_open_version((int)descriptor, entry_origins ? 2 : 1)) return 64;
     if (atexit(process_exit)) return 78;
+    if (entry_origins && otelc_py_origin_monitor_enable()) return 78;
     if (origins && otelc_py_origin_pins_install()) return 78;
+    if (entry_origins && otelc_py_origin_entry_install()) return 78;
     if (otelc_py_imports_install()) return 78;
     if (otelc_py_code_install()) return 78;
     int native_argc = argc - 3;
@@ -63,6 +67,10 @@ int main(int argc, char **argv) {
         PyErr_Clear();
         Py_FinalizeEx();
         return 78;
+    }
+    if (entry_origins && (!config.run_filename || otelc_py_origin_entry_ready(config.optimization_level))) {
+        otelc_py_journal_capture_failed();
+        PyErr_Clear();
     }
     if (otelc_py_imports_ready()) {
         otelc_py_journal_capture_failed();

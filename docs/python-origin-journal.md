@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This is a wire-format and reader component for the next source-origin observer. It does not yet produce compiler/loader/VM origin evidence from an application, change `prepared_python.protocols()`, or enable Python provider admission. The normal launcher and its private encoder option still write journal 1. Whole-program source/dependency closure remains unsupported; `source_complete=false` is unchanged.
+This wire-format and reader component now has a separate [native source-entry producer](python-native-entry.md) for its declared image profile. Public format negotiation and Python provider admission remain unchanged. The normal launcher and its private encoder option still write journal 1. Whole-program source/dependency closure remains unsupported; `source_complete=false` is unchanged.
 
 The intended observer must join an actual read transaction, the pinned compiler's returned root and the selected object's execution. Matching a filename, equal source bytes or a post-run compilation does not establish those relations. Both prepared lanes need the same SDK-independent observer; the plain lane must have no SDK telemetry. These runtime and consumer qualifications remain work.
 
@@ -48,7 +48,7 @@ PYTHONPATH=tests .venv/bin/python -m unittest \
 make python-inputs-check
 ```
 
-The reader has an explicit 80% line floor in `make test`, in addition to the existing overall Python and per-file native gates. Actual native entry, live loader transactions, pinned compiler returns, bounded weak code membership, both-lane supervisor wiring and independent oteleq admission still need implementation and qualification. Custom loaders, arbitrary dynamic compilation and whole-program closure remain separate capabilities.
+The reader has an explicit 80% line floor in `make test`, in addition to the existing overall Python and per-file native gates. The explicit native-entry profile adds checked compiler returns and weak code membership for source-file entries. Live loader transactions, both-lane supervisor wiring, SDK joins and independent oteleq admission remain work. Custom loaders, arbitrary dynamic compilation and whole-program closure remain separate capabilities.
 
 ## Pre-startup helper guard
 
@@ -56,4 +56,4 @@ The explicit native `--origin-observer` profile retains the original frozen `Sou
 
 After ordinary interpreter startup, missing or changed helpers produce capture loss while the application continues with its original startup hooks, outputs and exceptions. The normal profile does not install this guard. The retained references are bounded toolchain objects, not application code or a code-object origin catalogue.
 
-This guard is a prerequisite for the future live transaction observer. It emits no origin records and proves no compiler return, input-to-code relation, descendant membership or selected execution. The driver still writes journal 1, normal public format negotiation is unchanged, and Python remains a candidate. The native guard has its own 80% line floor alongside the other native components.
+This guard is a prerequisite for a live transaction observer. Its existing journal-1 option emits no origin records. The separate native-entry profile also pins the original monitoring APIs and disable sentinel before startup, then writes explicit journal-2 root/execution records through its checked native path. Normal public format negotiation is unchanged, and Python remains a candidate. The native guard has its own 80% line floor alongside the other native components.
