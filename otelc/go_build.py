@@ -212,6 +212,8 @@ def build_project(root: Path, target: str, policy: Policy, output: Path,
         if type(prepared_tools) is not go_prepared_tools.PreparedTools:
             raise ValueError('Go prepared tooling requires its caller-held binding')
         prepared_tools.verify(tools)
+    if tools.get('schema_version') == 2:
+        raise ValueError('scope-safe Go tooling requires a separately versioned application build profile')
     root, output = root.absolute(), output.resolve()
     if root.resolve(strict=True) != root or output.is_relative_to(root):
         raise ValueError('Go build requires a canonical root and external output')

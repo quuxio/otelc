@@ -26,6 +26,8 @@ The [native input observer](docs/python-input-journal.md#evidence-and-failure-bo
 
 The [Go source candidate](docs/go-source.md) connects the official weaver/context hooks, owned runtime, common-policy source/type selection, automatic allocation/release probes and private stock/woven builds. Public candidate `go-build` and `go` commands retain binaries and launch them without a compiler, with actual process/health records and independent live metric controls. The explicit [prepared-tool reuse profile](docs/go-prepared-tools.md) preserves an installed SDK while application compilation uses separate caches. Its ordinary examples and [paired benchmark](docs/benchmarks.md) consume the same policies as the other languages. The [HTTP candidate](docs/go-http.md) reuses the official wrapper for standard client/server propagation, with explicit body-span health. Broader source/library profiles, independent qualification and final delivery remain work. Go is not yet a delivered adapter.
 
+The explicit [Go raw-rule tooling backport](docs/go-scope-tooling.md) retains a private, identified weaver without changing the official module cache. This installer component does not yet admit the scope-safe application helper or a new public build format.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.

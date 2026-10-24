@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
+from ci import go_scope_patch
 from otelc import go_context_bundle as context
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +51,7 @@ def command(arguments: list[str], *, directory: Path, env: dict[str, str]) -> by
     return result.stdout
 
 
-def build(go: str, output: Path) -> dict[str, Any]:
+def build(go: str, output: Path, *, scope_safe: bool = False) -> dict[str, Any]:
     """Verify the selected release and checksums before publishing its identity."""
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -80,14 +81,22 @@ def build(go: str, output: Path) -> dict[str, Any]:
     (verification / 'go.mod').write_text('module io.quux.otelc/upstream-verification\n\ngo 1.26.0\n\n'
                                         f'require {context.UPSTREAM_MODULE} {context.UPSTREAM_VERSION}\n')
     command([str(compiler), 'mod', 'verify'], directory=verification, env=env)
-    command([str(compiler), 'install', PACKAGE + '@' + context.UPSTREAM_VERSION], directory=output, env=env)
     tool = output / 'bin/otelc'
+    if scope_safe:
+        go_scope_patch.prepare(Path(module['Dir']), output)
+        tool.parent.mkdir(exist_ok=True)
+        command([str(compiler), 'build', '-mod=readonly', '-buildvcs=false',
+                 '-ldflags=-X=' + context.UPSTREAM_MODULE + '/tool/util.Version=' + go_scope_patch.VERSION,
+                 '-o', str(tool), './tool/cmd/otelc'], directory=output / 'source', env=env)
+    else:
+        command([str(compiler), 'install', PACKAGE + '@' + context.UPSTREAM_VERSION], directory=output, env=env)
     details = command([str(compiler), 'version', '-m', str(tool)], directory=output, env=env).decode()
-    expected = '\tmod\t' + context.UPSTREAM_MODULE + '\t' + context.UPSTREAM_VERSION + '\t' + context.MODULE_SUM
+    expected = '\tmod\t' + context.UPSTREAM_MODULE + ('\t(devel)\t' if scope_safe else
+                 '\t' + context.UPSTREAM_VERSION + '\t' + context.MODULE_SUM)
     if expected not in details or '\tpath\t' + PACKAGE not in details:
         raise ValueError('Go instrumentation executable has unexpected build metadata')
     version = command([str(tool), 'version'], directory=output, env=env).decode().strip()
-    if version != 'otelc version ' + context.UPSTREAM_VERSION:
+    if version != 'otelc version ' + (go_scope_patch.VERSION if scope_safe else context.UPSTREAM_VERSION):
         raise ValueError('Go instrumentation executable reports an unexpected version')
     value = {'schema_version': 1, 'go_version': GO_VERSION,
              'go': str(compiler), 'go_sha256': context.digest(compiler.read_bytes()),
@@ -97,6 +106,11 @@ def build(go: str, output: Path) -> dict[str, Any]:
              'weaver': str(tool), 'weaver_sha256': context.digest(tool.read_bytes()),
              'bundle': str(bundle), 'bundle_sha256': context.BUNDLE_SHA256,
              'build_metadata': details}
+    if scope_safe:
+        source_sha256 = go_scope_patch.digest((output / go_scope_patch.MANIFEST).read_bytes())
+        go_scope_patch.verify(output, source_sha256)
+        value.update(schema_version=2, patch_profile=go_scope_patch.PROFILE,
+                     source_manifest_sha256=source_sha256, version_output=version)
     (output / 'toolchain.json').write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
     return value
 
@@ -106,8 +120,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--go', default=os.environ.get('OTELC_GO', 'go'))
     parser.add_argument('--output', type=Path, default=ROOT / 'build/go-upstream')
+    parser.add_argument('--scope-safe', action='store_true',
+                        help='build the explicitly identified private raw-rule backport')
     args = parser.parse_args()
-    print(json.dumps(build(args.go, args.output), indent=2))
+    print(json.dumps(build(args.go, args.output, scope_safe=args.scope_safe), indent=2))
 
 
 if __name__ == '__main__':

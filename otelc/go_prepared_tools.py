@@ -9,13 +9,14 @@ import shutil
 import subprocess
 from typing import Any
 
-from ci import build_go_upstream as tooling
+from ci import build_go_upstream as tooling, go_scope_patch
 from otelc import file_inputs, go_context_bundle as context
 from otelc.python_sdk_io import decode
 
 FIELDS = {'schema_version', 'go_version', 'go', 'go_sha256', 'platform', 'module',
           'version', 'module_sum', 'module_go_sum', 'weaver', 'weaver_sha256',
           'bundle', 'bundle_sha256', 'build_metadata'}
+PATCH_FIELDS = {'patch_profile', 'source_manifest_sha256', 'version_output'}
 
 
 def encoded(value: Any) -> str:
@@ -42,6 +43,11 @@ def snapshot(directory: Path, tools: dict[str, Any]) -> dict[str, Any]:
     """Pin the fixed manifest, selected compiler, fixed weaver and bundle facts."""
     paths = {'manifest': directory / 'toolchain.json', 'go': Path(tools['go']),
              'weaver': directory / 'bin/otelc', 'bundle': Path(tools['bundle'])}
+    if tools['schema_version'] == 2:
+        go_scope_patch.verify(directory, tools['source_manifest_sha256'])
+        paths['source_manifest'] = directory / go_scope_patch.MANIFEST
+        paths.update({'source/' + name: directory / 'source' / name
+                      for name in go_scope_patch.inventory(directory / 'source')})
     inputs = {name: identity(path)[0] for name, path in paths.items()}
     for name in ('go', 'weaver', 'bundle'):
         if inputs[name]['sha256'] != tools[name + '_sha256']:
@@ -72,11 +78,16 @@ def record(directory: Path, compiler: Path) -> tuple[dict[str, Any], dict[str, A
     """Require the installed format and pins before executing either fixed tool."""
     manifest, raw = identity(directory / 'toolchain.json', content=True)
     value = decode(raw)
-    pins = {'schema_version': 1, 'go_version': tooling.GO_VERSION,
+    patched = type(value.get('schema_version')) is int and value['schema_version'] == 2
+    pins = {'schema_version': 2 if patched else 1, 'go_version': tooling.GO_VERSION,
             'module': context.UPSTREAM_MODULE, 'version': context.UPSTREAM_VERSION,
             'module_sum': context.MODULE_SUM, 'module_go_sum': context.MODULE_GO_SUM,
             'bundle_sha256': context.BUNDLE_SHA256}
-    if (set(value) != FIELDS or any(encoded(value[key]) != encoded(expected) for key, expected in pins.items())
+    if patched:
+        pins.update(patch_profile=go_scope_patch.PROFILE,
+                    version_output='otelc version ' + go_scope_patch.VERSION)
+    if (set(value) != (FIELDS | PATCH_FIELDS if patched else FIELDS)
+            or any(encoded(value[key]) != encoded(expected) for key, expected in pins.items())
             or value['go'] != str(compiler) or value['weaver'] != str(directory / 'bin/otelc')
             or type(value['bundle']) is not str or not Path(value['bundle']).is_absolute()
             or type(value['build_metadata']) is not str):
@@ -115,9 +126,12 @@ def prepare(go: str, directory: Path) -> PreparedTools:
         raise ValueError('prepared Go tooling requires the recorded native Go1.27.3')
     weaver = directory / 'bin/otelc'
     metadata = query([str(compiler), 'version', '-m', str(weaver)], directory, env).decode()
-    module = '\tmod\t' + context.UPSTREAM_MODULE + '\t' + context.UPSTREAM_VERSION + '\t' + context.MODULE_SUM
+    patched = tools['schema_version'] == 2
+    module = '\tmod\t' + context.UPSTREAM_MODULE + ('\t(devel)\t' if patched else
+               '\t' + context.UPSTREAM_VERSION + '\t' + context.MODULE_SUM)
     if (metadata != tools['build_metadata'] or module not in metadata or '\tpath\t' + tooling.PACKAGE not in metadata
-            or query([str(weaver), 'version'], directory, env).decode().strip() != 'otelc version ' + context.UPSTREAM_VERSION):
+            or query([str(weaver), 'version'], directory, env).decode().strip()
+               != 'otelc version ' + (go_scope_patch.VERSION if patched else context.UPSTREAM_VERSION)):
         raise ValueError('prepared Go instrumentation executable metadata differs')
     binding = PreparedTools(directory, encoded({'toolchain': tools, 'inputs': before}))
     binding.verify(tools)

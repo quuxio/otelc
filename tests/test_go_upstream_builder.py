@@ -145,5 +145,5 @@ class GoUpstreamBuilderTests(unittest.TestCase):
                 mock.patch.object(tooling, 'build', return_value={'checked': True}) as build, \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             tooling.main()
-        build.assert_called_once_with('/selected/go', self.output)
+        build.assert_called_once_with('/selected/go', self.output, scope_safe=False)
         self.assertEqual(json.loads(output.getvalue()), {'checked': True})
