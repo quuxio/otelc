@@ -21,30 +21,29 @@ class NativeSonarTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.output = self.root / 'build'
         self.output.mkdir()
-        for relative in (*sonar.PRODUCTION, sonar.TEST):
+        for relative in (*sonar.PRODUCTION, *sonar.TESTS):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('ordinary source\n' * 6)
-        self.sources = {self.root / relative for relative in (*sonar.PRODUCTION, sonar.TEST)}
+        self.sources = {self.root / relative for relative in (*sonar.PRODUCTION, *sonar.TESTS)}
         header = self.root / 'native/llvm/function_abi.h'
         header.write_text('fixed ABI header\n')
         self.records = []
-        for name, relative in zip(('llvm-pass', 'native-control'), sonar.PRODUCTION, strict=True):
-            source = self.root / relative
+        for name, relatives in (('llvm-pass', sonar.PRODUCTION[:1]), ('native-control', sonar.PRODUCTION[1:])):
             lcov = self.output / (name + '.lcov')
-            lcov.write_text(self.lcov(source))
+            lcov.write_text(''.join(self.lcov(self.root / relative) for relative in relatives))
             database = self.output / (name + '-compile.json')
-            database.write_text(json.dumps([self.entry(source)]))
+            database.write_text(json.dumps([self.entry(self.root / relative) for relative in relatives]))
             self.records.append({'lcov': llvm_backend.identity(lcov),
                                  'compilation_database': llvm_backend.identity(database)})
         self.llvm = self.records[0] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[0]),
                                      'headers': [llvm_backend.identity(header)],
                                      'line_coverage': {'count': 5, 'covered': 4}}
-        self.native = self.records[1] | {'source_inputs': [llvm_backend.identity(self.root / sonar.PRODUCTION[1])],
-            'line_coverage': {str(self.root / sonar.PRODUCTION[1]): {'count': 5, 'covered': 4}}}
+        self.native = self.records[1] | {
+            'source_inputs': [llvm_backend.identity(self.root / relative) for relative in sonar.PRODUCTION[1:]],
+            'line_coverage': {str(self.root / relative): {'count': 5, 'covered': 4} for relative in sonar.PRODUCTION[1:]}}
         database = Path(self.native['compilation_database']['path'])
-        database.write_text(json.dumps([self.entry(self.root / sonar.PRODUCTION[1]),
-                                        self.entry(self.root / sonar.TEST)]))
+        database.write_text(json.dumps([self.entry(self.root / relative) for relative in (*sonar.PRODUCTION[1:], *sonar.TESTS)]))
         self.native['compilation_database'] = llvm_backend.identity(database)
         self.write_records()
 
@@ -82,7 +81,20 @@ class NativeSonarTests(unittest.TestCase):
         path.write_text(json.dumps(records))
         with patch('subprocess.run', side_effect=AssertionError('must not execute metadata')):
             selected = sonar.compilation_database([path], self.sources)
-        self.assertEqual(selected, records[:3])
+        self.assertEqual(selected, records[:len(self.sources)])
+
+    def test_multi_source_lcov_cannot_drop_add_duplicate_or_truncate_a_record(self) -> None:
+        expected = {self.root / relative for relative in sonar.PRODUCTION[1:]}
+        text = ''.join(self.lcov(path) for path in sorted(expected))
+        records = sonar.lcov_records(text, expected)
+        self.assertEqual(set(records), expected)
+        for source, record in records.items():
+            self.assertEqual(sonar.lcov_lines(record, source), {1: True, 2: True, 3: True, 4: True, 5: False})
+        for changed in (text + self.lcov(next(iter(expected))), text + self.lcov(self.root / 'foreign.cpp'),
+                        self.lcov(next(iter(expected))), text.rsplit('end_of_record', 1)[0],
+                        text.replace('SF:', 'SF:/foreign\nSF:', 1)):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                sonar.lcov_records(changed, expected)
 
     def test_llvm_expansion_totals_are_checked_separately_from_physical_source_lines(self) -> None:
         source = self.root / sonar.PRODUCTION[0]
