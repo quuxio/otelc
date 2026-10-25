@@ -1,0 +1,89 @@
+name: Rust automatic lifetime component
+on:
+  pull_request:
+    paths:
+      - 'native/rust/**'
+      - 'adapters/native/**'
+      - 'ci/*rust*.py'
+      - 'otelc/rust_lifetimes.py'
+      - 'otelc/health.py'
+      - 'tests/test_rust*.py'
+      - '.github/workflows/rust-drop-runtime.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-drop-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  runtime:
+    name: Rust lifetime compiler and SDK (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            llvm: /usr/lib/llvm-22/bin
+          - os: macos-26
+            llvm: /opt/homebrew/opt/llvm@22/bin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: ${{ matrix.llvm }}/clang
+      CXX: ${{ matrix.llvm }}/clang++
+      OTELC_LLVM_BIN: ${{ matrix.llvm }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Check storage and retain the original source head
+        run: |
+          mkdir -p build/rust-drop-runtime
+          git rev-parse HEAD > build/rust-drop-runtime/head.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+      - name: Install native SDK tools on Linux
+        if: runner.os == 'Linux'
+        run: bash ci/install_llvm22.sh
+      - name: Install native SDK tools on macOS
+        if: runner.os == 'macOS'
+        run: brew install llvm@22 cmake ninja protobuf curl
+      - name: Install pinned compiler and Python inputs
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev,clippy,rustfmt
+          rustup run 1.98.1 cargo fetch --locked --manifest-path native/rust/compiler/Cargo.toml
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+      - name: Check real compiler insertion, original applications, SDK and component coverage
+        run: |
+          make rust-compiler-check PYTHON=.venv/bin/python 2>&1 | tee build/rust-drop-runtime/tests.log
+      - name: Retain small original diagnostics and measured evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-drop-runtime-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rust-drop-runtime/
+            build/rust-analysis-inputs.json
+            build/rust-coverage.lcov
+            build/rust-clippy.json
+            build/rust-compiler-check-*/result.json
+            build/rust-compiler-check-*/*.stderr
+            build/rust-compiler-check-*/compiler-unit.stdout
+            build/rust-compiler-check-*/bridge-unit.stdout
+            build/rust-compiler-check-*/cases/tests-result.json
+            build/rust-compiler-check-*/cases/**/*-result.json
+            build/rust-compiler-check-*/cases/**/health.json
+            build/rust-compiler-check-*/cases/**/original-sources.json
+            build/rust-compiler-check-*/cases/**/command-*.json
+            build/rust-compiler-check-*/cases/**/command-*.stderr
+            build/rust-compiler-check-*/cases/**/application/*.rs
+            build/rust-compiler-check-*/cases/**/decoded-*.protobuf

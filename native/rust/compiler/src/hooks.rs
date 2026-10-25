@@ -51,15 +51,27 @@ impl Hooks {
             .skip_binder();
         let valid = signature.abi() == rustc_abi::ExternAbi::Rust
             && !signature.c_variadic()
-            && signature.inputs().len() == 1
             && match name {
                 "sync_enter" => {
-                    matches!(signature.inputs()[0].kind(), ty::Ref(_, inner, rustc_ast::Mutability::Not)
-                        if inner.is_str())
+                    signature.inputs().len() == 1
+                        && borrowed_str(signature.inputs()[0])
                         && signature.output() == tcx.types.u64
                 }
-                "sync_exit" | "sync_unwind" => {
-                    signature.inputs()[0] == tcx.types.u64 && signature.output() == tcx.types.unit
+                "sync_exit" | "sync_unwind" | "drop_exit" | "drop_unwind" => {
+                    signature.inputs().len() == 1
+                        && signature.inputs()[0] == tcx.types.u64
+                        && signature.output() == tcx.types.unit
+                }
+                "drop_new" => {
+                    signature.inputs().len() == 2
+                        && signature.inputs().iter().all(|&input| borrowed_str(input))
+                        && signature.output() == tcx.types.usize
+                }
+                "drop_enter" => {
+                    signature.inputs().len() == 2
+                        && signature.inputs()[0] == tcx.types.usize
+                        && borrowed_str(signature.inputs()[1])
+                        && signature.output() == tcx.types.u64
                 }
                 _ => false,
             };
@@ -68,6 +80,10 @@ impl Hooks {
         }
         Ok(def)
     }
+}
+
+fn borrowed_str(input: ty::Ty<'_>) -> bool {
+    matches!(input.kind(), ty::Ref(_, inner, rustc_ast::Mutability::Not) if inner.is_str())
 }
 
 pub(crate) fn string<'tcx>(tcx: TyCtxt<'tcx>, value: &str, span: Span) -> Operand<'tcx> {

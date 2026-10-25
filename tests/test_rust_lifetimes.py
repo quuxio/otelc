@@ -86,6 +86,18 @@ class RustLifetimeSelectionTests(unittest.TestCase):
         self.assertEqual([row['local'] for row in selected['locals']], [0, 1, 2])
         self.assertFalse(any(row['kind'] == 'copy' for row in selected['sites']))
 
+    def test_private_weave_bindings_keep_every_selected_local_and_recheck_original_inputs(self) -> None:
+        self.read()
+        bindings = lifetimes.weave_bindings(self.path, self.policy, self.root, self.sources)
+        self.assertEqual(bindings, {'app.rs::main': {'0': 'model::Item', '1': 'model::Item',
+            '2': 'model::Item', '3': 'model::Generic', '4': 'model::CopyItem'}})
+        disabled = copy.deepcopy(self.policy.data)
+        disabled['lifetimes']['enabled'] = False
+        self.assertEqual(lifetimes.weave_bindings(self.path, Policy.parse(disabled), self.root, self.sources), {})
+        self.model.write_text('changed source\n')
+        with self.assertRaisesRegex(ValueError, 'original source changed'):
+            lifetimes.weave_bindings(self.path, self.policy, self.root, self.sources)
+
     def test_unknown_missing_wrongly_typed_header_and_completion_claims_refuse(self) -> None:
         for key, bad in [('schema_version', True), ('schema_version', 1.0), ('kind', 'foreign'),
                          ('sources', {}), ('target', None), ('target', ''), ('pointer_width', 32),

@@ -178,3 +178,14 @@ def read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dic
         'selection_sha256': hashlib.sha256(json.dumps(selection, sort_keys=True).encode()).hexdigest(),
         'target': document['target'], 'pointer_width': document['pointer_width'],
         'source_complete': False, 'instrumentation_complete': False, 'skipped': document['skipped']}
+
+
+def weave_bindings(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dict[str, dict[str, str]]:
+    """Bind common-policy selections to original compiler locals for private weaving.
+
+    Keep unsupported argument/layout/drop shapes in the request: the compiler
+    must refuse them, rather than quietly instrumenting a smaller selection.
+    """
+    selected = read(path, policy, root, sources)
+    return {body['function']['identity']: {str(row['local']): row['compiler_type']
+            for row in body['locals']} for body in selected['bodies']}

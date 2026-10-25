@@ -60,7 +60,8 @@ def check() -> None:
              binaries / 'llvm-profdata', binaries / 'llvm-cov']
     held_tools = [native_launch.identity(path) for path in tools]
     environment.update(RUSTC=rustc, RUSTC_BOOTSTRAP='otelc_rust_compiler',
-        RUSTFLAGS=f'-C prefer-dynamic -C rpath -C link-arg=-Wl,-rpath,{sysroot}/lib -C instrument-coverage',
+        RUSTFLAGS=f'-C prefer-dynamic -L native={sysroot}/lib -C rpath '
+                  f'-C link-arg=-Wl,-rpath,{sysroot}/lib -C instrument-coverage',
         LLVM_PROFILE_FILE=str(work / 'unit-%m-%p.profraw'))
     cargo = ['rustup', 'run', '1.98.1', 'cargo']
     compiler_flags = ['--offline', '--locked', '--manifest-path', 'native/rust/compiler/Cargo.toml',
@@ -68,7 +69,7 @@ def check() -> None:
     run([*cargo, 'build', *compiler_flags], work, 'compiler-build', environment)
     unit = run([*cargo, 'test', *compiler_flags], work, 'compiler-unit', environment)
     unit_result = re.search(rb'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', unit)
-    if unit_result is None or int(unit_result[1]) < 7:
+    if unit_result is None or int(unit_result[1]) < 9:
         raise ValueError('Rust compiler request tests were missing or skipped')
     clippy = str(Path(sysroot) / 'bin/cargo-clippy')
     compiler_clippy = run([clippy, 'clippy', *compiler_flags, '--all-targets', '--message-format=json',
@@ -101,11 +102,12 @@ def check() -> None:
         OTELC_RUST_BRIDGE=str(work / 'bridge/release/libotelc_rust_bridge.rlib'), OTELC_NATIVE_SDK_BUILD=str(sdk))
     data = work / 'python.coverage'
     run([sys.executable, '-m', 'coverage', 'run', '--data-file=' + str(data),
-         '--source=ci.rust_compiler_cases,ci.rust_lifetime_cases,otelc.rust_lifetimes,otelc.health',
+         '--source=ci.rust_compiler_cases,ci.rust_lifetime_cases,ci.rust_drop_cases,otelc.rust_lifetimes,otelc.health',
          '-m', 'ci.rust_compiler_cases'], work, 'cases', environment)
     tests = json.loads((cases / 'tests-result.json').read_bytes())
     test_result(tests)
-    for name in ('ci/rust_compiler_cases.py', 'ci/rust_lifetime_cases.py', 'otelc/rust_lifetimes.py', 'otelc/health.py'):
+    for name in ('ci/rust_compiler_cases.py', 'ci/rust_lifetime_cases.py', 'ci/rust_drop_cases.py',
+                 'otelc/rust_lifetimes.py', 'otelc/health.py'):
         run([sys.executable, '-m', 'coverage', 'report', '--data-file=' + str(data),
              '--include=*/' + name, '--fail-under=80'], work, Path(name).stem + '-coverage', environment)
     profiles = sorted([*cases.glob('*.profraw'), *work.glob('unit-*.profraw')])
@@ -115,7 +117,7 @@ def check() -> None:
     run([str(binaries / 'llvm-profdata'), 'merge', '-sparse', *map(str, profiles), '-o', str(merged)],
         work, 'profiles', environment)
     expected = {ROOT / 'native/rust/compiler/src' / name
-                for name in ('main.rs', 'request.rs', 'hooks.rs', 'instrument.rs', 'lifetimes.rs')}
+                for name in ('main.rs', 'request.rs', 'hooks.rs', 'instrument.rs', 'lifetimes.rs', 'drops.rs')}
     raw = run([str(binaries / 'llvm-cov'), 'export', environment['OTELC_RUST_COMPILER'],
         '-instr-profile=' + str(merged), *map(str, sorted(expected))], work, 'compiler-coverage', environment)
     coverage = summaries(json.loads(raw), expected)
@@ -124,14 +126,19 @@ def check() -> None:
     drop_applications = list(drop_case.glob('*-application'))
     keys_case = cases / 'test_private_drop_keys_distinguish_zero_size_moves_and_forgotten_values'
     keys_applications = list(keys_case.glob('*-application'))
+    automatic_case = cases / 'test_automatic_drop_mir_preserves_stock_moves_zero_size_and_panic_paths'
+    automatic_applications = list(automatic_case.glob('*-application'))
     health = list(cases.rglob('health.json'))
     if (len(applications) != 2 or len(drop_applications) != 1 or len(keys_applications) != 1
-            or len(health) != 16 or len(list(drop_case.rglob('health.json'))) != 4
-            or len(list(keys_case.rglob('health.json'))) != 4):
-        raise ValueError('Rust checks require eight original launches and four launches per private drop/key harness')
+            or len(automatic_applications) != 2 or len(health) != 24
+            or len(list(drop_case.rglob('health.json'))) != 4
+            or len(list(keys_case.rglob('health.json'))) != 4
+            or len(list(automatic_case.rglob('health.json'))) != 8):
+        raise ValueError('Rust checks require original8, private drop4/key4 and automatic lifetime8 launches')
     bridge_source = ROOT / 'native/rust/bridge/src/lib.rs'
     bridge_objects = [str(sorted(applications)[0]), '-object=' + str(drop_applications[0]),
-                      '-object=' + str(keys_applications[0]), '-object=' + str(key_units[0])]
+                      '-object=' + str(keys_applications[0]), '-object=' + str(key_units[0]),
+                      *('-object=' + str(path) for path in sorted(automatic_applications))]
     bridge_raw = run([str(binaries / 'llvm-cov'), 'export', *bridge_objects,
         '-instr-profile=' + str(merged), str(bridge_source)], work, 'bridge-coverage', environment)
     bridge_coverage = summaries(json.loads(bridge_raw), {bridge_source})
@@ -148,6 +155,7 @@ def check() -> None:
               'application_processes': len(health),
               'original_application_processes': 8, 'private_drop_harness_processes': 4,
               'private_key_harness_processes': 4, 'observation_key_unit_tests': 3,
+              'automatic_lifetime_application_processes': 8,
               'telemetry_evidence': 'Receiver-decoded protobuf reserialization, not original HTTP wire bytes',
               'scope': 'Internal synchronous compiler and explicit drop/key bridge/SDK harnesses; not automatic Rust lifetime admission'}
     (work / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

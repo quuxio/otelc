@@ -90,6 +90,47 @@ fn lifetime_discovery_is_explicit_without_function_selection() {
 }
 
 #[test]
+fn lifetime_weaving_requires_a_separate_closed_nonempty_local_binding_profile() {
+    let fixture = Fixture::new();
+    let mut value = fixture.value.clone();
+    value["schema_version"] = json!(2);
+    value["mode"] = json!("lifetime-weave");
+    value["lifetimes"] = json!({"app.rs::workload":{"1":"app::Item"}});
+    let request = fixture
+        .load(&value)
+        .expect("valid private lifetime binding");
+    assert!(request.weaving());
+    assert_eq!(
+        request.lifetimes.unwrap()["app.rs::workload"][&1],
+        "app::Item"
+    );
+    for (field, replacement) in [
+        ("schema_version", json!(1)),
+        ("schema_version", json!(3)),
+        ("mode", json!("weave")),
+        ("mode", json!("lifetime-inspect")),
+        ("lifetimes", json!(null)),
+        ("lifetimes", json!({})),
+        ("lifetimes", json!({"app.rs::workload":{}})),
+        ("lifetimes", json!({"app.rs::workload":{"0":"app::Item"}})),
+        (
+            "lifetimes",
+            json!({"app.rs::workload":{"65536":"app::Item"}}),
+        ),
+        ("lifetimes", json!({"app.rs::workload":{"1":""}})),
+        ("lifetimes", json!({"app.rs::workload":{"1":"bad\0type"}})),
+        ("lifetimes", json!({"bad\0body":{"1":"app::Item"}})),
+    ] {
+        let mut changed = value.clone();
+        changed[field] = replacement;
+        fixture.rejects(&changed);
+    }
+    let mut legacy = fixture.value.clone();
+    legacy["lifetimes"] = value["lifetimes"].clone();
+    fixture.rejects(&legacy);
+}
+
+#[test]
 fn rejects_unknown_missing_and_wrongly_typed_fields() {
     let fixture = Fixture::new();
     for field in [
