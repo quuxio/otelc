@@ -95,7 +95,8 @@ struct ObjectRuntime::Impl {
       : state(std::move(selected_state)), tracer(std::move(selected_tracer)), limits(selected_limits) {
     if (!state || !meter || state->Status().closing || !limits.types || limits.types > 4096 ||
         !limits.live || limits.live > 1000000 ||
-        (limits.boundary != LifetimeBoundary::destructor_entry && limits.boundary != LifetimeBoundary::free_entry))
+        (limits.boundary != LifetimeBoundary::destructor_entry && limits.boundary != LifetimeBoundary::free_entry &&
+         limits.boundary != LifetimeBoundary::drop_entry))
       throw std::invalid_argument("object observations require open SDK inputs and bounded limits");
     admitted_metric = meter->CreateUInt64Counter("otelc.lifetime.admitted", "Successful selected initialisations", "{object}");
     completed_metric = meter->CreateUInt64Counter("otelc.lifetime.completed", "Observed selected release entries", "{object}");
@@ -106,7 +107,8 @@ struct ObjectRuntime::Impl {
   }
   ~Impl() { live_metric->RemoveCallback(Observe, this); }
   const char *Boundary() const {
-    return limits.boundary == LifetimeBoundary::free_entry ? "free_entry" : "destructor_entry";
+    if (limits.boundary == LifetimeBoundary::free_entry) return "free_entry";
+    return limits.boundary == LifetimeBoundary::drop_entry ? "drop_entry" : "destructor_entry";
   }
   // The caller holds mutex. Remove the live-address entry before releasing its
   // storage, so reuse can start a new generation while this completion drains.
@@ -156,6 +158,8 @@ struct ObjectRuntime::Impl {
       auto span = tracer->StartSpan(item.type->name + " lifetime", labels, links, options);
       if (complete && limits.boundary == LifetimeBoundary::destructor_entry)
         span->SetAttribute("otelc.destructor.exception_exit", unwinding);
+      if (complete && limits.boundary == LifetimeBoundary::drop_entry)
+        span->SetAttribute("otelc.drop.exception_exit", unwinding);
       trace::EndSpanOptions end;
       end.end_steady_time = item.end;
       span->End(end);
@@ -207,6 +211,36 @@ bool ObjectRuntime::Admit(const void *address, const char *type_usr, const char 
       impl_->admitted_metric->Add(1, {{"type", label}, {"boundary", impl_->Boundary()}});
     return true;
   } catch (...) { ++impl_->lost; return false; }
+}
+
+bool ObjectRuntime::Relocate(const void *source, const void *destination, const char *type_usr) noexcept {
+  const SavedErrno saved;
+  if (inside_object_runtime) { ++impl_->lost; return false; }
+  Guard guard;
+  try {
+    if (!source || !destination) { ++impl_->invalid; return false; }
+    auto id = name(type_usr);
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->limits.boundary != LifetimeBoundary::drop_entry || impl_->closing) {
+      ++impl_->invalid; return false;
+    }
+    auto type = impl_->types.find(id);
+    if (type == impl_->types.end()) return false;
+    auto previous = std::make_pair(reinterpret_cast<std::uintptr_t>(source), type->second.id);
+    auto found = impl_->index.find(previous);
+    if (found == impl_->index.end()) return false;
+    auto next = std::make_pair(reinterpret_cast<std::uintptr_t>(destination), type->second.id);
+    if (previous == next) return true;
+    if (impl_->index.count(next)) { ++impl_->duplicates; ++impl_->lost; return false; }
+    auto &item = impl_->observations.at(found->second);
+    // Extracting/reinserting a node in the same map needs no new index storage.
+    // The mutex keeps the vacant destination and live generation stable.
+    auto node = impl_->index.extract(found);
+    node.key() = next;
+    impl_->index.insert(std::move(node));
+    item.address = next.first;
+    return true;
+  } catch (...) { ++impl_->invalid; return false; }
 }
 
 std::uint64_t ObjectRuntime::Destroying(const void *address, const char *type_usr) noexcept {

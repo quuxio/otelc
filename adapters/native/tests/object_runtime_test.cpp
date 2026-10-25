@@ -271,6 +271,111 @@ void CompletedSpanHasCreationLinkAndEndsBeforeCleanup() {
   assert(values.at("otelc.lifetime.duration") == 1);
   assert(engine->Close() && engine->Close());
 }
+void DropRelocationKeepsAdmissionTimeCreationAndGenerations() {
+  World world;
+  auto engine = world.Engine({16, 16, native::LifetimeBoundary::drop_entry});
+  int first = 7, middle = 8, last = 9;
+  auto creator = world.traces->GetTracer("application")->StartSpan("owner");
+  auto creation = creator->GetContext();
+  assert(engine->Admit(&first, "rust:Item", "Item", creation));
+  const auto admitted_upper = std::chrono::steady_clock::now();
+  creator->End();
+  std::this_thread::sleep_for(1ms);
+  const auto move_lower = std::chrono::steady_clock::now();
+  errno = EDOM;
+  assert(engine->Relocate(&first, &middle, "rust:Item") && errno == EDOM);
+  assert(!engine->Destroying(&first, "rust:Item"));
+  std::thread worker([&] {
+    errno = ECHILD;
+    assert(engine->Relocate(&middle, &last, "rust:Item") && errno == ECHILD);
+  });
+  worker.join();
+  assert(engine->Relocate(&last, &last, "rust:Item"));
+  assert(!engine->Destroying(&middle, "rust:Item"));
+  assert(engine->Admit(&first, "rust:Item", "Item"));
+  assert(engine->Status().admitted == 2 && engine->Status().live == 2);
+  const auto original = engine->Destroying(&last, "rust:Item");
+  assert(original == 1 && engine->Destroyed(original, 0));
+  const auto reused = engine->Destroying(&first, "rust:Item");
+  assert(reused == 2 && engine->Destroyed(reused, 0));
+  assert(first == 7 && middle == 8 && last == 9);
+  assert(engine->Close());
+  const auto status = engine->Status();
+  assert(status.admitted == 2 && status.completed == 2 && status.censored == 0 && status.live == 0);
+  assert(status.lost == 0 && status.invalid == 0 && status.duplicates == 0);
+  assert(world.span_sink->spans.size() == 3);
+  const auto &span = *world.span_sink->spans[1];
+  assert(span.GetDuration() >= move_lower - admitted_upper);
+  assert(span.GetLinks().size() == 1 && span.GetLinks()[0].GetSpanContext() == creation);
+  assert(opentelemetry::nostd::get<std::string>(span.GetAttributes().at("boundary")) == "drop_entry");
+  assert(opentelemetry::nostd::get<std::string>(span.GetAttributes().at("otelc.lifetime.instance")) == "1");
+  assert(!opentelemetry::nostd::get<bool>(span.GetAttributes().at("otelc.drop.exception_exit")));
+  assert(!span.GetAttributes().count("otelc.destructor.exception_exit"));
+  const auto values = world.Collect();
+  assert(values.at("otelc.lifetime.admitted") == 2 && values.at("otelc.lifetime.completed") == 2);
+}
+void DropRelocationRefusesCollisionsUnknownStorageAndOtherProfiles() {
+  int first = 1, second = 2, unused = 3;
+  for (auto boundary : {native::LifetimeBoundary::destructor_entry, native::LifetimeBoundary::free_entry}) {
+    World world;
+    auto engine = world.Engine({16, 16, boundary});
+    assert(engine->Admit(&first, "usr:Item", "Item"));
+    errno = EDOM;
+    assert(!engine->Relocate(&first, &second, "usr:Item") && errno == EDOM);
+    Finish(*engine, &first);
+    assert(engine->Status().invalid == 1 && engine->Close());
+  }
+  World world;
+  auto engine = world.Engine({16, 16, native::LifetimeBoundary::drop_entry});
+  assert(engine->Admit(&first, "rust:Item", "Item") && engine->Admit(&second, "rust:Item", "Item"));
+  assert(!engine->Relocate(&first, &second, "rust:Item"));
+  assert(engine->Status().live == 2 && engine->Status().duplicates == 1 && engine->Status().lost == 1);
+  assert(!engine->Relocate(&unused, &second, "rust:Item"));
+  assert(!engine->Relocate(&first, &unused, "rust:Unknown"));
+  assert(!engine->Relocate(nullptr, &unused, "rust:Item"));
+  assert(!engine->Relocate(&first, nullptr, "rust:Item"));
+  assert(!engine->Relocate(&first, &unused, ""));
+  const auto claimed = engine->Destroying(&first, "rust:Item");
+  assert(claimed == 1 && !engine->Relocate(&first, &unused, "rust:Item"));
+  assert(!engine->Close());
+  assert(!engine->Relocate(&second, &unused, "rust:Item"));
+  assert(engine->Destroyed(claimed, 1));
+  Finish(*engine, &second, "rust:Item");
+  assert(engine->Close() && !engine->Relocate(&second, &unused, "rust:Item"));
+  assert(first == 1 && second == 2 && unused == 3);
+}
+void DropMoveControlsAndCensoringKeepDistinctBoundaries() {
+  for (bool collection : {false, true}) for (bool emission : {false, true}) for (int unwinding : {0, 1}) {
+    World world(collection, emission);
+    auto engine = world.Engine({16, 16, native::LifetimeBoundary::drop_entry});
+    int first = 0, moved = 0, second = 0, censored = 0;
+    assert(engine->Admit(&first, "rust:Item", "Item"));
+    assert(engine->Relocate(&first, &moved, "rust:Item"));
+    assert(world.controller.SetCollection(!collection) && world.state->SetEmission(!emission));
+    auto token = engine->Destroying(&moved, "rust:Item");
+    assert(token && engine->Destroyed(token, unwinding));
+    assert(world.controller.SetCollection(true) && world.state->SetEmission(true));
+    assert(engine->Admit(&second, "rust:Item", "Item"));
+    Finish(*engine, &second, "rust:Item");
+    assert(engine->Admit(&first, "rust:Item", "Item"));
+    assert(engine->Relocate(&first, &censored, "rust:Item"));
+    assert(engine->Close());
+    const auto status = engine->Status();
+    assert(status.admitted == 3 && status.completed == 2 && status.censored == 1);
+    assert(status.lost == 0 && status.invalid == 0 && status.duplicates == 0);
+    assert(world.span_sink->spans.size() == 3);
+    const auto &complete = world.span_sink->spans[0]->GetAttributes();
+    assert(opentelemetry::nostd::get<std::string>(complete.at("boundary")) == "drop_entry");
+    assert(opentelemetry::nostd::get<bool>(complete.at("otelc.drop.exception_exit")) == (unwinding != 0));
+    const auto &unfinished = world.span_sink->spans[2]->GetAttributes();
+    assert(opentelemetry::nostd::get<std::string>(unfinished.at("boundary")) == "shutdown_censored");
+    assert(!opentelemetry::nostd::get<bool>(unfinished.at("otelc.lifetime.complete")));
+    assert(!unfinished.count("otelc.drop.exception_exit") && !unfinished.count("otelc.destructor.exception_exit"));
+    const auto values = world.Collect();
+    assert(values.at("otelc.lifetime.admitted") == (collection ? 3 : 2));
+    assert(values.at("otelc.lifetime.completed") == 1 && values.at("otelc.lifetime.incomplete") == 1);
+  }
+}
 void GenerationsNestedVariantsAndCrossThreadDestruction() {
   World world;
   auto engine = world.Engine();
@@ -427,7 +532,8 @@ void LimitsInvalidInputsAndExporterReentryAreVisible() {
 }
 
 void ObjectAndResourceProbesPreserveErrnoIncludingCensoredShutdown() {
-  for (auto boundary : {native::LifetimeBoundary::destructor_entry, native::LifetimeBoundary::free_entry}) {
+  for (auto boundary : {native::LifetimeBoundary::destructor_entry, native::LifetimeBoundary::free_entry,
+                        native::LifetimeBoundary::drop_entry}) {
     for (int unwinding : {0, 1}) {
       if (boundary == native::LifetimeBoundary::free_entry && unwinding) continue;
       World world;
@@ -443,6 +549,7 @@ void ObjectAndResourceProbesPreserveErrnoIncludingCensoredShutdown() {
         assert(!engine->Admit(&recursive, "usr:Item", "Item") && errno == EOVERFLOW);
         assert(!engine->Destroying(&recursive, "usr:Item") && errno == EOVERFLOW);
         assert(!engine->Releasing(&recursive) && errno == EOVERFLOW);
+        assert(!engine->Relocate(&recursive, &first, "usr:Item") && errno == EOVERFLOW);
         assert(!engine->Destroyed(42, 0) && errno == EOVERFLOW);
         assert(!engine->Close() && errno == EOVERFLOW);
       };
@@ -547,6 +654,9 @@ int main() {
   FreeGenerationsKeepReusedAddressesAndCrossThreadReleaseSeparate();
   AllocationControlsDoNotChangeTraceBoundariesOrAdmitUnsupportedModes();
   CompletedSpanHasCreationLinkAndEndsBeforeCleanup();
+  DropRelocationKeepsAdmissionTimeCreationAndGenerations();
+  DropRelocationRefusesCollisionsUnknownStorageAndOtherProfiles();
+  DropMoveControlsAndCensoringKeepDistinctBoundaries();
   GenerationsNestedVariantsAndCrossThreadDestruction();
   EqualDisplayNamesAggregateLiveObjectsWithoutMergingIdentities();
   CloseWaitsForClaimedCleanupThenCensorsOnlyOpenObservations();

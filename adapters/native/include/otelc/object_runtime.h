@@ -11,7 +11,7 @@ namespace otelc::native {
 void ConfigureObjectMetrics(opentelemetry::sdk::metrics::MeterProvider &provider,
     std::uint32_t types = 4096,
     const std::vector<double> &boundaries = {1e-6, 1e-5, 1e-4, .001, .01, .1, 1.});
-enum class LifetimeBoundary { destructor_entry, free_entry };
+enum class LifetimeBoundary { destructor_entry, free_entry, drop_entry };
 struct ObjectLimits {
   std::uint32_t types = 4096, live = 4096;
   LifetimeBoundary boundary = LifetimeBoundary::destructor_entry;
@@ -22,7 +22,7 @@ struct ObjectStatus {
   bool closing, closed;
 };
 // The observation starts after successful initialisation and ends at the first
-// destructor entry. A generation token separately tracks cleanup completion.
+// release entry. A generation token separately tracks cleanup completion.
 // Keep this engine and its providers alive until Close returns true.
 class ObjectRuntime {
  public:
@@ -36,6 +36,10 @@ class ObjectRuntime {
   bool Admit(const void *address, const char *type_usr, const char *name,
       const opentelemetry::trace::SpanContext &creation =
           opentelemetry::trace::SpanContext::GetInvalid()) noexcept;
+  // Ownership relocation is available only for the drop profile. Move metadata
+  // without reading storage, admitting a new object or resetting its lifetime.
+  // C++ moves remain distinct construction/destruction events.
+  bool Relocate(const void *source, const void *destination, const char *type_usr) noexcept;
   std::uint64_t Destroying(const void *address, const char *type_usr) noexcept;
   // A C free can erase its pointer's static type. Claim only an already tracked
   // allocation, without reading storage or treating an unselected free as loss.
