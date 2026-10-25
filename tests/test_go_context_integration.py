@@ -142,6 +142,7 @@ class GoContextIntegrationTests(unittest.TestCase):
             profile = root / 'profile.out'
             self.command([self.tools['go'], 'test', '-mod=readonly', '-race', '-count=1',
                           '-coverprofile=' + str(profile), './...'], project)
+            shutil.copyfile(profile, ROOT / 'build/go-detach-component-coverage.out')
             rows = [line.split() for line in profile.read_text().splitlines()[1:]
                     if line.split()[0].startswith('example.com/otelc-detach-fixture/helper.go:')]
             self.assertTrue(rows, 'generated helper has no compiled coverage')

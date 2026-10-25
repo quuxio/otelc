@@ -58,6 +58,7 @@ class GoTelemetryBundleTests(unittest.TestCase):
                                      '-coverprofile=' + str(profile), './...'], cwd=project,
                                     env=environment, capture_output=True, timeout=180)
             self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode(errors='replace'))
+            shutil.copyfile(profile, ROOT / 'build/go-telemetry-component-coverage.out')
             components = {}
             for name in (module + '/helper.go', module + '/bridge/bridge.go',
                          'go.opentelemetry.io/otel/internal/baggage/otelc_context.go'):
