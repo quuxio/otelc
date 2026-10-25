@@ -21,6 +21,7 @@ from otelc import benchmark, control, health, java, node, node_benchmark, prepar
 from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe
 from otelc import native_launch
+from otelc import native_build, prepared_native
 from otelc.config import LANGUAGES, Policy
 
 
@@ -85,6 +86,19 @@ def main() -> int:
     native.add_argument("--sdk-library", type=Path, required=True, help="explicit built native SDK launch library")
     native.add_argument("--plain", action="store_true")
     native.add_argument("arguments", nargs=argparse.REMAINDER)
+    commands.add_parser('native-protocols', help='describe explicit owned native formats without compiling')
+    native_build_parser = commands.add_parser('native-build', help='candidate: retain a native build for owned execution')
+    native_build_parser.add_argument('--language', choices=('c', 'cpp'), required=True)
+    native_build_parser.add_argument('--root', type=Path, required=True)
+    native_build_parser.add_argument('--source', type=Path, action='append', required=True)
+    native_build_parser.add_argument('--output', type=Path, required=True)
+    native_build_parser.add_argument('--sdk-build', type=Path, required=True)
+    native_run_parser = commands.add_parser('native-run', help='candidate: execute a retained native build through its host gate')
+    native_run_parser.add_argument('--build', type=Path, required=True)
+    native_run_parser.add_argument('--runtime', type=Path, required=True)
+    native_run_parser.add_argument('--plain', action='store_true')
+    native_run_parser.add_argument('--prepare-only', action='store_true')
+    native_run_parser.add_argument('arguments', nargs=argparse.REMAINDER)
     python = commands.add_parser("python", help="candidate: launch original CPython sources")
     python.add_argument("--root", default=str(Path.cwd()))
     python_entry = python.add_mutually_exclusive_group(required=True)
@@ -112,7 +126,18 @@ def main() -> int:
             value = control.request(args.socket, "health") if args.socket else health.read(args.report)
             print(json.dumps(value, indent=2))
             return 0
+        if args.command == 'native-protocols':
+            print(json.dumps(prepared_native.protocols(), indent=2))
+            return 0
         policy = Policy.load(args.config)
+        if args.command == 'native-build':
+            value = native_build.build(policy, args.language, args.root, args.source,
+                                       args.output, sdk_directory=args.sdk_build)
+            print(json.dumps(value, indent=2))
+            return 0
+        if args.command == 'native-run':
+            return prepared_native.run(policy, args.runtime, build_directory=args.build,
+                arguments=application_arguments(args.arguments), plain=args.plain, prepare_only=args.prepare_only)
         if args.command == 'native':
             built = native_launch.build(policy, args.language, args.root, args.source, args.build,
                                         library=args.sdk_library)

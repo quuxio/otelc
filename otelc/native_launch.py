@@ -12,7 +12,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from otelc import llvm_backend
 from otelc.config import Policy
@@ -183,14 +183,40 @@ def verify(value: Build) -> dict[str, Any]:
 def start(value: Build, runtime: Path, *, plain: bool = False,
           arguments: tuple[str, ...] = (), **streams: Any) -> subprocess.Popen[bytes]:
     """Launch unchanged application code with an inherited private translated plan."""
+    return _start(value, runtime, plain, arguments, subprocess.Popen, None, streams)
+
+
+def start_waiting(value: Build, runtime: Path, gate: Any, *, policy: Policy,
+                  plain: bool = False, arguments: tuple[str, ...] = (),
+                  wait_ms: int = 30000, **streams: Any) -> Any:
+    """Start a held native image in either lane; the host releases it separately."""
+    from otelc import native_gate
+
+    def spawn(command: list[str], *, cwd: str, env: dict[str, str],
+              pass_fds: tuple[int, ...] = (), **channels: Any) -> native_gate.Waiting:
+        return native_gate.start(gate, tuple(command), cwd=Path(cwd), environment=env,
+                                 pass_fds=pass_fds, wait_ms=wait_ms, **channels)
+
+    return _start(value, runtime, plain, arguments, spawn, policy, streams)
+
+
+def _start(value: Build, runtime: Path, plain: bool, arguments: tuple[str, ...],
+           spawn: Callable[..., Any], current: Policy | None, streams: dict[str, Any]) -> Any:
+    """Share the existing fixed invocation/plan while keeping the gate explicit."""
     metadata = verify(value)
+    if current is not None:
+        validate_policy(current, metadata['language'])
+        if digest({key: current.data[key] for key in ('sources', 'functions')}) != metadata['selection_sha256']:
+            raise ValueError('native policy differs from compiled selection')
+        metadata['policy'] = current.data
+        metadata['policy_sha256'] = digest(current.data)
     runtime.mkdir(mode=0o700)
     runtime = runtime.resolve(strict=True)
     environment = {key: item for key, item in os.environ.items()
                    if not key.startswith(('OTEL_', 'OTELC_'))}
     command = [str(value.directory / ('plain' if plain else 'instrumented')), *arguments]
     if plain:
-        return subprocess.Popen(command, cwd=metadata['root'], env=environment, **streams)
+        return spawn(command, cwd=metadata['root'], env=environment, **streams)
     policy = metadata['policy']
     settings = dict(policy['export']) | {'service_name': policy['resource']['service_name'],
         'endpoint': policy['export']['endpoint'].rstrip('/'), **{key: policy['metrics'][key] for key in ('collection', 'emission')},
@@ -205,7 +231,7 @@ def start(value: Build, runtime: Path, *, plain: bool = False,
         with os.fdopen(fd, 'wb', closefd=False) as stream:
             stream.write(json.dumps(plan).encode())
         environment['OTELC_NATIVE_PLAN_FD'] = str(fd)
-        return subprocess.Popen(command, cwd=metadata['root'], env=environment, pass_fds=(fd,), **streams)
+        return spawn(command, cwd=metadata['root'], env=environment, pass_fds=(fd,), **streams)
     finally:
         os.close(fd)
 

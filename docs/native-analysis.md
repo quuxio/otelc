@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-The native pipeline covers `native/llvm/OtelcPass.cpp`, `adapters/native/src/metric_control.cpp`, `adapters/native/src/function_runtime.cpp` `adapters/native/launcher/src/runtime.cpp` and `adapters/native/gate/ExecGate.c`. Sonar analysis includes their headers, both SDK test translation units and the ordinary C/C++ compiler fixtures. The launcher gate also executes unchanged applications against real SDK HTTP exporters. This component analysis does not establish broader language admission, production downstream receipt, task/service propagation or lifetime support.
+The native pipeline covers `native/llvm/OtelcPass.cpp`, `adapters/native/src/metric_control.cpp`, `adapters/native/src/function_runtime.cpp`, `adapters/native/launcher/src/runtime.cpp` and `adapters/native/gate/ExecGate.c`. Sonar analysis includes their headers, both SDK test translation units and the ordinary C/C++ compiler fixtures. The launcher gate also executes unchanged applications against real SDK HTTP exporters. This component analysis does not establish broader language admission, production downstream receipt, task/service propagation or lifetime support.
 
 ## Actual build context
 
