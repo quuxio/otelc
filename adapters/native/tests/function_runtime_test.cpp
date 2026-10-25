@@ -4,6 +4,7 @@
 #include <array>
 #include <algorithm>
 #include <cstdio>
+#include <cerrno>
 #include <functional>
 #include <future>
 #include <map>
@@ -101,7 +102,9 @@ struct SpanSink : traces::SpanExporter {
   std::mutex mutex;
   std::vector<std::unique_ptr<traces::SpanData>> spans;
   std::function<void()> callback;
+  std::function<void()> create_callback;
   std::unique_ptr<traces::Recordable> MakeRecordable() noexcept override {
+    if (create_callback) create_callback();
     return std::make_unique<traces::SpanData>();
   }
   opentelemetry::sdk::common::ExportResult Export(
@@ -416,6 +419,30 @@ void InvalidInputs() {
   assert(refused);
 }
 
+void EntryAndCompletionPreserveApplicationErrno() {
+  for (bool named : {false, true}) for (int unwinding : {0, 1}) {
+    bool created = false, exported = false;
+    World world;
+    auto engine = world.Engine(); Register(*engine);
+    world.span_sink->create_callback = [&] { created = true; errno = ERANGE; };
+    world.span_sink->callback = [&] {
+      exported = true;
+      errno = EOVERFLOW;
+      // Refused recursive probes must preserve the callback's own error too.
+      assert(engine->EnterNamed("exporter-reentry") == 0 && errno == EOVERFLOW);
+    };
+    errno = EINTR;
+    auto token = named ? engine->EnterNamed("errno.rs::workload") : engine->Enter(&outer_address);
+    assert(token && created && errno == EINTR);
+    errno = EDOM;
+    assert(engine->Leave(token, unwinding) && exported && errno == EDOM);
+    errno = ECHILD;
+    assert(!engine->Leave(token, unwinding) && errno == ECHILD);
+    assert(!engine->EnterNamed("") && errno == ECHILD);
+    assert(!engine->Status().active && engine->Close());
+  }
+}
+
 void ConfiguredHistogramUsesTheExactSecondsPolicy() {
   World world(true, true, false);
   const std::vector<double> bounds = {.00005, .02, 5.};
@@ -522,6 +549,7 @@ int main() {
   NamedFunctionsValidateNamesAndRetainLiveStates();
   NamedRegistrationIsConcurrentAndRefusesExporterReentry();
   TracingOffAndExporterReentry();
+  EntryAndCompletionPreserveApplicationErrno();
   InvalidInputs();
   CompilerInsertedCallsUseTheSDK();
   ConfiguredHistogramUsesTheExactSecondsPolicy();

@@ -103,12 +103,21 @@ native-launch-check:
 	mkdir -p build
 	$(PYTHON) -m coverage run --data-file=build/native-launch-tooling.coverage --source=ci.check_native_launch -m ci.check_native_launch
 	$(PYTHON) -m coverage report --data-file=build/native-launch-tooling.coverage --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/otelc/native_launch.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/ci/native_launch_suite.py' --fail-under=80
 
 .PHONY: rust-compiler-check
 rust-compiler-check:
-	$(PYTHON) -m ci.check_rust_compiler
-	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/otelc/native_launch.py' --fail-under=80
-	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/ci/native_launch_suite.py' --fail-under=80
+	mkdir -p build
+	$(PYTHON) -m coverage run --data-file=build/rust-orchestration.coverage --source=ci.check_rust_compiler,ci.rust_sonar -m ci.check_rust_compiler
+	$(PYTHON) -m coverage run --append --data-file=build/rust-orchestration.coverage --source=ci.rust_sonar -m unittest discover -s tests -p test_rust_sonar.py -v
+	$(PYTHON) -m coverage combine --append --keep build/rust-orchestration.coverage build/rust-case.coverage
+	$(PYTHON) -m coverage report --include='*/ci/check_rust_compiler.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/rust_sonar.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/rust_compiler_cases.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/health.py' --fail-under=80
+	$(PYTHON) -m coverage xml -o build/coverage.xml
+	$(PYTHON) -m ci.rust_sonar
 
 go-check:
 	mkdir -p build
@@ -169,7 +178,7 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 	$(PYTHON) -m ci.native_sonar
 
-check: lint java-check node-check go-check python-inputs-check test
+check: lint java-check node-check go-check python-inputs-check test rust-compiler-check
 
 stack-check:
 	docker compose config --quiet

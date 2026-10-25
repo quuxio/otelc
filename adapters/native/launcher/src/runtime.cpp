@@ -488,6 +488,7 @@ Json ReadPlan(int fd) {
 }  // namespace
 
 extern "C" void otelc_function_register_v1(const otelc_function_descriptor_v1 *items, std::uint64_t count) noexcept {
+  const SavedErrno saved;
   auto &global = Global();
   try {
     std::scoped_lock lock(global.mutex);
@@ -505,6 +506,7 @@ extern "C" void otelc_function_register_v1(const otelc_function_descriptor_v1 *i
   } catch (...) { ++global.errors; }
 }
 extern "C" std::uint64_t otelc_function_enter_v1(const void *address) noexcept {
+  const SavedErrno saved;
   if (auto *runtime = Installed()) return runtime->functions->Enter(address);
   auto &state = Global(); std::scoped_lock lock(state.mutex); ++state.errors; return 0;
 }
@@ -517,6 +519,7 @@ extern "C" std::uint64_t otelc_function_named_enter_v1(const char *name, std::ui
   auto &state = Global(); std::scoped_lock lock(state.mutex); ++state.errors; return 0;
 }
 extern "C" void otelc_function_leave_v1(std::uint64_t token, std::int32_t unwinding) noexcept {
+  const SavedErrno saved;
   if (auto *runtime = Installed()) runtime->functions->Leave(token, unwinding);
 }
 extern "C" void otelc_object_created_v1(const void *address, const char *type, const char *name) noexcept {

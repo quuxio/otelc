@@ -13,6 +13,7 @@ import tempfile
 
 from ci.check_native_controls import summaries
 from ci.check_native_launch import test_result
+from ci import rust_sonar
 from otelc import native_build, native_launch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,8 +35,9 @@ def run(arguments: list[str], work: Path, label: str, environment: dict[str, str
 
 def check() -> None:
     """Keep this component distinct from public Rust adapter/lifetime admission."""
-    if sys.platform != 'darwin' or platform.machine() != 'arm64':
-        raise ValueError('The initial Rust compiler component is qualified only on macOS ARM64')
+    host = (sys.platform, platform.machine())
+    if host not in (('darwin', 'arm64'), ('linux', 'x86_64'), ('linux', 'aarch64')):
+        raise ValueError('Rust compiler checks require macOS ARM64 or 64-bit GNU/Linux')
     (ROOT / 'build').mkdir(exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix='rust-compiler-check-', dir=ROOT / 'build')).resolve()
     environment = {key: value for key, value in os.environ.items()
@@ -51,10 +53,7 @@ def check() -> None:
     if not sdk_directory:
         native_launch.build_sdk(sdk, coverage=True)
     record = native_build.sdk(sdk)
-    sources = [*sorted((ROOT / 'native/rust').rglob('*.rs')),
-               *sorted((ROOT / 'native/rust').rglob('Cargo.toml')),
-               *sorted((ROOT / 'native/rust').rglob('Cargo.lock')),
-               ROOT / 'ci/rust_compiler_cases.py', ROOT / 'ci/check_rust_compiler.py', ROOT / 'otelc/health.py']
+    sources = rust_sonar.source_paths(ROOT)
     before = [native_launch.identity(path) for path in sources]
     binaries = Path(record['toolchain']['directory'])
     tools = [Path(rustc), Path(sysroot) / 'bin/cargo-clippy',
@@ -71,11 +70,15 @@ def check() -> None:
     unit_result = re.search(rb'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', unit)
     if unit_result is None or int(unit_result[1]) < 7:
         raise ValueError('Rust compiler request tests were missing or skipped')
-    run([str(Path(sysroot) / 'bin/cargo-clippy'), 'clippy', *compiler_flags, '--all-targets',
+    clippy = str(Path(sysroot) / 'bin/cargo-clippy')
+    compiler_clippy = run([clippy, 'clippy', *compiler_flags, '--all-targets', '--message-format=json',
          '--', '-D', 'warnings'], work, 'compiler-clippy', environment)
     run([*cargo, 'build', '--offline', '--locked', '--release', '--manifest-path',
          'native/rust/bridge/Cargo.toml', '--target-dir', str(work / 'bridge')], work, 'bridge-build',
         environment | {'RUSTFLAGS': '-C instrument-coverage'})
+    bridge_clippy = run([clippy, 'clippy', '--offline', '--locked', '--all-targets', '--message-format=json',
+        '--manifest-path', 'native/rust/bridge/Cargo.toml', '--target-dir', str(work / 'bridge'),
+        '--', '-D', 'warnings'], work, 'bridge-clippy', environment | {'RUSTFLAGS': '-C instrument-coverage'})
     cases = work / 'cases'
     environment.update(PYTHONPATH=str(ROOT) + os.pathsep + str(ROOT / 'tests'),
         OTELC_RUST_COMPONENT_OUTPUT=str(cases), OTELC_RUSTC=rustc,
@@ -107,6 +110,11 @@ def check() -> None:
     bridge_raw = run([str(binaries / 'llvm-cov'), 'export', str(sorted(applications)[0]),
         '-instr-profile=' + str(merged), str(bridge_source)], work, 'bridge-coverage', environment)
     bridge_coverage = summaries(json.loads(bridge_raw), {bridge_source})
+    compiler_lcov = run([str(binaries / 'llvm-cov'), 'export', environment['OTELC_RUST_COMPILER'],
+        '-instr-profile=' + str(merged), '-format=lcov', *map(str, sorted(expected))],
+        work, 'compiler-lcov', environment).decode()
+    bridge_lcov = run([str(binaries / 'llvm-cov'), 'export', str(sorted(applications)[0]),
+        '-instr-profile=' + str(merged), '-format=lcov', str(bridge_source)], work, 'bridge-lcov', environment).decode()
     if (before != [native_launch.identity(path) for path in sources] or native_build.sdk(sdk) != record
             or held_tools != [native_launch.identity(path) for path in tools]):
         raise ValueError('Rust compiler/bridge or genuine SDK inputs changed during checks')
@@ -116,6 +124,10 @@ def check() -> None:
               'telemetry_evidence': 'Receiver-decoded protobuf reserialization, not original HTTP wire bytes',
               'scope': 'Internal synchronous Rust compiler/SDK component; not public adapter/lifetime admission'}
     (work / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+    rust_sonar.write(ROOT, before, compiler_lcov + bridge_lcov, coverage | bridge_coverage,
+                     compiler_clippy + bridge_clippy, ROOT / 'build')
+    rust_sonar.verify(ROOT, ROOT / 'build')
+    shutil.copyfile(data, ROOT / 'build/rust-case.coverage')
     print(json.dumps({'work': str(work), 'coverage': coverage}))
 
 
