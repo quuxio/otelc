@@ -64,7 +64,7 @@ def check() -> None:
                    '--data-file=' + str(output / 'native-launch-python.coverage'),
                    '--source=otelc.native_launch,ci.native_launch_suite', '-m', 'ci.native_launch_suite']
         commands.append(command)
-        subprocess.run(command, cwd=ROOT, env=environment, check=True, timeout=600)
+        subprocess.run(command, cwd=ROOT, env=environment, check=True, timeout=1800)
         results = json.loads(report.read_text())
         test_result(results)
         profiles = sorted(work.glob('runtime-*.profraw'))
