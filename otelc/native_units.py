@@ -141,7 +141,7 @@ def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: s
             compiled = output / (label + '.original.o') if unit['rename_main'] else final
             dependencies = output / (label + '.d')
             compiler = binaries / ('clang' if unit['language'] == 'c' else 'clang++')
-            command = [str(compiler), *unit['flags'], '-g', '-MMD', '-MF', str(dependencies),
+            command = [str(compiler), *unit['flags'], '-g', '-MD', '-MF', str(dependencies),
                        '-MT', 'otelc-inputs', '-c', unit['source'], '-o', str(compiled)]
             if unit['overlay'] is not None:
                 command.extend(['-ivfsoverlay', unit['overlay']])
