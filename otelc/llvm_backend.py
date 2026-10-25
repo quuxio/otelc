@@ -24,6 +24,9 @@ MANIFEST = 'llvm-plugin.json'
 PROFILE = 'llvm22-itanium-v1'
 REGISTERED_PROFILE = 'llvm22-itanium-registered-v1'
 SOURCE_PROFILE = 'llvm22-itanium-source-v1'
+OBJECT_PROFILE = 'llvm22-itanium-objects-v1'
+OBJECT_INPUTS = (ROOT / 'native/llvm/ObjectPass.cpp', ROOT / 'native/llvm/object_pass.h',
+                 ROOT / 'native/llvm/object_abi.h')
 
 
 def identity(path: Path) -> dict[str, Any]:
@@ -116,15 +119,20 @@ class Plugin:
 
 
 def build(output: Path, *, config: Path | None = None, coverage: bool = False,
-          function_registry: bool = False, source_aware: bool = False) -> Plugin:
+          function_registry: bool = False, source_aware: bool = False,
+          object_lifetimes: bool = False) -> Plugin:
     """Build a fresh policy-neutral plugin and bind the actual inputs/product."""
-    if type(coverage) is not bool or type(function_registry) is not bool or type(source_aware) is not bool:
+    if any(type(flag) is not bool for flag in (coverage, function_registry, source_aware, object_lifetimes)):
         raise ValueError('LLVM coverage and function registry selection must be boolean')
+    if object_lifetimes and not source_aware:
+        raise ValueError('LLVM object profile requires registered source-aware function instrumentation')
     if source_aware and not function_registry:
+
         raise ValueError('LLVM source profile requires function registration')
     tools = discover(config)
     source = identity(SOURCE)
     header = identity(HEADER)
+    object_inputs = [identity(path) for path in OBJECT_INPUTS] if object_lifetimes else []
     output.mkdir(mode=0o700)
     output = output.resolve(strict=True)
     plugin = output / ('libotelc_llvm.dylib' if sys.platform == 'darwin' else 'libotelc_llvm.so')
@@ -136,23 +144,47 @@ def build(output: Path, *, config: Path | None = None, coverage: bool = False,
         command.append('-DOTELC_FUNCTION_REGISTRY_V1=1')
     if source_aware:
         command.append('-DOTELC_SOURCE_PROFILE_V1=1')
-    result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=180)
-    (output / 'build.stdout').write_bytes(result.stdout)
-    (output / 'build.stderr').write_bytes(result.stderr)
-    (output / 'command.json').write_text(json.dumps(command, indent=2) + '\n')
-    (output / 'compile_commands.json').write_text(json.dumps([
-        {'directory': str(ROOT), 'file': str(SOURCE), 'arguments': command}], indent=2) + '\n')
-    if result.returncode:
+    commands = [command]
+    database = [{'directory': str(ROOT), 'file': str(SOURCE), 'arguments': command}]
+    if object_lifetimes:
+        common = [str(Path(tools['directory']) / 'clang++'), '-fPIC', '-O2', *tools['cxxflags'],
+                  '-DOTELC_FUNCTION_REGISTRY_V1=1', '-DOTELC_SOURCE_PROFILE_V1=1',
+                  '-DOTELC_OBJECT_WITH_FUNCTIONS_V1=1']
+        if coverage:
+            common.extend(['-fprofile-instr-generate', '-fcoverage-mapping'])
+        objects = [output / 'functions.o', output / 'objects.o']
+        commands = [[*common, '-c', str(source_path), '-o', str(obj)]
+                    for source_path, obj in zip((SOURCE, OBJECT_INPUTS[0]), objects, strict=True)]
+        database = [{'directory': str(ROOT), 'file': str(source_path), 'arguments': argv}
+                    for source_path, argv in zip((SOURCE, OBJECT_INPUTS[0]), commands, strict=True)]
+        commands.append([common[0], '-shared', *map(str, objects), *tools['ldflags'],
+                         *(['-fprofile-instr-generate'] if coverage else []), '-o', str(plugin)])
+    stdout, stderr, exit_code = bytearray(), bytearray(), 0
+    for argv in commands:
+        result = subprocess.run(argv, cwd=ROOT, capture_output=True, timeout=180)
+        stdout.extend(result.stdout); stderr.extend(result.stderr)
+        if result.returncode:
+            exit_code = result.returncode
+            break
+    (output / 'build.stdout').write_bytes(stdout)
+    (output / 'build.stderr').write_bytes(stderr)
+    (output / 'command.json').write_text(json.dumps(command if not object_lifetimes else commands, indent=2) + '\n')
+    (output / 'compile_commands.json').write_text(json.dumps(database, indent=2) + '\n')
+    if exit_code:
         raise ValueError('LLVM plugin compilation failed; see build.stderr')
     if identity(SOURCE) != source or identity(HEADER) != header or not unchanged(tools):
         raise ValueError('LLVM source or tooling changed during compilation')
+    if object_inputs != ([identity(path) for path in OBJECT_INPUTS] if object_lifetimes else []):
+        raise ValueError('LLVM object sources changed during compilation')
     value = {'schema_version': 1, 'kind': 'otelc.llvm-plugin',
-             'profile': SOURCE_PROFILE if source_aware else REGISTERED_PROFILE if function_registry else PROFILE,
+             'profile': OBJECT_PROFILE if object_lifetimes else SOURCE_PROFILE if source_aware else REGISTERED_PROFILE if function_registry else PROFILE,
              'source': source, 'headers': [header], 'toolchain': tools, 'plugin': identity(plugin),
              'evidence': {name: identity(output / name) for name in
                           ('command.json', 'compile_commands.json', 'build.stdout', 'build.stderr')},
              'coverage': coverage, 'probe_abi': 'otelc.function.v2' if function_registry else 'otelc.function.v1',
              'source_complete': False}
+    if object_lifetimes:
+        value.update(object_inputs=object_inputs, object_probe_abi='otelc.object.v1')
     encoded = json.dumps(value, sort_keys=True, indent=2) + '\n'
     (output / MANIFEST).write_text(encoded)
     return Plugin(output, encoded)
@@ -174,6 +206,9 @@ def verify(plugin: Plugin) -> dict[str, Any]:
         raise ValueError('LLVM plugin manifest changed after compilation')
     value = plugin.manifest()
     tools = value['toolchain']
+    expected_objects = [identity(path) for path in OBJECT_INPUTS] if value['profile'] == OBJECT_PROFILE else []
+    if value.get('object_inputs', []) != expected_objects:
+        raise ValueError('LLVM object source inputs changed')
     name = 'libotelc_llvm.dylib' if sys.platform == 'darwin' else 'libotelc_llvm.so'
     if (value['source'] != identity(SOURCE) or value['headers'] != [identity(HEADER)]
             or value['plugin'] != identity(output / name)

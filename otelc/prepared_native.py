@@ -18,21 +18,23 @@ from otelc.config import Policy
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = native_build.PROFILE
 REQUEST, PLAN, PREPARED = 'native-request.json', 'native-plan.json', 'native-prepared.json'
-APPLICATION_START = 'native-application-start.json'
 REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'policy',
                   'arguments', 'plain', 'wait_ms', 'launch_id'}
 
 
 def protocols(*, build_version: int = 2) -> dict[str, Any]:
     """Negotiate the candidate formats without application or tool execution."""
-    if type(build_version) is not int or build_version not in (2, 3):
-        raise ValueError('native protocols support explicit build2 or3')
+    if type(build_version) is not int or build_version not in (2, 3, 4):
+        raise ValueError('native protocols support explicit build2,3 or4')
     value = {'schema_version': 1, 'kind': 'otelc.native.protocols', 'profile': PROFILE,
             'build': build_version, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
             'execution': 1, 'host_release': 1, 'gate': 1, 'embedded_sdk': True,
             'source_complete': False}
-    if build_version == 3:
+    if build_version in (3, 4):
         value['unit_recipe'] = 1
+    if build_version == 4:
+        value['object_inventory'] = 2
+        value['object_probe_abi'] = 'otelc.object.v1'
     return value
 
 
@@ -146,7 +148,7 @@ def application(value: dict[str, Any], original: dict[str, Any], resolved: dict[
 def release(runtime: Path, *, pid: int, supervisor_pid: int) -> None:
     """Publish one explicit acknowledgement after the host has verified ownership."""
     original, resolved, _, _ = verify(runtime)
-    start, _ = files.read(runtime / APPLICATION_START)
+    start, _ = files.read(runtime / 'native-application-start.json')
     if (type(pid) is not int or type(supervisor_pid) is not int or pid <= 1 or supervisor_pid <= 1
             or not same(start.get('pid'), pid)):
         raise ValueError('native release does not identify the owned application')
@@ -167,9 +169,11 @@ def validate_health(value: dict[str, Any], *, built: native_launch.Build,
         raise ValueError('native SDK checkpoint does not identify the launched build/policy/process')
 
 
-def _execution_owner(value: dict[str, Any], start: dict[str, Any], original: dict[str, Any],
-                     resolved: dict[str, Any], supervisor_pid: int, parent_pid: int, returncode: int) -> None:
-    """Check closed fields and the actual supervisor before child observations."""
+def execution(runtime: Path, *, supervisor_pid: int, parent_pid: int, returncode: int) -> dict[str, Any]:
+    """Bind completed process observations; release alone is not image proof."""
+    original, resolved, built, _ = verify(runtime)
+    value, _ = files.read(runtime / 'native-execution.json')
+    start, _ = files.read(runtime / 'native-supervisor-start.json')
     expected_start = {'schema_version': 1, 'kind': 'otelc.native.supervisor', 'pid': supervisor_pid,
                       'parent_pid': parent_pid, 'process_group': supervisor_pid,
                       'session': supervisor_pid, 'launch_id': original['launch_id']}
@@ -190,27 +194,17 @@ def _execution_owner(value: dict[str, Any], start: dict[str, Any], original: dic
             or value.get('request_sha256') != native_launch.digest(original)
             or value.get('plan_sha256') != native_launch.digest(resolved)):
         raise ValueError('native execution does not match the owned supervisor and request')
-
-
-def _execution_application(runtime: Path, value: dict[str, Any], original: dict[str, Any],
-                           resolved: dict[str, Any], supervisor_pid: int) -> dict[str, Any] | None:
-    """Retain one child identity, including refused and unreleased executions."""
     app = value['application']
     if app is not None:
         if type(app) is not dict:
             raise ValueError('invalid native application observation')
         application(app, original, resolved, supervisor_pid)
-        observed, _ = files.read(runtime / APPLICATION_START)
+        observed, _ = files.read(runtime / 'native-application-start.json')
         if not same(observed, app):
             raise ValueError('native execution changed its application observation')
     if value['released'] and (app is None or value['process_exit_code'] is None):
         raise ValueError('native release requires an observed child and exit')
-    return app
-
-
-def _execution_health(runtime: Path, checkpoint: dict[str, Any] | None, app: dict[str, Any] | None,
-                      original: dict[str, Any], built: native_launch.Build) -> None:
-    """An SDK checkpoint must match both the owned app and its actual final file."""
+    checkpoint = value['sdk_health']
     if checkpoint is not None:
         if original['plain'] or app is None:
             raise ValueError('native SDK health requires an instrumented application')
@@ -218,66 +212,15 @@ def _execution_health(runtime: Path, checkpoint: dict[str, Any] | None, app: dic
         observed = health.read(runtime / 'app/health.json')
         if not same(checkpoint, observed):
             raise ValueError('native SDK health does not match the launched application')
-
-
-def _execution_complete(value: dict[str, Any], original: dict[str, Any], returncode: int) -> None:
-    """A successful supervisor must account for release, inputs and child exit."""
-    if value['failures']:
-        return
-    if (not value['released'] or not value['inputs_rechecked']
-            or not original['plain'] and value['sdk_health'] is None):
+    if not value['failures'] and (not value['released'] or not value['inputs_rechecked']
+                                 or not original['plain'] and checkpoint is None):
         raise ValueError('native execution lacks its final observations')
-    child_exit = value['process_exit_code']
-    expected_exit = 128 - child_exit if child_exit < 0 else child_exit
-    if returncode != expected_exit:
-        raise ValueError('native child exit contradicts the observed supervisor exit')
-
-
-def execution(runtime: Path, *, supervisor_pid: int, parent_pid: int, returncode: int) -> dict[str, Any]:
-    """Bind completed process observations; release alone is not image proof."""
-    original, resolved, built, _ = verify(runtime)
-    value, _ = files.read(runtime / 'native-execution.json')
-    start, _ = files.read(runtime / 'native-supervisor-start.json')
-    _execution_owner(value, start, original, resolved, supervisor_pid, parent_pid, returncode)
-    app = _execution_application(runtime, value, original, resolved, supervisor_pid)
-    _execution_health(runtime, value['sdk_health'], app, original, built)
-    _execution_complete(value, original, returncode)
+    if not value['failures']:
+        child_exit = value['process_exit_code']
+        expected_exit = 128 - child_exit if child_exit < 0 else child_exit
+        if returncode != expected_exit:
+            raise ValueError('native child exit contradicts the observed supervisor exit')
     return value
-
-
-def _waiting_application(runtime: Path, process: subprocess.Popen) -> dict[str, Any] | None:
-    """Read the waiting-child record or retain the supervisor's actual exit."""
-    deadline = time.monotonic() + 30
-    app = None
-    while app is None:
-        if process.poll() is not None:
-            return None
-        if time.monotonic() >= deadline:
-            raise ValueError('native owned child did not reach its host gate')
-        try:
-            app, _ = files.read(runtime / APPLICATION_START)
-        except (FileNotFoundError, files.PublicationPending):
-            pass
-        time.sleep(.01)
-    return app
-
-
-def _cancel_supervisor(process: subprocess.Popen, owned_pid: int | None) -> None:
-    """Reap the supervisor and only the already validated child's private group."""
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        if owned_pid is not None:
-            try:
-                if os.getpgid(owned_pid) == owned_pid:
-                    os.killpg(owned_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        process.kill()
-        process.wait(timeout=3)
 
 
 def run(policy: Policy, runtime: Path, *, build_directory: Path,
@@ -287,16 +230,22 @@ def run(policy: Policy, runtime: Path, *, build_directory: Path,
     if prepare_only:
         print(json.dumps(value, indent=2))
         return 0
-    # Only the verified interpreter, fixed isolated script and one runtime path
-    # reach this argv. Literal application arguments remain in the request.
     process = subprocess.Popen(command(runtime), start_new_session=True)
     app = None
     owned_pid = None
     try:
-        app = _waiting_application(runtime, process)
-        if app is None:
-            execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(), returncode=process.returncode)
-            return process.returncode
+        deadline = time.monotonic() + 30
+        while app is None:
+            if process.poll() is not None:
+                execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(), returncode=process.returncode)
+                return process.returncode
+            if time.monotonic() >= deadline:
+                raise ValueError('native owned child did not reach its host gate')
+            try:
+                app, _ = files.read(runtime / 'native-application-start.json')
+            except (FileNotFoundError, files.PublicationPending):
+                pass
+            time.sleep(.01)
         original, resolved, _, _ = verify(runtime)
         application(app, original, resolved, process.pid)
         if os.getpgid(app['pid']) != app['pid'] or os.getsid(app['pid']) != app['pid']:
@@ -307,4 +256,18 @@ def run(policy: Policy, runtime: Path, *, build_directory: Path,
         execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(), returncode=code)
         return code
     finally:
-        _cancel_supervisor(process, owned_pid)
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # The supervisor normally reaps its child. If it cannot finish,
+                # cancel only the already validated child's private group.
+                if owned_pid is not None:
+                    try:
+                        if os.getpgid(owned_pid) == owned_pid:
+                            os.killpg(owned_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.kill()
+                process.wait(timeout=3)

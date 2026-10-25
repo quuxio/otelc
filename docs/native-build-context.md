@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: candidate build-3 component. This accepts explicit C/C++ compilation contexts and a separate neutral observation driver without editing application source. The ordinary schema-3 TOML policy still selects instrumentation and live metric controls. The recipe describes an existing build, not another instrumentation policy. Automatic compilation-database/build-system discovery, generated oteleq provider integration, native lifetimes and task/service propagation remain work.
+Status: candidate build-3 component. This accepts explicit C/C++ compilation contexts and a separate neutral observation driver without editing application source. The ordinary schema-3 TOML policy still selects instrumentation and live metric controls. The recipe describes an existing build, not another instrumentation policy. Automatic compilation-database/build-system discovery, generated oteleq provider qualification and task/service propagation remain work. The separate [build-4 candidate](native-public-lifetimes.md) adds C++ lifetimes through these same unit recipes.
 
 ## Select the format
 
@@ -10,7 +10,7 @@ Status: candidate build-3 component. This accepts explicit C/C++ compilation con
 bin/quux-otelc native-protocols --build-version 3
 ```
 
-This returns `native-owned-v1` with `build: 3` and `unit_recipe: 1`. Preparation, command, release and execution records retain version 1. Default discovery and `native-build --source` keep build 2. A consumer must explicitly negotiate the new recipe before using it.
+This returns `native-owned-v1` with `build: 3` and `unit_recipe: 1`. Preparation, command, release and execution records retain version 1. Default discovery and function-only `native-build --source` keep build 2. Enabled C++ lifetime policies explicitly select build 4. A consumer must explicitly negotiate the new recipe before using it.
 
 For the ordinary application and common policy in the [native launch guide](native-launch.md), a minimal `/tmp/native-context.json` is:
 
