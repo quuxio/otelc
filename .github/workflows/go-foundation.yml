@@ -72,6 +72,15 @@ jobs:
             go -C "$task_fixture" list -mod=readonly -m all
             git diff --exit-code -- "$task_fixture/go.mod" "$task_fixture/go.sum"
           done
+      - name: Check generated context helpers against the official SDK
+        env:
+          PYTHONPATH: .:tests
+        run: |
+          .venv/bin/python -m unittest \
+            test_go_context_integration.GoContextIntegrationTests.test_generated_detach_helper_has_compiled_component_coverage \
+            test_go_telemetry_bundle.GoTelemetryBundleTests.test_exact_helper_has_compiled_coverage_and_real_baggage_clear_semantics \
+            -v 2>&1 | tee build/go-foundation/context-fixtures.log
+          git diff --exit-code -- tests/fixtures/go-detached tests/fixtures/go-telemetry
       - name: Retain small test and coverage records
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -86,3 +95,6 @@ jobs:
             build/go-coverage.out
             build/go-sonar-coverage.out
             build/go-dependencies.txt
+            build/go-detach-component-coverage.json
+            build/go-telemetry-component-coverage.json
+            build/go-upstream/toolchain.json
