@@ -13,6 +13,8 @@ public final class SafeSpan implements Span {
 
   public SafeSpan(Span delegate) { this.delegate = delegate; }
 
+  Span original() { return delegate; }
+
   @Override public Span recordException(Throwable error, Attributes attributes) {
     if (error != null) delegate.addEvent("exception", attributes.toBuilder()
         .put("exception.type", error.getClass().getName()).build());

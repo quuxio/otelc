@@ -1,0 +1,67 @@
+cmake_minimum_required(VERSION 3.22)
+project(otelc_native_controls LANGUAGES C CXX)
+
+include(FetchContent)
+set(OTELCPP_WITH_STL CXX17 CACHE STRING "" FORCE)
+set(OTELCPP_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OTELCPP_WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(OTELCPP_WITH_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(OTELCPP_WITH_CONFIGURATION OFF CACHE BOOL "" FORCE)
+set(OTELCPP_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(otelcpp
+  URL https://codeload.github.com/open-telemetry/opentelemetry-cpp/tar.gz/c7b64ec660c1b6c65dff0932b3d1c3483bc6db64
+  TLS_VERIFY ON
+  URL_HASH SHA256=2e1df07f6217833e13819d12716f52fa93103dfe6b8826c76fb2868da339712f)
+FetchContent_MakeAvailable(otelcpp)
+
+add_library(otelc_native_controls STATIC src/metric_control.cpp src/function_runtime.cpp src/object_runtime.cpp)
+target_include_directories(otelc_native_controls PUBLIC include ../../native/llvm)
+target_compile_features(otelc_native_controls PUBLIC cxx_std_17)
+target_link_libraries(otelc_native_controls PUBLIC opentelemetry_metrics opentelemetry_trace)
+target_compile_options(otelc_native_controls PRIVATE -Wall -Wextra -Werror)
+
+option(OTELC_NATIVE_COVERAGE "Profile otelc controls with LLVM tools" OFF)
+if(OTELC_NATIVE_COVERAGE)
+  target_compile_options(otelc_native_controls PRIVATE -fprofile-instr-generate -fcoverage-mapping)
+  target_link_options(otelc_native_controls INTERFACE -fprofile-instr-generate)
+endif()
+enable_testing()
+add_executable(otelc_native_controls_test tests/metric_control_test.cpp)
+target_link_libraries(otelc_native_controls_test PRIVATE otelc_native_controls)
+target_compile_options(otelc_native_controls_test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME native_metric_controls COMMAND otelc_native_controls_test)
+set_tests_properties(native_metric_controls PROPERTIES TIMEOUT 20)
+
+add_executable(otelc_native_functions_test tests/function_runtime_test.cpp)
+target_link_libraries(otelc_native_functions_test PRIVATE otelc_native_controls)
+target_compile_options(otelc_native_functions_test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME native_function_runtime COMMAND otelc_native_functions_test)
+set_tests_properties(native_function_runtime PROPERTIES TIMEOUT 30)
+
+set(OTELC_FUNCTION_PLUGIN "" CACHE FILEPATH "Checked registered LLVM pass for ordinary fixture sources")
+if(OTELC_FUNCTION_PLUGIN)
+  add_library(otelc_function_fixtures OBJECT tests/fixtures/functions.c tests/fixtures/functions.cpp)
+  target_compile_features(otelc_function_fixtures PRIVATE cxx_std_17)
+  target_compile_options(otelc_function_fixtures PRIVATE
+    -O2 -fexceptions "-fpass-plugin=${OTELC_FUNCTION_PLUGIN}")
+  target_sources(otelc_native_functions_test PRIVATE $<TARGET_OBJECTS:otelc_function_fixtures>)
+  target_compile_definitions(otelc_native_functions_test PRIVATE OTELC_HAVE_LLVM_FIXTURES=1)
+endif()
+
+add_executable(otelc_native_objects_test tests/object_runtime_test.cpp)
+target_link_libraries(otelc_native_objects_test PRIVATE otelc_native_controls)
+target_compile_options(otelc_native_objects_test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME native_object_runtime COMMAND otelc_native_objects_test)
+set_tests_properties(native_object_runtime PROPERTIES TIMEOUT 30)
+
+set(OTELC_OBJECT_PLUGIN "" CACHE FILEPATH "Checked object-boundary compiler component")
+set(OTELC_OBJECT_INVENTORY "" CACHE FILEPATH "Checked original-source Clang lifetime inventory")
+if(OTELC_OBJECT_PLUGIN AND OTELC_OBJECT_INVENTORY)
+  add_library(otelc_object_fixtures OBJECT ../../tests/fixtures/native-objects.cpp)
+  target_compile_features(otelc_object_fixtures PRIVATE cxx_std_17)
+  target_compile_options(otelc_object_fixtures PRIVATE -O2 -g -fexceptions "-fpass-plugin=${OTELC_OBJECT_PLUGIN}")
+  set_property(TARGET otelc_object_fixtures PROPERTY CXX_COMPILER_LAUNCHER
+    "${CMAKE_COMMAND};-E;env;OTELC_OBJECT_INVENTORY=${OTELC_OBJECT_INVENTORY};LLVM_PROFILE_FILE=${CMAKE_BINARY_DIR}/object-compiler-%m-%p.profraw")
+  target_sources(otelc_native_objects_test PRIVATE $<TARGET_OBJECTS:otelc_object_fixtures>)
+  target_compile_definitions(otelc_native_objects_test PRIVATE OTELC_HAVE_OBJECT_FIXTURES=1 OTELC_OBJECT_FUNCTION_PROFILE=1)
+endif()

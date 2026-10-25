@@ -1,14 +1,18 @@
-"""Version-one runtime health shape validation, not a delivery guarantee."""
+"""Versioned runtime health shape validation, not a delivery guarantee."""
 
 from __future__ import annotations
 
 import errno
-import json
 import os
 import re
 import stat
 from pathlib import Path
 from typing import Any
+
+from otelc import python_health
+from otelc.python_sdk_io import decode
+
+MAX_REPORT = 65536
 
 
 def _counter(value: object) -> bool:
@@ -22,7 +26,7 @@ def _observers(value: object) -> bool:
 def _identity(value: Any) -> None:
     if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
             or value["schema_version"] != 1 or value.get("kind") != "otelc.runtime-health"
-            or value.get("language") != "java" or value.get("scope") != "sdk_pipeline"
+            or value.get("language") not in ("java", "c", "cpp") or value.get("scope") != "sdk_pipeline"
             or type(value.get("pid")) is not int or value["pid"] <= 0
             or value.get("phase") not in ("running", "final")
             or type(value.get("sdk_attached")) is not bool):
@@ -53,6 +57,8 @@ def _exports(exports: Any, unit: str) -> None:
 
 def validate(value: Any) -> dict[str, Any]:
     """Require the public report shape; consumers must assess its actual evidence."""
+    if type(value) is dict and value.get('schema_version') == 2:
+        return python_health.validate(value)
     _identity(value)
     lifecycle = value.get("lifecycle")
     outcomes = ("not_started", "pending", "succeeded", "failed", "timed_out", "unavailable")
@@ -65,6 +71,22 @@ def validate(value: Any) -> dict[str, Any]:
     _span_accounting(value.get("span_accounting"))
     _exports(value.get("trace_exports"), "spans")
     _exports(value.get("metric_exports"), "metric_points")
+    if value['language'] in ('c', 'cpp'):
+        functions = value.get('function_accounting')
+        counters = ('registered', 'started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors')
+        if (not isinstance(functions, dict) or type(functions.get('closed')) is not bool
+                or any(not isinstance(functions.get(key), str) or not _counter(functions[key]) for key in counters)
+                or value.get('source_complete') is not False):
+            raise ValueError('invalid native function accounting')
+    if 'object_accounting' in value:
+        objects = value['object_accounting']
+        counters = ('types', 'admitted', 'completed', 'live', 'destroying', 'ending',
+                    'censored', 'lost', 'duplicates', 'invalid')
+        if (value['language'] != 'cpp' or type(objects) is not dict
+                or set(objects) != set(counters) | {'closing', 'closed'}
+                or any(type(objects.get(key)) is not bool for key in ('closing', 'closed'))
+                or any(type(objects.get(key)) is not str or not _counter(objects[key]) for key in counters)):
+            raise ValueError('invalid native object accounting')
     if value.get("downstream_receipt") != "unavailable" or value.get("otlp_partial_rejection") != "unavailable":
         raise ValueError("unsupported runtime health delivery claim")
     return value
@@ -82,9 +104,12 @@ def read(path: Path) -> dict[str, Any]:
         data = _read_report(directory)
     finally:
         os.close(directory)
-    if len(data) > 4096:
+    if len(data) > MAX_REPORT:
         raise ValueError("oversized runtime health report")
-    return validate(json.loads(data))
+    value = decode(data)
+    if value.get('schema_version') != 2 and len(data) > 4096:
+        raise ValueError('oversized version-one runtime health report')
+    return validate(value)
 
 
 def _read_report(directory: int) -> bytes:
@@ -98,11 +123,11 @@ def _read_report(directory: int) -> bytes:
     try:
         metadata = os.fstat(descriptor)
         if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
-                or metadata.st_uid != os.getuid() or metadata.st_size > 4096):
+                or metadata.st_uid != os.getuid() or metadata.st_size > MAX_REPORT):
             raise ValueError("expected a bounded private runtime health report")
         # Retain ownership until the wrapper has been constructed and closed.
         # fdopen itself can raise, for example when given a directory descriptor.
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            return stream.read(4097)
+            return stream.read(MAX_REPORT + 1)
     finally:
         os.close(descriptor)

@@ -69,7 +69,7 @@ class NodeCliTests(unittest.TestCase):
                         self.assertFalse(audit.exists(), 'version probe executed the application preload')
                         self.assertEqual(os.environ['NODE_OPTIONS'], options)
                     runtime = root / ('plain' if plain else 'instrumented')
-                    invocation = [sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
+                    invocation = [sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy), 'node',
                         '--language', 'javascript', '--entry', str(entry), '--root', str(root),
                         '--runtime', str(runtime), *(['--plain'] if plain else [])]
                     result = subprocess.run(invocation, cwd=ROOT, env=environment,
@@ -94,7 +94,7 @@ class NodeCliTests(unittest.TestCase):
                 original = source.read_bytes()
                 for plain in (True, False):
                     with self.subTest(language=language, plain=plain):
-                        result = subprocess.run([sys.executable, '-m', 'otelc', '--config', str(policy),
+                        result = subprocess.run([sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy),
                             'example', language, *(['--plain'] if plain else [])], cwd=ROOT,
                             input='10\nquit\n', capture_output=True, text=True, timeout=20)
                         self.assertEqual(result.returncode, 0, result.stderr)
@@ -129,7 +129,7 @@ class NodeCliTests(unittest.TestCase):
                 '[export]\ninterval_ms = 60000\ntimeout_ms = 2000\n'
                 f'endpoint = "http://127.0.0.1:{capture.server.server_port}"\n')
             runtime = root / 'runtime'
-            invocation = [sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
+            invocation = [sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy), 'node',
                 '--language', 'javascript', '--entry', str(entry), '--root', str(root), '--runtime', str(runtime)]
             with subprocess.Popen(invocation, cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True) as launcher:
@@ -202,7 +202,7 @@ class NodeCliTests(unittest.TestCase):
             arguments = ['7', 'argument with spaces', '--literal', '7']
             for plain in (True, False):
                 runtime = root / ('plain' if plain else 'instrumented')
-                invocation = [sys.executable, '-m', 'otelc', '--config', str(policy), 'node',
+                invocation = [sys.executable, '-I', '-S', '-B', str(ROOT / 'otelc/cli_bootstrap.py'), '--config', str(policy), 'node',
                     '--language', language, '--entry', str(entry), '--root', str(root),
                     '--runtime', str(runtime.relative_to(ROOT) if language == 'javascript' else runtime),
                     '--backend', backend, *(['--plain'] if plain else []),

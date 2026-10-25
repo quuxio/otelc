@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Select object types in the same policy used for function instrumentation. The application needs no telemetry imports, annotations or probes. The current rebuild implements the internal Java example; the remaining adapters follow the [delivery plan](rebuild-plan.md).
+Select object types in the same policy used for function instrumentation. The application needs no telemetry imports, annotations or probes. The Java example and the Node, Python and C++ candidates have the distinct observation boundaries below. Complete language acceptance follows the [delivery plan](rebuild-plan.md).
 
 ```toml
 [lifetimes]
@@ -21,10 +21,10 @@ max_live = 1000000
 | --- | --- | --- |
 | `observed_gc` | Successful construction to weak-reference collection notification | Java final concrete classes with one constructor, in the example's application classloader |
 | `resource` | Successful construction to the first normal return from a selected instance release method | Java zero-argument synchronous `void` methods, such as existing `close()` |
-| Destruction | Complete object construction to destruction, including exception unwinding | Planned C++/LLVM adapter |
+| Destruction | Complete object construction to destruction, including exception unwinding | Non-trivial C++ complete objects in the [explicit native build-4 candidate](native-public-lifetimes.md); its declared boundaries apply |
 | Drop | Completed construction to ownership-driven drop | Planned Rust adapter |
 | Allocation/free | Selected allocation to matching free or resource release | Planned C/LLVM adapter |
-| Other managed runtimes | Observed GC where the runtime permits it, plus explicit resource release | Planned TypeScript/JavaScript, Python and Go adapters |
+| Other managed runtimes | Observed GC where the runtime permits it, plus explicit resource release | [Node](node-source.md) and [Python](python-native.md) candidates with declared source/runtime limits; Go planned |
 
 GC notification has no exact destruction-time guarantee. A long observed interval can include time waiting for the collector and observer. It must not be compared as an equivalent of C++ destruction or Rust drop. See the [JDK reference queue contract](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/ref/ReferenceQueue.html).
 
@@ -32,7 +32,7 @@ GC notification has no exact destruction-time guarantee. A long observed interva
 
 ```sh
 make setup java-build stack-up
-.venv/bin/python -m otelc example java
+bin/quux-otelc example java
 ```
 
 Enter `10`, then `gc`. The first command allocates and closes ten ordinary `WorkItem` objects. The fixture's `gc` command requests GC for demonstration; production instrumentation does not force it. Enter `lifecycle`, then `gc`, to exercise a failed constructor, a failed close followed by retry, duplicate close and an abandoned object. Enter `quit` to exit.

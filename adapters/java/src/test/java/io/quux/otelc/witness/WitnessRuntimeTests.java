@@ -1,0 +1,401 @@
+package io.quux.otelc.witness;
+
+import static net.bytebuddy.matcher.ElementMatchers.hasDescriptor;
+import static net.bytebuddy.matcher.ElementMatchers.named;
+import static org.junit.jupiter.api.Assertions.*;
+
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.common.CompletableResultCode;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.data.SpanData;
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
+import io.opentelemetry.sdk.trace.export.SpanExporter;
+import io.quux.otelc.MethodsModule;
+import java.lang.instrument.Instrumentation;
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Proxy;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.regex.Pattern;
+import net.bytebuddy.ByteBuddy;
+import net.bytebuddy.asm.Advice;
+import net.bytebuddy.dynamic.ClassFileLocator;
+import net.bytebuddy.pool.TypePool;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+
+class WitnessRuntimeTests {
+  @TempDir Path root;
+
+  @Test void unmeasuredControlAdviceDoesNotLoadTheFunctionObserver() throws Exception {
+    String owner = "io/quux/otelc/witness/UnmeasuredControl";
+    byte[] original = fixture(owner);
+    try (var locator = new ClassFileLocator.Compound(ClassFileLocator.Simple.of(owner.replace('/', '.'), original),
+        ClassFileLocator.ForClassLoader.ofSystemLoader())) {
+      byte[] transformed = new ByteBuddy().redefine(TypePool.Default.of(locator).describe(owner.replace('/', '.')).resolve(), locator)
+          .visit(Advice.withCustomMapping().bind(MethodsModule.Probe.class, "0".repeat(64))
+              .bind(MethodsModule.Measured.class, false).to(MethodsModule.RoleAdvice.class)
+              .on(named("target"))).make().getBytes();
+      class Loader extends ClassLoader {
+        int observerLookups;
+        Loader() { super(WitnessRuntimeTests.class.getClassLoader()); }
+        @Override protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+          if (name.equals("io.quux.otelc.methods.Observer")) {
+            observerLookups++;
+            throw new ClassNotFoundException("an unmeasured control has no function observer");
+          }
+          return super.loadClass(name, resolve);
+        }
+        Class<?> define(byte[] bytes) { return defineClass(null, bytes, 0, bytes.length); }
+      }
+      Loader loader = new Loader();
+      assertEquals(8, loader.define(transformed).getMethod("target", int.class).invoke(null, 7));
+      assertEquals(0, loader.observerLookups);
+    }
+  }
+
+  private static final class Exporter implements SpanExporter {
+    final List<SpanData> spans = new ArrayList<>();
+    final List<CompletableResultCode> pending = new ArrayList<>();
+    boolean delay;
+    boolean fail;
+    @Override public CompletableResultCode export(Collection<SpanData> batch) {
+      spans.addAll(batch);
+      CompletableResultCode result = delay ? new CompletableResultCode()
+          : fail ? CompletableResultCode.ofFailure() : CompletableResultCode.ofSuccess();
+      if (delay) pending.add(result);
+      return result;
+    }
+    @Override public CompletableResultCode flush() { return CompletableResultCode.ofSuccess(); }
+    @Override public CompletableResultCode shutdown() { return CompletableResultCode.ofSuccess(); }
+  }
+
+  @Test void actualAdviceOwnershipControlAndExporterCallbacks() throws Exception {
+    String owner = "io/quux/otelc/witness/GeneratedAction";
+    byte[] original = fixture(owner);
+    Map<String, WitnessBindings.Declaration> declarations = new HashMap<>();
+    for (String role : WitnessPlan.ROLES) declarations.put(role,
+        new WitnessBindings.Declaration(owner, role, role.equals("rendezvous") ? "()V" : "(I)I"));
+    var bindings = WitnessBindings.compile(Map.of(owner, original), declarations);
+    var domain = getClass().getProtectionDomain();
+    var defined = new ArrayList<Class<?>>();
+    Instrumentation instrumentation = (Instrumentation) Proxy.newProxyInstance(getClass().getClassLoader(),
+        new Class<?>[] {Instrumentation.class}, (proxy, method, args) -> switch (method.getName()) {
+          case "getAllLoadedClasses" -> defined.toArray(Class<?>[]::new);
+          case "addTransformer" -> null;
+          case "removeTransformer" -> true;
+          default -> throw new AssertionError(method.getName());
+        });
+    String origin = domain.getCodeSource().getLocation().toExternalForm();
+    var plan = new WitnessPlan(root.resolve("witness.sock"), bindings, Map.of(owner, origin),
+        "a".repeat(64), "b".repeat(64), "c".repeat(64), "d".repeat(64));
+    try (var capture = WitnessClassCapture.install(instrumentation, bindings, plan.origins())) {
+      capture.transform(null, getClass().getClassLoader(), owner, null, domain, original);
+      var clock = new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
+      var runtime = new WitnessRuntime(plan, capture, clock::get);
+      try (var locator = new ClassFileLocator.Compound(ClassFileLocator.Simple.of(owner.replace('/', '.'), original),
+          ClassFileLocator.ForClassLoader.ofSystemLoader())) {
+        var builder = new ByteBuddy().redefine(TypePool.Default.of(locator).describe(owner.replace('/', '.')).resolve(), locator);
+        for (var binding : bindings.values()) builder = builder.visit(Advice.withCustomMapping()
+            .bind(MethodsModule.Probe.class, binding.probeId()).bind(MethodsModule.Measured.class, false)
+            .to(MethodsModule.RoleAdvice.class).on(named(binding.declaration().name()).and(hasDescriptor(binding.declaration().descriptor()))));
+        byte[] transformed = builder.visit(new WitnessMethodGuard(new ArrayList<>(bindings.values()), runtime::guarded)).make().getBytes();
+        Class<?> actual = MethodHandles.lookup().defineClass(transformed);
+        defined.add(actual);
+        Exporter exporter = new Exporter();
+        try (var provider = SdkTracerProvider.builder().addSpanProcessor(WitnessPipeline.processor(
+            SimpleSpanProcessor.create(WitnessPipeline.exporter(exporter, runtime)), runtime)).build()) {
+          runtime.attach(OpenTelemetrySdk.builder().setTracerProvider(provider).build());
+          var scenario = new Scenario(actual, plan, runtime, exporter, provider, clock);
+          scenario.control();
+          scenario.foreignReadyFirst();
+          scenario.ownsArm();
+          scenario.exports();
+          scenario.cancellationAndExpiry();
+          scenario.virtualThreadRefusal();
+          scenario.finalInvalidation(capture, owner, domain, original);
+        }
+      }
+    }
+  }
+
+  private static final class Scenario {
+    final Class<?> actual;
+    final WitnessPlan plan;
+    final WitnessRuntime runtime;
+    final Exporter exporter;
+    final SdkTracerProvider provider;
+    final java.util.concurrent.atomic.AtomicLong clock;
+    final List<String> armed = new ArrayList<>();
+    final String identity;
+    final java.lang.reflect.Method method;
+    final java.lang.reflect.Field callback;
+    String first;
+
+    Scenario(Class<?> actual, WitnessPlan plan, WitnessRuntime runtime, Exporter exporter,
+             SdkTracerProvider provider, java.util.concurrent.atomic.AtomicLong clock) throws Exception {
+      this.actual = actual; this.plan = plan; this.runtime = runtime; this.exporter = exporter;
+      this.provider = provider; this.clock = clock;
+      identity = property(command(runtime, "status"), "runtime_id");
+      method = actual.getMethod("envelope", int.class);
+      callback = actual.getField("CALLBACK");
+    }
+
+    void control() throws Exception {
+    assertTrue(command(runtime, "status").contains("\"pid\":" + ProcessHandle.current().pid() + ","));
+    assertTrue(runtime.command("1 " + "0".repeat(32) + " status").contains("invalid_request"));
+    assertTrue(exchange(plan.socket(), "2 " + "0".repeat(32) + " status\n").contains("\"scope\":null"));
+    assertTrue(exchange(plan.socket(), "unfinished").contains("invalid_request"));
+    assertTrue(exchange(plan.socket(), "x".repeat(2049) + "\n").contains("invalid_request"));
+    assertThrows(java.io.IOException.class, () -> WitnessServer.start(plan.socket(), runtime));
+    }
+
+    void foreignReadyFirst() throws Exception {
+      var ready = new java.util.concurrent.CountDownLatch(1);
+      var release = new java.util.concurrent.CountDownLatch(1);
+      var errors = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+      Thread intended = Thread.currentThread();
+      callback.set(null, (Runnable) () -> {
+        if (Thread.currentThread() != intended) {
+          ready.countDown();
+          try { assertTrue(release.await(3, java.util.concurrent.TimeUnit.SECONDS)); }
+          catch (InterruptedException error) { throw new AssertionError(error); }
+          return;
+        }
+        String status = command(runtime, "status");
+        assertNotEquals(Long.toString(intended.threadId()), property(status, "thread_id"));
+        String[] arguments = armArguments(status, plan);
+        arguments[10] = Long.toString(intended.threadId());
+        String refusal = command(runtime, "arm " + String.join(" ", arguments));
+        assertTrue(refusal.contains("arm_identity_mismatch"), refusal);
+        assertTrue(refusal.contains("\"phase\":\"ready\""), refusal);
+        assertTrue(refusal.contains("\"scope_id\":null"), refusal);
+      });
+      Thread foreign = Thread.ofPlatform().start(() -> {
+        try { assertEquals(8, method.invoke(null, 7)); }
+        catch (Throwable error) { errors.set(error); }
+      });
+      try {
+        assertTrue(ready.await(3, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(9, method.invoke(null, 8));
+      } finally {
+        release.countDown();
+        foreign.join(3000);
+      }
+      assertFalse(foreign.isAlive());
+      assertNull(errors.get());
+      String refused = command(runtime, "status");
+      assertEquals(Long.toString(foreign.threadId()), property(refused, "thread_id"));
+      assertTrue(refused.contains("\"scope_id\":null"), refused);
+      assertEquals(0, exporter.spans.size());
+    }
+
+    void virtualThreadRefusal() throws Exception {
+      callback.set(null, (Runnable) () -> {});
+      var errors = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+      Thread virtual = Thread.ofVirtual().start(() -> {
+        try { assertEquals(10, method.invoke(null, 9)); }
+        catch (Throwable error) { errors.set(error); }
+      });
+      virtual.join(3000);
+      assertFalse(virtual.isAlive());
+      assertNull(errors.get());
+      assertTrue(command(runtime, "status").contains("unsupported_virtual_thread"));
+    }
+
+    void ownsArm() throws Exception {
+    Thread ownerThread = Thread.currentThread();
+    var nested = new java.util.concurrent.atomic.AtomicBoolean();
+    callback.set(null, (Runnable) () -> {
+      if (Thread.currentThread() != ownerThread || nested.get()) return;
+      String status = command(runtime, "status");
+      assertTrue(status.contains("\"phase\":\"ready\""), status);
+      String[] arguments = armArguments(status, plan);
+      for (int index : new int[] {0, 1, 2, 5, 6, 7, 8, 9, 10}) {
+        String[] wrong = arguments.clone();
+        wrong[index] = index == 2 ? "999" : "0".repeat(wrong[index].length());
+        assertTrue(command(runtime, "arm " + String.join(" ", wrong)).contains("arm_identity_mismatch"));
+      }
+      String ack = command(runtime, "arm " + String.join(" ", arguments));
+      assertTrue(ack.contains("\"phase\":\"armed\""), ack);
+      armed.add(property(ack, "scope_id"));
+      assertTrue(command(runtime, "arm " + String.join(" ", arguments)).contains("not_ready"));
+      assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("root_active"));
+      // An unrelated reflective wrapper call must not consume or poison this envelope's arm.
+      try { assertEquals(100, actual.getMethod("wrapper", int.class).invoke(null, 99)); }
+      catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+      nested.set(true);
+      try {
+        assertEquals(100, method.invoke(null, 99));
+        var otherFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread noise = Thread.ofPlatform().start(() -> {
+          try { assertEquals(101, method.invoke(null, 100)); }
+          catch (ReflectiveOperationException | AssertionError error) { otherFailure.set(error); }
+        });
+        noise.join(2000);
+        assertFalse(noise.isAlive());
+        assertNull(otherFailure.get());
+        assertTrue(command(runtime, "status").contains("\"phase\":\"armed\""));
+      } catch (ReflectiveOperationException | InterruptedException error) { throw new AssertionError(error); }
+      finally { nested.set(false); }
+    });
+    assertEquals(8, method.invoke(null, 7));
+    first = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(first.contains("\"producer_complete\":true"), first);
+    assertEquals(2, exporter.spans.size());
+    }
+
+    void exports() throws Exception {
+    callback.set(null, (Runnable) () -> {
+      String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
+      armed.add(property(ack, "scope_id"));
+    });
+    var error = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> method.invoke(null, -1));
+    assertInstanceOf(IllegalArgumentException.class, error.getCause());
+    assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("\"producer_complete\":true"));
+    assertSame(io.opentelemetry.api.trace.StatusCode.ERROR, exporter.spans.getLast().getStatus().getStatusCode());
+    exporter.delay = true;
+    assertEquals(3, method.invoke(null, 2));
+    String pending = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(pending.contains("\"producer_complete\":false"), pending);
+    exporter.pending.forEach(CompletableResultCode::succeed);
+    String recovered = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(recovered.contains("\"producer_complete\":true"), recovered);
+    assertTrue(recovered.contains("\"flush_failures\":\"1\""), recovered);
+    exporter.delay = false; exporter.fail = true;
+    assertEquals(4, method.invoke(null, 3));
+    String failed = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(failed.contains("\"producer_complete\":false"), failed);
+    assertTrue(failed.contains("\"export_failures\":\"2\""), failed);
+    exporter.fail = false;
+    }
+
+    void cancellationAndExpiry() throws Exception {
+    callback.set(null, (Runnable) () -> {
+      String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
+      armed.add(property(ack, "scope_id"));
+      assertTrue(command(runtime, "cancel " + identity + " " + armed.getLast()).contains("cancelled"));
+    });
+    assertEquals(5, method.invoke(null, 4));
+    assertTrue(command(runtime, "end " + identity + " " + armed.getLast()).contains("\"producer_complete\":false"));
+    callback.set(null, (Runnable) () -> {
+      String ack = command(runtime, "arm " + String.join(" ", armArguments(command(runtime, "status"), plan)));
+      armed.add(property(ack, "scope_id"));
+    });
+    assertEquals(13, method.invoke(null, 12));
+    String recursive = command(runtime, "end " + identity + " " + armed.getLast());
+    assertTrue(recursive.contains("\"producer_complete\":true"), recursive);
+    assertTrue(recursive.contains("\"target_entries\":\"3\""), recursive);
+    callback.set(null, (Runnable) () -> {
+      String[] arguments = armArguments(command(runtime, "status"), plan);
+      clock.addAndGet(java.util.concurrent.TimeUnit.SECONDS.toNanos(31));
+      assertTrue(command(runtime, "arm " + String.join(" ", arguments)).contains("not_ready"));
+    });
+    assertEquals(6, method.invoke(null, 5));
+    assertTrue(command(runtime, "status").contains("\"failure\":\"expired\""));
+    assertTrue(runtime.command("invalid").contains("invalid_request"));
+    assertTrue(command(runtime, "status bad id").contains("invalid_request"));
+    assertTrue(command(runtime, "unknown").contains("unknown_operation"));
+    assertTrue(command(runtime, "end " + identity + " " + "0".repeat(32)).contains("unknown_scope"));
+    assertTrue(command(runtime, "cancel " + identity + " " + "0".repeat(32)).contains("unknown_scope"));
+    }
+
+    void finalInvalidation(WitnessClassCapture capture, String owner, java.security.ProtectionDomain domain, byte[] original) throws Exception {
+    var previous = io.opentelemetry.api.trace.SpanContext.create(property(first, "trace_id"),
+        property(first, "root_span_id"), io.opentelemetry.api.trace.TraceFlags.getSampled(),
+        io.opentelemetry.api.trace.TraceState.getDefault());
+    provider.get("late-control").spanBuilder("late")
+        .setParent(io.opentelemetry.context.Context.root().with(io.opentelemetry.api.trace.Span.wrap(previous)))
+        .setAttribute(WitnessRuntime.SCOPE, property(first, "scope_id")).startSpan().end();
+    String invalidated = command(runtime, "status " + identity + " " + property(first, "scope_id"));
+    assertTrue(invalidated.contains("\"phase\":\"invalidated\""), invalidated);
+    assertTrue(invalidated.contains("\"failure\":\"late_span\""), invalidated);
+    assertTrue(invalidated.contains("\"producer_complete\":false"), invalidated);
+    capture.transform(null, getClass().getClassLoader(), owner, actual, domain, original);
+    assertTrue(command(runtime, "arm").contains("class_identity_invalid"));
+    runtime.finish(false);
+    assertTrue(java.nio.file.Files.readString(plan.socket().getParent().resolve("witness-health.json")).contains("class_identity_invalid"));
+    callback.set(null, null);
+    }
+
+  }
+
+  private static String exchange(Path socket, String request) throws Exception {
+    try (var channel = java.nio.channels.SocketChannel.open(java.net.UnixDomainSocketAddress.of(socket))) {
+      channel.write(java.nio.charset.StandardCharsets.US_ASCII.encode(request));
+      channel.configureBlocking(false);
+      var input = java.nio.ByteBuffer.allocate(16384);
+      long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+      while (System.nanoTime() < deadline && input.hasRemaining()) {
+        if (channel.read(input) < 0 || input.position() > 0 && input.get(input.position() - 1) == '\n') break;
+        java.util.concurrent.locks.LockSupport.parkNanos(1_000_000);
+      }
+      return new String(input.array(), 0, input.position(), java.nio.charset.StandardCharsets.US_ASCII);
+    }
+  }
+
+  private static String command(WitnessRuntime runtime, String operation) {
+    return runtime.command("2 " + UUID.randomUUID().toString().replace("-", "") + " " + operation);
+  }
+
+  private static String property(String json, String key) {
+    var matcher = Pattern.compile("\"" + key + "\":\"([a-z0-9]+)\"").matcher(json);
+    assertTrue(matcher.find(), json);
+    return matcher.group(1);
+  }
+
+  private static String[] armArguments(String status, WitnessPlan plan) {
+    return new String[] {property(status, "runtime_id"), property(status, "cookie"), property(status, "sequence"),
+        "e".repeat(64), "f".repeat(64), plan.build(), plan.selection(), plan.tooling(),
+        plan.bindings().get("wrapper").probeId(), plan.policy(), property(status, "thread_id")};
+  }
+
+  private static byte[] fixture(String owner) {
+    ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+    writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, owner, null, "java/lang/Object", null);
+    writer.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "CALLBACK", "Ljava/lang/Runnable;", null, null).visitEnd();
+    for (String name : WitnessPlan.ROLES) {
+      var method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, name, name.equals("rendezvous") ? "()V" : "(I)I", null, null);
+      method.visitCode();
+      switch (name) {
+        case "rendezvous" -> {
+          method.visitFieldInsn(Opcodes.GETSTATIC, owner, "CALLBACK", "Ljava/lang/Runnable;");
+          method.visitMethodInsn(Opcodes.INVOKEINTERFACE, "java/lang/Runnable", "run", "()V", true);
+          method.visitInsn(Opcodes.RETURN);
+        }
+        case "envelope", "wrapper" -> {
+          if (name.equals("envelope")) method.visitMethodInsn(Opcodes.INVOKESTATIC, owner, "rendezvous", "()V", false);
+          method.visitVarInsn(Opcodes.ILOAD, 0);
+          method.visitMethodInsn(Opcodes.INVOKESTATIC, owner, name.equals("envelope") ? "wrapper" : "target", "(I)I", false);
+          method.visitInsn(Opcodes.IRETURN);
+        }
+        case "target" -> {
+          org.objectweb.asm.Label positive = new org.objectweb.asm.Label();
+          method.visitVarInsn(Opcodes.ILOAD, 0); method.visitJumpInsn(Opcodes.IFGE, positive);
+          method.visitTypeInsn(Opcodes.NEW, "java/lang/IllegalArgumentException"); method.visitInsn(Opcodes.DUP);
+          method.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/IllegalArgumentException", "<init>", "()V", false);
+          method.visitInsn(Opcodes.ATHROW); method.visitLabel(positive);
+          var small = new org.objectweb.asm.Label();
+          method.visitVarInsn(Opcodes.ILOAD, 0); method.visitIntInsn(Opcodes.BIPUSH, 10);
+          method.visitJumpInsn(Opcodes.IF_ICMPLE, small);
+          method.visitVarInsn(Opcodes.ILOAD, 0); method.visitInsn(Opcodes.ICONST_1); method.visitInsn(Opcodes.ISUB);
+          method.visitMethodInsn(Opcodes.INVOKESTATIC, owner, "target", "(I)I", false);
+          method.visitInsn(Opcodes.ICONST_1); method.visitInsn(Opcodes.IADD); method.visitInsn(Opcodes.IRETURN);
+          method.visitLabel(small);
+          method.visitVarInsn(Opcodes.ILOAD, 0); method.visitInsn(Opcodes.ICONST_1); method.visitInsn(Opcodes.IADD);
+          method.visitInsn(Opcodes.IRETURN);
+        }
+        default -> throw new AssertionError(name);
+      }
+      method.visitMaxs(0, 0); method.visitEnd();
+    }
+    writer.visitEnd(); return writer.toByteArray();
+  }
+}
