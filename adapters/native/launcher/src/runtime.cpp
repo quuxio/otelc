@@ -39,6 +39,9 @@ using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 namespace native = otelc::native;
 struct SavedErrno {
+  SavedErrno() = default;
+  SavedErrno(const SavedErrno &) = delete;
+  SavedErrno &operator=(const SavedErrno &) = delete;
   const int value = errno;
   ~SavedErrno() noexcept { errno = value; }
 };

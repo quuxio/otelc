@@ -20,6 +20,9 @@ namespace {
 using Clock = std::chrono::steady_clock;
 thread_local bool inside_object_runtime = false;
 struct SavedErrno {
+  SavedErrno() = default;
+  SavedErrno(const SavedErrno &) = delete;
+  SavedErrno &operator=(const SavedErrno &) = delete;
   const int value = errno;
   ~SavedErrno() noexcept { errno = value; }
 };
