@@ -26,7 +26,6 @@ For a focused local analysis-context check with the installed matched LLVM 22 to
 OTELC_CPP_ANALYSIS=1 make native-check native-launch-check llvm-check PYTHON=.venv/bin/python
 OTELC_CPP_ANALYSIS=1 PYTHONPATH=tests .venv/bin/python -m unittest test_native_gate
 OTELC_CPP_ANALYSIS=1 make native-lifetimes-check native-resources-check PYTHON=.venv/bin/python
-OTELC_CPP_ANALYSIS=1 PYTHONPATH=tests .venv/bin/python -m unittest test_native_resource_pass
 OTELC_CPP_ANALYSIS=1 .venv/bin/python -m ci.native_sonar
 ```
 
