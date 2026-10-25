@@ -41,7 +41,8 @@ def check() -> None:
                   'tests/test_native_object_launch_runtime.py',
                   'tests/test_native_public_resources.py', 'tests/test_native_resource_build.py',
                   'tests/test_native_public_lifetimes.py',
-                  'tests/test_java_integration.py', 'ci/native_launch_suite.py', 'ci/check_native_launch.py'))]
+                  'tests/test_java_integration.py', 'tests/test_native_drop_launch_runtime.py',
+                  'tests/test_rust_drop_health.py', 'ci/native_launch_suite.py', 'ci/check_native_launch.py'))]
     before = [llvm_backend.identity(path) for path in sources]
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(('OTEL', 'LLVM_PROFILE'))

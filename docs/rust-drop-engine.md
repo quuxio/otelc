@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This internal component extends the existing native OpenTelemetry lifetime engine with `drop_entry` and ownership relocation. It is a building block for automatic Rust object/resource spans. It does not enable Rust lifetime policies: the public Rust build still refuses them until compiler probes, private ABI, SDK bootstrap, health and independent qualification are connected. Developers will not call this API or add guards/imports to their applications.
+This internal component extends the existing native OpenTelemetry lifetime engine with `drop_entry` and ownership relocation. The [private drop bridge and SDK candidate](rust-drop-bridge.md) connects explicit hooks, bootstrap and health. This remains a building block for automatic Rust object/resource spans. It does not enable Rust lifetime policies: the public Rust build still refuses them until compiler-inserted probes and independent qualification are connected. Developers will not call this API or add guards/imports to their applications.
 
 ## Required semantics
 
@@ -18,7 +18,7 @@ The current metadata key is storage address plus resolved type identity. The com
 
 1. Inventory resolved types, size/layout, construction sites, moves, copies and drop boundaries through the pinned Rust compiler. Apply the common source and lifetime selectors, including exclusions. Keep unsupported or incomplete coverage visible.
 2. Insert private typed hooks after successful construction and at actual ownership transfer/drop paths, including unwind. Do not add fields to application types or change public signatures, traits, ownership, pinning or source bytes. Qualify the MIR phase against optimisation and drop elaboration so elided storage or cleanup cannot silently remove observations.
-3. Connect the compiler bridge and explicit native SDK plan to the drop engine. Retain versioned build/selection/health records, bounded metadata, censored/lost observations and actual SDK drain. Existing C/C++ ABI and observation boundaries must keep their meanings.
+3. Qualify the [private compiler bridge and explicit SDK plan](rust-drop-bridge.md) against the genuine matching products, then connect them to automatic compiler insertion. Retain versioned build/selection/health records, bounded metadata, censored/lost observations and actual SDK drain. Existing C/C++ ABI and observation boundaries must keep their meanings.
 4. Exercise local, returned, argument, nested and container moves; copies, address reuse and zero-sized values; ordinary/failed construction and panic/drop cleanup; cross-thread/task ownership, cancellation, pinning and `mem::forget`. Unobserved release must remain censored rather than becoming a fabricated destructor.
 5. Qualify unchanged original applications through oteleq, all four startup/live metric states and decoded OTLP. Retain actual stock/instrumented/lifecycle overhead comparisons and Grafana receipt. Complete the required 80% component coverage, review and protected main checks before claiming language support.
 

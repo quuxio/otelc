@@ -103,17 +103,21 @@ def check() -> None:
         '-instr-profile=' + str(merged), *map(str, sorted(expected))], work, 'compiler-coverage', environment)
     coverage = summaries(json.loads(raw), expected)
     applications = list((cases / 'test_original_modules_optimised_loops_panics_and_all_live_metric_states').glob('*-application'))
+    drop_case = cases / 'test_private_drop_bridge_moves_panics_forgets_and_refuses_bad_metadata'
+    drop_applications = list(drop_case.glob('*-application'))
     health = list(cases.rglob('health.json'))
-    if len(applications) != 2 or len(health) != 8:
-        raise ValueError('Rust compiler checks require both optimisation builds and all eight live applications')
+    if (len(applications) != 2 or len(drop_applications) != 1 or len(health) != 12
+            or len(list(drop_case.rglob('health.json'))) != 4):
+        raise ValueError('Rust checks require both original builds/eight launches and one private drop build/four launches')
     bridge_source = ROOT / 'native/rust/bridge/src/lib.rs'
-    bridge_raw = run([str(binaries / 'llvm-cov'), 'export', str(sorted(applications)[0]),
+    bridge_objects = [str(sorted(applications)[0]), '-object=' + str(drop_applications[0])]
+    bridge_raw = run([str(binaries / 'llvm-cov'), 'export', *bridge_objects,
         '-instr-profile=' + str(merged), str(bridge_source)], work, 'bridge-coverage', environment)
     bridge_coverage = summaries(json.loads(bridge_raw), {bridge_source})
     compiler_lcov = run([str(binaries / 'llvm-cov'), 'export', environment['OTELC_RUST_COMPILER'],
         '-instr-profile=' + str(merged), '-format=lcov', *map(str, sorted(expected))],
         work, 'compiler-lcov', environment).decode()
-    bridge_lcov = run([str(binaries / 'llvm-cov'), 'export', str(sorted(applications)[0]),
+    bridge_lcov = run([str(binaries / 'llvm-cov'), 'export', *bridge_objects,
         '-instr-profile=' + str(merged), '-format=lcov', str(bridge_source)], work, 'bridge-lcov', environment).decode()
     if (before != [native_launch.identity(path) for path in sources] or native_build.sdk(sdk) != record
             or held_tools != [native_launch.identity(path) for path in tools]):
@@ -121,8 +125,9 @@ def check() -> None:
     result = {'tests': tests, 'source_inputs': before, 'tool_inputs': held_tools, 'sdk_library': record['library'],
               'compiler_line_coverage': coverage, 'bridge_line_coverage': bridge_coverage,
               'application_processes': len(health),
+              'original_application_processes': 8, 'private_drop_harness_processes': 4,
               'telemetry_evidence': 'Receiver-decoded protobuf reserialization, not original HTTP wire bytes',
-              'scope': 'Internal synchronous Rust compiler/SDK component; not public adapter/lifetime admission'}
+              'scope': 'Internal synchronous compiler and explicit drop bridge/SDK harness; not automatic Rust lifetime admission'}
     (work / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     rust_sonar.write(ROOT, before, compiler_lcov + bridge_lcov, coverage | bridge_coverage,
                      compiler_clippy + bridge_clippy, ROOT / 'build')

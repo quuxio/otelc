@@ -40,6 +40,9 @@ using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 namespace native = otelc::native;
 struct SavedErrno {
+  SavedErrno() = default;
+  SavedErrno(const SavedErrno &) = delete;
+  SavedErrno &operator=(const SavedErrno &) = delete;
   const int value = errno;
   ~SavedErrno() noexcept { errno = value; }
 };
@@ -90,6 +93,39 @@ class DiagnosticLog final : public opentelemetry::sdk::common::internal_log::Log
 
 std::string Decimal(std::uint64_t value) { return std::to_string(value); }
 void Require(bool condition, const char *message) { if (!condition) throw std::runtime_error(message); }
+struct LifetimeSettings {
+  bool enabled = false;
+  std::uint32_t live = 0;
+  native::LifetimeBoundary boundary = native::LifetimeBoundary::destructor_entry;
+};
+LifetimeSettings Lifetimes(const Json &plan) {
+  const auto &settings = plan.at("settings");
+  const bool resources = settings.contains("resource_lifetimes");
+  const bool drops = settings.contains("drop_lifetimes");
+  Require(int(resources) + int(drops) + int(settings.contains("object_lifetimes")) <= 1,
+          "native lifetime profiles cannot be combined");
+  Require(!drops || plan.at("schema_version") == 3, "drop lifetimes require the explicit Rust plan");
+  LifetimeSettings result;
+  const char *key = "object_lifetimes", *language = "cpp";
+  if (resources) {
+    key = "resource_lifetimes"; language = "c"; result.boundary = native::LifetimeBoundary::free_entry;
+  } else if (drops) {
+    key = "drop_lifetimes"; language = "rust"; result.boundary = native::LifetimeBoundary::drop_entry;
+  }
+  if (!settings.contains(key)) return result;
+  const auto &selected = settings.at(key);
+  Require(selected.is_object() && selected.size() == 2 && selected.at("enabled").is_boolean()
+          && selected.at("max_live").is_number_integer(), "invalid native object settings");
+  auto limit = selected.at("max_live").get<std::int64_t>();
+  Require(limit > 0 && limit <= (drops ? 1000000 : 1048576), "invalid native object live limit");
+  result.enabled = selected.at("enabled").get<bool>();
+  Require(!drops || result.enabled, "Rust drop plans require enabled lifetime observations");
+  Require(!result.enabled || plan.at("language") == language,
+          "native lifetime settings do not match the application language");
+  result.live = static_cast<std::uint32_t>(limit);
+  return result;
+}
+
 bool WriteAll(int fd, const std::string &value, bool socket = false) {
   std::size_t offset = 0;
   while (offset < value.size()) {
@@ -207,25 +243,10 @@ class Runtime {
     meters = std::make_shared<metrics::MeterProvider>(std::make_unique<metrics::ViewRegistry>(), resource);
     controller = std::make_unique<native::MetricController>(meters, state);
     native::ConfigureFunctionMetrics(*meters, 4096, policy.at("boundaries").get<std::vector<double>>());
-    bool object_enabled = false;
-    std::uint32_t object_limit = 0;
-    const bool resources = policy.contains("resource_lifetimes");
-    Require(!(resources && policy.contains("object_lifetimes")), "native lifetime profiles cannot be combined");
-    const char *lifetime_key = resources ? "resource_lifetimes" : "object_lifetimes";
-    if (policy.contains(lifetime_key)) {
-      const auto &object = policy.at(lifetime_key);
-      Require(object.is_object() && object.size() == 2 && object.at("enabled").is_boolean()
-              && object.at("max_live").is_number_integer(), "invalid native object settings");
-      auto limit = object.at("max_live").get<std::int64_t>();
-      Require(limit > 0 && limit <= 1048576, "invalid native object live limit");
-      object_enabled = object.at("enabled").get<bool>();
-      Require(!object_enabled || plan.at("language") == (resources ? "c" : "cpp"),
-              "native lifetime settings do not match the application language");
-      lifetime_boundary = resources ? native::LifetimeBoundary::free_entry : native::LifetimeBoundary::destructor_entry;
-      object_limit = static_cast<std::uint32_t>(limit);
-      if (object_enabled)
-        native::ConfigureObjectMetrics(*meters, 4096, policy.at("boundaries").get<std::vector<double>>());
-    }
+    const auto lifetime = Lifetimes(plan);
+    lifetime_boundary = lifetime.boundary;
+    if (lifetime.enabled)
+      native::ConfigureObjectMetrics(*meters, 4096, policy.at("boundaries").get<std::vector<double>>());
     auto endpoint = policy.at("endpoint").get<std::string>();
     otlp::OtlpHttpMetricExporterOptions metric_options(nullptr);
     metric_options.content_type = otlp::HttpRequestContentType::kBinary;
@@ -260,9 +281,9 @@ class Runtime {
     }
     functions = std::make_unique<native::FunctionRuntime>(state, meters->GetMeter(native::FunctionScopeName), selected,
         native::FunctionLimits{4096, 512, native::FunctionContext::owned});
-    if (object_enabled)
+    if (lifetime.enabled)
       objects = std::make_unique<native::ObjectRuntime>(state, meters->GetMeter(native::FunctionScopeName), selected,
-          native::ObjectLimits{4096, object_limit, lifetime_boundary});
+          native::ObjectLimits{4096, lifetime.live, lifetime_boundary});
   }
 
   ~Runtime() { StopControl(); }
@@ -299,7 +320,8 @@ class Runtime {
       auto count = std::stoull(exported.at("units_started").get<std::string>());
       queue_pending = "0"; queue_dropped = Decimal(ended > count ? ended - count : 0);
     }
-    Json result = {{"schema_version", 1}, {"kind", "otelc.runtime-health"}, {"language", plan.at("language")},
+    Json result = {{"schema_version", lifetime_boundary == native::LifetimeBoundary::drop_entry ? 5 : 1},
+      {"kind", "otelc.runtime-health"}, {"language", plan.at("language")},
       {"scope", "sdk_pipeline"}, {"pid", ::getpid()}, {"phase", final ? "final" : "running"},
       {"sdk_attached", true}, {"policy_sha256", plan.at("policy_sha256")}, {"selection_sha256", plan.at("selection_sha256")},
       {"controls", Status()}, {"lifecycle", {{"flush", flush_.load()}, {"shutdown", shutdown}}},
@@ -317,10 +339,16 @@ class Runtime {
       {"source_complete", false}, {"downstream_receipt", "unavailable"}, {"otlp_partial_rejection", "unavailable"}};
     if (objects) {
       const auto object = objects->Status();
-      const bool resources = lifetime_boundary == native::LifetimeBoundary::free_entry;
-      result[resources ? "resource_accounting" : "object_accounting"] = {{"types", Decimal(object.types)}, {"admitted", Decimal(object.admitted)},
+      const char *accounting = "object_accounting", *pending = "destroying";
+      if (lifetime_boundary == native::LifetimeBoundary::free_entry) {
+        accounting = "resource_accounting"; pending = "releasing";
+      } else if (lifetime_boundary == native::LifetimeBoundary::drop_entry) {
+        accounting = "drop_accounting"; pending = "dropping";
+      }
+      result[accounting] = {
+        {"types", Decimal(object.types)}, {"admitted", Decimal(object.admitted)},
         {"completed", Decimal(object.completed)}, {"live", Decimal(object.live)},
-        {resources ? "releasing" : "destroying", Decimal(object.destroying)}, {"ending", Decimal(object.ending)},
+        {pending, Decimal(object.destroying)}, {"ending", Decimal(object.ending)},
         {"censored", Decimal(object.censored)}, {"lost", Decimal(object.lost)},
         {"duplicates", Decimal(object.duplicates)}, {"invalid", Decimal(object.invalid)},
         {"closing", object.closing}, {"closed", object.closed}};
@@ -482,7 +510,9 @@ Json ReadPlan(int fd) {
   const bool legacy = plan.at("schema_version") == 1
       && (plan.at("language") == "c" || plan.at("language") == "cpp");
   const bool rust = plan.at("schema_version") == 2 && plan.at("language") == "rust";
-  Require(legacy || rust, "unsupported native plan");
+  const bool drops = plan.at("schema_version").is_number_integer() && plan.at("schema_version") == 3
+      && plan.at("language") == "rust" && plan.at("settings").contains("drop_lifetimes");
+  Require(legacy || rust || drops, "unsupported native plan");
   return plan;
 }
 }  // namespace
@@ -543,6 +573,18 @@ extern "C" void otelc_object_destroyed_v1(std::uint64_t token, std::int32_t unwi
     runtime->objects->Destroyed(token, unwinding);
   else
     ++Global().errors;
+}
+extern "C" void otelc_object_relocated_v1(const void *source, const void *destination, const char *type) noexcept {
+  const SavedErrno saved;
+  if (auto *runtime = Installed(); runtime && runtime->objects &&
+      runtime->lifetime_boundary == native::LifetimeBoundary::drop_entry)
+    runtime->objects->Relocate(source, destination, type);
+  else
+    ++Global().errors;
+}
+extern "C" void otelc_object_metadata_error_v1() noexcept {
+  const SavedErrno saved;
+  ++Global().errors;
 }
 extern "C" void otelc_resource_allocated_v1(const void *address, const char *type, const char *name) noexcept {
   const SavedErrno saved;

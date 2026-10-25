@@ -10,7 +10,7 @@ import select
 import subprocess
 import unittest
 
-from otelc import control, native_build, native_launch
+from otelc import control, health, native_build, native_launch
 from otelc.config import Policy
 from test_java_integration import Capture
 
@@ -32,6 +32,55 @@ pub fn workload(value:i32)->i32{let _guard=Guard;
  if value<0 {std::panic::panic_any(73_u32)}
  let mut sum=0;for index in 0..value{sum+=leaf(index);}sum}
 fn leaf(value:i32)->i32{value*3+1}
+'''
+
+# Deliberately tool-owned private-ABI harness. These explicit calls qualify the
+# bridge, not automatic insertion into ordinary Rust developer source.
+DROP_HARNESS = r'''use otelc_rust_bridge::compiler_mir as hooks;
+use std::io::{self,BufRead};
+use std::mem::ManuallyDrop;
+use std::sync::atomic::{AtomicU32,Ordering};
+const USR:&str="rust:private:Item\0";
+const NAME:&str="PrivateItem\0";
+static DROPS:AtomicU32=AtomicU32::new(0);
+struct Item {value:i32,fail:bool}
+impl Drop for Item {fn drop(&mut self){
+ DROPS.fetch_add(1,Ordering::SeqCst);
+ if self.fail {std::panic::panic_any(73_u32)}
+}}
+fn action(command:i32)->i32 {
+ if command==6 {
+  let long=format!("{}\0","x".repeat(4097));
+  for bad in ["","\0","unterminated","a\0b\0",long.as_str()] {
+   hooks::drop_created(1,bad,NAME);hooks::drop_created(1,USR,bad);
+   hooks::drop_moved(1,2,bad);assert_eq!(hooks::drop_enter(1,bad),0);
+  }
+  hooks::drop_exit(0);hooks::drop_unwind(0);return 0
+ }
+ let frame=hooks::sync_enter("private-drop-action");
+ let mut source=ManuallyDrop::new(Item{value:command*7,fail:command==2});
+ let before=(&*source as *const Item) as usize;
+ hooks::drop_created(before,USR,NAME);
+ std::thread::sleep(std::time::Duration::from_millis(1));
+ let mut destination=Box::new(ManuallyDrop::new(unsafe{ManuallyDrop::take(&mut source)}));
+ let after=(&**destination as *const Item) as usize;
+ assert_ne!(before,after);hooks::drop_moved(before,after,USR);hooks::drop_moved(after,after,USR);
+ let value=destination.value;
+ let result=if command==3 {std::mem::forget(destination);value} else {
+  let token=hooks::drop_enter(after,USR);assert_ne!(token,0);
+  match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||unsafe{
+   ManuallyDrop::drop(&mut destination)
+  })) {
+   Ok(())=>{hooks::drop_exit(token);value},
+   Err(payload)=>{hooks::drop_unwind(token);assert_eq!(payload.downcast_ref::<u32>(),Some(&73));-73}
+  }
+ };
+ hooks::sync_exit(frame);result
+}
+fn main(){println!("ready");for line in io::stdin().lock().lines(){
+ let command:i32=line.unwrap().parse().unwrap();
+ let result=action(command);println!("{} {}",result,DROPS.load(Ordering::SeqCst));
+}}
 '''
 
 
@@ -152,14 +201,17 @@ class RustCompilerCases(unittest.TestCase):
             policy.selection('functions').accepts(row['compiler_name']) and
             policy.selection('sources').accepts(str(Path(row['file']).relative_to(self.root))))
 
-    def start(self, product: Path, label: str, policy: Policy) -> tuple[subprocess.Popen, Path]:
+    def start(self, product: Path, label: str, policy: Policy,
+              *, drops: bool = False) -> tuple[subprocess.Popen, Path]:
         runtime = self.base / label
         runtime.mkdir(mode=0o700)
         data = policy.data
         settings = dict(data['export']) | {'service_name': label,
             **{key: data['metrics'][key] for key in ('collection', 'emission')},
             'boundaries': data['metrics']['histogram_boundaries_seconds'], 'traces': True, 'sample_ratio': 1.0}
-        plan = {'schema_version': 2, 'language': 'rust', 'runtime': str(runtime),
+        if drops:
+            settings['drop_lifetimes'] = {'enabled': True, 'max_live': 16}
+        plan = {'schema_version': 3 if drops else 2, 'language': 'rust', 'runtime': str(runtime),
                 'policy_sha256': native_launch.digest(data),
                 'selection_sha256': native_launch.digest({key: data[key] for key in ('sources', 'functions')}),
                 'token': 'c' * 64, 'settings': settings}
@@ -268,6 +320,79 @@ class RustCompilerCases(unittest.TestCase):
         self.assertEqual(count, 2)
         return value
 
+    def test_private_drop_bridge_moves_panics_forgets_and_refuses_bad_metadata(self) -> None:
+        entry = self.source('private_drop.rs', DROP_HARNESS)
+        result, _, product = self.compile(entry, 'weave')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        for collection, emission in ((False, False), (False, True), (True, False), (True, True)):
+            label = f'private-drop-{int(collection)}{int(emission)}'
+            self.exercise_drop(product, label, collection, emission)
+
+    def exercise_drop(self, product: Path, label: str, collection: bool, emission: bool) -> None:
+        """Qualify the explicit bridge with real Rust drop side effects and SDK receipt."""
+        process, endpoint = self.start(product, label,
+            self.policy(collection=collection, emission=emission), drops=True)
+        self.call(process, 1, b'7 1\n')
+        control.request(endpoint, 'flush')
+        control.request(endpoint, 'collection on'); control.request(endpoint, 'emission off')
+        self.call(process, 2, b'-73 2\n')
+        before = control.request(endpoint, 'health')['metric_exports']['batches_started']
+        control.request(endpoint, 'flush')
+        self.assertEqual(control.request(endpoint, 'health')['metric_exports']['batches_started'], before)
+        control.request(endpoint, 'collection off'); control.request(endpoint, 'emission on')
+        self.call(process, 3, b'21 2\n')
+        control.request(endpoint, 'on')
+        self.call(process, 1, b'7 3\n'); self.call(process, 3, b'21 3\n')
+        self.call(process, 6, b'0 3\n')
+        self.assertEqual(control.request(endpoint, 'status')['pid'], process.pid)
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual((process.returncode, stdout), (0, b''))
+        self.assertEqual(stderr.count(b'panicked at'), 1)
+        final = health.read(endpoint.parent / 'health.json')
+        self.assertEqual((final['schema_version'], final['pid']), (5, process.pid))
+        self.assertEqual(final['lifecycle']['shutdown'], 'succeeded')
+        self.assertEqual(final['function_accounting']['metadata_errors'], '20')
+        self.assertEqual(final['drop_accounting'], dict(types='1', admitted='5', completed='3',
+            live='0', dropping='0', ending='0', censored='2', lost='0', duplicates='0', invalid='0',
+            closing=True, closed=True))
+        self.check_drop_spans(label)
+        self.check_drop_metrics(label, collection)
+
+    def check_drop_spans(self, label: str) -> None:
+        """Join independent lifetime traces to their actual action span identities."""
+        spans = [span for request in self.capture.traces for resource in request.resource_spans
+                 if any(item.key == 'service.name' and item.value.string_value == label
+                        for item in resource.resource.attributes)
+                 for scope in resource.scope_spans for span in scope.spans]
+        functions = {span.span_id for span in spans if span.name == 'private-drop-action'}
+        lifetimes = [span for span in spans if span.name == 'PrivateItem lifetime']
+        self.assertEqual((len(spans), len(functions), len(lifetimes)), (10, 5, 5))
+        complete = []
+        for span in lifetimes:
+            self.assertFalse(span.parent_span_id)
+            self.assertEqual(len(span.links), 1)
+            self.assertIn(span.links[0].span_id, functions)
+            labels = {item.key: item.value for item in span.attributes}
+            self.assertNotIn('otelc.destructor.exception_exit', labels)
+            if labels['boundary'].string_value == 'drop_entry':
+                complete.append(labels['otelc.drop.exception_exit'].bool_value)
+            else:
+                self.assertEqual(labels['boundary'].string_value, 'shutdown_censored')
+        self.assertEqual(sorted(complete), [False, False, True])
+
+    def check_drop_metrics(self, label: str, collection: bool) -> None:
+        """Require retained collection and absence of retroactive admission metrics."""
+        metrics = [metric for request in self.capture.metrics for resource in request.resource_metrics
+                   if any(item.key == 'service.name' and item.value.string_value == label
+                          for item in resource.resource.attributes)
+                   for scope in resource.scope_metrics for metric in scope.metrics]
+        for name, expected in (('admitted', 4 if collection else 3),
+                               ('completed', 3 if collection else 2), ('incomplete', 1)):
+            points = [sum(point.as_int for point in metric.sum.data_points)
+                      for metric in metrics if metric.name == 'otelc.lifetime.' + name]
+            self.assertTrue(points, name)
+            self.assertEqual(max(points), expected, name)
+
     def test_wrong_compiler_entry_is_refused_in_both_modes(self) -> None:
         entry = self.source('app.rs', 'fn main(){}\n')
         other = self.source('other.rs', 'fn main(){}\n')
@@ -347,6 +472,7 @@ def main() -> int:
     """Retain exact test counts so a skipped or missing group cannot pass."""
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(RustCompilerCases)
     suite.addTests(unittest.defaultTestLoader.loadTestsFromName('test_health.HealthShapeTests'))
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromName('test_rust_drop_health'))
     selected = suite.countTestCases()
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     value = {'selected': selected, 'tests_run': result.testsRun, 'skipped': len(result.skipped),

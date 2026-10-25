@@ -7,11 +7,87 @@ mod native {
     unsafe extern "C" {
         pub fn otelc_function_named_enter_v1(name: *const u8, size: u64) -> u64;
         pub fn otelc_function_leave_v1(token: u64, unwinding: i32);
+        pub fn otelc_object_created_v1(address: *const u8, type_usr: *const u8, name: *const u8);
+        pub fn otelc_object_relocated_v1(
+            source: *const u8,
+            destination: *const u8,
+            type_usr: *const u8,
+        );
+        pub fn otelc_object_destroying_v1(address: *const u8, type_usr: *const u8) -> u64;
+        pub fn otelc_object_destroyed_v1(token: u64, unwinding: i32);
+        pub fn otelc_object_metadata_error_v1();
     }
 }
 
 /// Non-generic typed entry points resolved by the pinned compiler driver.
 pub mod compiler_mir {
+    // Compiler-owned identities include their terminator. Validate borrowed
+    // bytes without allocation, panics or reading application object storage.
+    fn terminated(value: &str) -> bool {
+        let bytes = value.as_bytes();
+        (2..=4097).contains(&bytes.len())
+            && bytes.last() == Some(&0)
+            && !bytes[..bytes.len() - 1].contains(&0)
+    }
+
+    /// Observe successful construction; storage is an opaque compiler identity.
+    #[inline(never)]
+    pub fn drop_created(storage: usize, type_usr: &str, name: &str) {
+        if terminated(type_usr) && terminated(name) {
+            // The native boundary copies metadata and never dereferences storage.
+            unsafe {
+                super::native::otelc_object_created_v1(
+                    storage as *const u8,
+                    type_usr.as_ptr(),
+                    name.as_ptr(),
+                )
+            }
+        } else {
+            unsafe { super::native::otelc_object_metadata_error_v1() }
+        }
+    }
+
+    /// Transfer the existing observation after a successful ownership move.
+    #[inline(never)]
+    pub fn drop_moved(source: usize, destination: usize, type_usr: &str) {
+        if terminated(type_usr) {
+            unsafe {
+                super::native::otelc_object_relocated_v1(
+                    source as *const u8,
+                    destination as *const u8,
+                    type_usr.as_ptr(),
+                )
+            }
+        } else {
+            unsafe { super::native::otelc_object_metadata_error_v1() }
+        }
+    }
+
+    /// Claim the actual drop entry; zero means no observation was admitted.
+    #[inline(never)]
+    pub fn drop_enter(storage: usize, type_usr: &str) -> u64 {
+        if terminated(type_usr) {
+            unsafe {
+                super::native::otelc_object_destroying_v1(storage as *const u8, type_usr.as_ptr())
+            }
+        } else {
+            unsafe { super::native::otelc_object_metadata_error_v1() }
+            0
+        }
+    }
+
+    /// Complete the original normal drop without owning the application value.
+    #[inline(never)]
+    pub fn drop_exit(token: u64) {
+        unsafe { super::native::otelc_object_destroyed_v1(token, 0) }
+    }
+
+    /// Complete an existing drop unwind without inspecting its panic payload.
+    #[inline(never)]
+    pub fn drop_unwind(token: u64) {
+        unsafe { super::native::otelc_object_destroyed_v1(token, 1) }
+    }
+
     /// Admit a compiler-selected function and copy its identity into SDK storage.
     #[inline(never)]
     pub fn sync_enter(name: &str) -> u64 {
