@@ -90,8 +90,9 @@ class GoHealthTests(unittest.TestCase):
             ('http_spans', None), ('http_spans', {'observed': 1}), ('http_spans', {'observed': False, 'active': '0'}),
             ('http_spans', {'observed': False}),
         ):
+            value = report() | {field: invalid}
             with self.subTest(field=field), self.assertRaises(ValueError):
-                go_health.validate(report() | {field: invalid})
+                go_health.validate(value)
         for value in (None, [], report() | {'unknown': True}):
             with self.assertRaises(ValueError):
                 go_health.validate(value)
