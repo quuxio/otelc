@@ -141,7 +141,11 @@ def check() -> None:
                       *('-object=' + str(path) for path in sorted(automatic_applications))]
     bridge_raw = run([str(binaries / 'llvm-cov'), 'export', *bridge_objects,
         '-instr-profile=' + str(merged), str(bridge_source)], work, 'bridge-coverage', environment)
-    bridge_coverage = summaries(json.loads(bridge_raw), {bridge_source})
+    bridge_data = json.loads(bridge_raw)
+    print(json.dumps({'rust_bridge_measured_lines': {file['filename']: file['summary']['lines']
+        for block in bridge_data['data'] for file in block['files']
+        if Path(file['filename']).resolve() == bridge_source}}), flush=True)
+    bridge_coverage = summaries(bridge_data, {bridge_source})
     compiler_lcov = run([str(binaries / 'llvm-cov'), 'export', environment['OTELC_RUST_COMPILER'],
         '-instr-profile=' + str(merged), '-format=lcov', *map(str, sorted(expected))],
         work, 'compiler-lcov', environment).decode()

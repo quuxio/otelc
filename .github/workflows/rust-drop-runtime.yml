@@ -79,6 +79,8 @@ jobs:
             build/rust-compiler-check-*/*.stderr
             build/rust-compiler-check-*/compiler-unit.stdout
             build/rust-compiler-check-*/bridge-unit.stdout
+            build/rust-compiler-check-*/compiler-coverage.stdout
+            build/rust-compiler-check-*/bridge-coverage.stdout
             build/rust-compiler-check-*/cases/tests-result.json
             build/rust-compiler-check-*/cases/**/*-result.json
             build/rust-compiler-check-*/cases/**/health.json
