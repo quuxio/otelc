@@ -70,7 +70,7 @@ def measure_batches(process: benchmark.Application, policy: Policy, output: Path
         for mode in state_order(sample, plain=endpoint is None):
             if endpoint is not None:
                 state = benchmark.switch_state(endpoint, process, mode)
-                if state['sdk_pid'] != sdk_pid or (state['collection'], state['emission']) != benchmark.STATES[mode]:
+                if not sdk_identity(state, sdk_pid) or (state['collection'], state['emission']) != benchmark.STATES[mode]:
                     raise ValueError('benchmark live state or SDK process changed')
                 records.transitions.append({'sample': sample, 'mode': mode, **state})
             result = measured_batch(process, configuration['iterations'], endpoint, sdk_pid,
@@ -92,7 +92,13 @@ def state_order(sample: int, *, plain: bool) -> list[str]:
     return order
 
 
-def finalize_metrics(process: benchmark.Application, endpoint: Path, sdk_pid: int,
+def sdk_identity(state: dict[str, Any], sdk_pid: int | None) -> bool:
+    """Embedded SDKs have no separate PID; external SDKs require an exact integer."""
+    observed = state.get('sdk_pid')
+    return observed is None if sdk_pid is None else type(observed) is int and observed == sdk_pid
+
+
+def finalize_metrics(process: benchmark.Application, endpoint: Path, sdk_pid: int | None,
                      output: Path) -> None:
     """Emit retained collection-only values after the last timed sample."""
     receipt: dict[str, Any] = {'schema_version': 1}
@@ -100,8 +106,8 @@ def finalize_metrics(process: benchmark.Application, endpoint: Path, sdk_pid: in
         state = control.request(endpoint, command)
         receipt[label] = state
         (output / 'metric-finalization.json').write_text(json.dumps(receipt, indent=2) + '\n')
-        if (type(state.get('pid')) is not int or type(state.get('sdk_pid')) is not int
-                or state['pid'] != process.pid or state['sdk_pid'] != sdk_pid
+        if (type(state.get('pid')) is not int or not sdk_identity(state, sdk_pid)
+                or state['pid'] != process.pid
                 or state['collection'] is not True or state['emission'] is not True):
             raise ValueError('benchmark final metric state or SDK process changed')
 
