@@ -137,4 +137,4 @@ try {
   const data = Buffer.from(JSON.stringify(final) + '\n');
   ftruncateSync(report, 0); writeSync(report, data, 0, data.length, 0);
 } finally { closeSync(report); }
-if (process.connected) process.disconnect();
+if (process.connected) process.disconnect?.();

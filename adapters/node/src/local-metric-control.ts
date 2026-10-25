@@ -144,8 +144,9 @@ export class LocalMetricControl {
     socket.setTimeout(200, () => socket.destroy());
     socket.on('data', chunk => {
       if (completed) return;
-      if (data.length + chunk.length > 1024) { completed = true; socket.destroy(); return; }
-      data = Buffer.concat([data, chunk]);
+      const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+      if (data.length + bytes.length > 1024) { completed = true; socket.destroy(); return; }
+      data = Buffer.concat([data, bytes]);
       const newline = data.indexOf(10);
       if (newline < 0) return;
       completed = true;
