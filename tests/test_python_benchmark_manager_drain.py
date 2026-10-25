@@ -139,9 +139,10 @@ class PythonBenchmarkManagerDrainTests(unittest.TestCase):
         self.execution['phase'] = 'failed'
         self.write('python-execution.json', self.execution)
         with self.boundaries():
-            with self.assertRaisesRegex(ValueError, 'completion is not verified') as caught:
+            with self.assertRaises(RuntimeError) as caught:
                 self.run_body(failure)
-        self.assertIs(caught.exception.__context__, failure)
+        self.assertIs(caught.exception, failure)
+        self.assertIn('Prepared benchmark completion also failed: ValueError', failure.__notes__)
         self.assertEqual(self.events, ['application_stop', 'owner_stop', 'pipe_close', 'completed'])
         self.assertIsNone(self.process.sdk_report)
 
@@ -170,20 +171,20 @@ class PythonBenchmarkManagerDrainTests(unittest.TestCase):
         failure = RuntimeError('original measured-body failure')
         pipe_error = OSError('pipe close failed')
         with self.boundaries(pipe_error=pipe_error):
-            with self.assertRaises(OSError) as caught:
+            with self.assertRaises(RuntimeError) as caught:
                 self.run_body(failure)
-        self.assertIs(caught.exception, pipe_error)
-        self.assertIs(caught.exception.__context__, failure)
+        self.assertIs(caught.exception, failure)
+        self.assertIn('Prepared benchmark cleanup also failed: OSError', failure.__notes__)
         self.assertEqual(self.events[-2:], ['completed', 'validate_report'])
 
     def test_input_pipe_failure_still_closes_output_and_reads_final_evidence(self) -> None:
         failure = RuntimeError('original measured-body failure')
         pipe_error = OSError('input pipe close failed')
         with self.boundaries(input_error=pipe_error):
-            with self.assertRaises(OSError) as caught:
+            with self.assertRaises(RuntimeError) as caught:
                 self.run_body(failure)
-        self.assertIs(caught.exception, pipe_error)
-        self.assertIs(caught.exception.__context__, failure)
+        self.assertIs(caught.exception, failure)
+        self.assertIn('Prepared benchmark cleanup also failed: OSError', failure.__notes__)
         self.owner.stdout.close.assert_called_once()
         self.assertEqual(self.events, ['application_stop', 'owner_stop', 'input_close_failed',
                                        'pipe_close', 'completed', 'validate_report'])
@@ -192,11 +193,11 @@ class PythonBenchmarkManagerDrainTests(unittest.TestCase):
         failure = RuntimeError('original measured-body failure')
         input_error, output_error = OSError('input pipe close failed'), OSError('output pipe close failed')
         with self.boundaries(input_error=input_error, pipe_error=output_error):
-            with self.assertRaises(OSError) as caught:
+            with self.assertRaises(RuntimeError) as caught:
                 self.run_body(failure)
-        self.assertIs(caught.exception, output_error)
-        self.assertIs(output_error.__context__, input_error)
-        self.assertIs(input_error.__context__, failure)
+        self.assertIs(caught.exception, failure)
+        self.assertIn('Prepared benchmark cleanup also failed: OSError', failure.__notes__)
+        self.assertIn('Prepared benchmark stdout close also failed: OSError', failure.__notes__)
         self.assertEqual(self.events[-2:], ['completed', 'validate_report'])
 
 

@@ -57,11 +57,11 @@ class PythonBenchmarkDrainTests(unittest.TestCase):
         drain_failure = ValueError('controlled invalid SDK drain')
         with mock.patch.object(python_benchmark.launch, 'application', self.application), \
                 mock.patch.object(python_benchmark, 'validate_drain', side_effect=drain_failure) as validate:
-            with self.assertRaises(ValueError) as caught:
+            with self.assertRaises(RuntimeError) as caught:
                 with python_benchmark.application(self.policy, self.runtime, plain=False):
                     raise failure
-            self.assertIs(caught.exception, drain_failure)
-            self.assertIs(caught.exception.__context__, failure)
+            self.assertIs(caught.exception, failure)
+            self.assertIn('Python benchmark final validation also failed: ValueError', failure.__notes__)
             self.assertTrue(self.closed)
             validate.assert_called_once()
 

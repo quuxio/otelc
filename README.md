@@ -67,7 +67,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. Failed runs retain available evidence and report the first error, followed by any cleanup failures. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript, Python, C and C++ runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 

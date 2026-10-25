@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from otelc import benchmark, benchmark_process, control, python_benchmark_launch as launch
+from otelc import benchmark, benchmark_cleanup, benchmark_process, control, python_benchmark_launch as launch
 from otelc import python as adapter, python_stock_benchmark as stock
 from otelc import python_launch_files as files
 from otelc.config import Policy
@@ -90,8 +90,10 @@ def application(policy: Policy, runtime: Path, *, plain: bool
             if process.sdk_report is None and failure is not None:
                 failure.add_note('Final SDK drain report is unavailable; drain was not validated')
             else:
-                validate_drain(process.sdk_report, process.pid, process.sdk_pid,
-                               lifetimes=policy.data['lifetimes']['enabled'])
+                cleanup = benchmark_cleanup.Cleanup(failure)
+                cleanup.run(lambda: validate_drain(process.sdk_report, process.pid, process.sdk_pid,
+                    lifetimes=policy.data['lifetimes']['enabled']), 'Python benchmark final validation')
+                cleanup.finish()
 
 
 def measure_process(policy: Policy, output: Path, lane: str,

@@ -196,6 +196,7 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/otelc/rust_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/rust_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_benchmark.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/benchmark_cleanup.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_benchmark_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_supervisor.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/prepared_native.py' --fail-under=80
