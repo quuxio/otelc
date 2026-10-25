@@ -112,6 +112,8 @@ The separate [private-handle compiler component](docs/java-handle-witness.md) bi
 make check
 ```
 
+CI runs for pull requests against any base branch, including stacked language work. Linux, macOS and Sonar check out the same exact PR head; a manually dispatched branch run remains separate from PR-specific analysis. The protected main checks and component coverage floors still apply before merge.
+
 The full check also requires LLVM 22, CMake, Ninja, Protobuf with its compiler, and libcurl development headers/libraries. CI installs these dependencies. It builds and exercises the native HTTP runtime, rejects skipped launcher tests and enforces the component coverage floors; see [native launch checks](docs/native-launch.md#focused-checks).
 
 Checks include policy validation, source/checksum preservation, decoded OTLP, exceptions, all four same-process metric states, cached instruments, trace continuity, lifetime observation, complete source exclusion and coverage. An empty resolved lifetime selection reports zero capacity loss; an expected observer that cannot be read still reports unknown and prevents benchmark publication. Java requires the pinned agent, extension SPI and SDK combination qualified by the integration checks. Dynamic meter configuration currently uses a pinned internal SDK bridge; incompatible upgrades must fail validation.
