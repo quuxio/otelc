@@ -83,6 +83,7 @@ jobs:
             build/rust-runtime/tools-case/tools/*.json
             build/rust-runtime/tools-case/tools/*.stderr
             build/rust-runtime/public-case/*.json
+            build/rust-runtime/public-case/decoded-*.protobuf
             build/rust-runtime/public-case/application/*.rs
             build/rust-runtime/public-case/lifetime-application/*.rs
             build/rust-runtime/public-case/lifetime-foreign/*.rs

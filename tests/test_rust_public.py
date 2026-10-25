@@ -411,11 +411,14 @@ class RustPublicExecutionTests(unittest.TestCase):
                  if metric.name == 'otelc.function.calls' for point in metric.sum.data_points]
         self.assertEqual(max(calls), 3 if current.data['metrics']['collection'] else 2)
 
+    def public_lifetime_spans(self, service: str) -> list:
+        return [span for request in self.capture.traces for resource in request.resource_spans
+                if any(item.key == 'service.name' and item.value.string_value == service
+                       for item in resource.resource.attributes)
+                for scope in resource.scope_spans for span in scope.spans]
+
     def check_public_lifetime_spans(self, service: str) -> None:
-        spans = [span for request in self.capture.traces for resource in request.resource_spans
-                 if any(item.key == 'service.name' and item.value.string_value == service
-                        for item in resource.resource.attributes)
-                 for scope in resource.scope_spans for span in scope.spans]
+        spans = self.public_lifetime_spans(service)
         functions = {span.span_id for span in spans if span.name == 'LifetimeApp.rs::workload'}
         lifetimes = [span for span in spans if span.name.endswith(' lifetime')]
         self.assertEqual((len(spans), len(functions), len(lifetimes)), (16, 4, 12))
@@ -514,6 +517,36 @@ class RustPublicExecutionTests(unittest.TestCase):
         self.assertFalse((output / 'instrumented').exists())
         self.assertFalse((output / rust_build.MANIFEST).exists())
         self.assertEqual(native_gate.identity(source), original)
+
+    def test_public_lifetime_capacity_and_trace_policy_reach_the_running_sdk(self) -> None:
+        built, current = self.lifetime_build()
+        for limit, traces in ((1, True), (4096, False)):
+            data = copy.deepcopy(current.data)
+            data['lifetimes']['max_live'] = limit
+            data['traces']['enabled'] = traces
+            data['resource']['service_name'] = f'rust-drop-limit-{limit}'
+            selected = Policy.parse(data)
+            runtime = self.runtime.with_name(data['resource']['service_name'])
+            retained = rust_build.read(built.directory, selected)
+            child = rust_launch.start(retained, selected, runtime, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            self.children.append(child)
+            stdout, stderr = child.communicate(input=b'1\n', timeout=15)
+            self.assertEqual((child.returncode, stdout, stderr), (0, b'ready\n7 3\n', b''))
+            final = health.read(runtime / 'health.json')
+            rust_launch.validate_health(final, retained, selected, child.pid)
+            expected = ('1', '2') if limit == 1 else ('3', '0')
+            self.assertEqual((final['drop_accounting']['admitted'], final['drop_accounting']['lost']), expected)
+            self.assertEqual(final['drop_accounting']['completed'], expected[0])
+            self.assertEqual(final['function_accounting']['ended'], '1')
+            self.assertEqual(len(self.public_lifetime_spans(data['resource']['service_name'])), 2 if traces else 0)
+            if limit == 1:
+                with self.assertRaisesRegex(ValueError, 'observation loss'):
+                    native_benchmark.validate_drain(final, selected)
+            else:
+                native_benchmark.validate_drain(final, selected)
+                self.assertEqual(final['span_accounting']['sampled_started'], '0')
+                self.assertEqual(final['trace_exports']['units_started'], '0')
 
     def test_shared_lifetime_benchmark_policy_retains_real_drop_drain(self) -> None:
         original = self.built.manifest()
