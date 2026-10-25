@@ -55,6 +55,8 @@ After Node/Python sampling, the driver restores collection and emission in the s
 
 Lifetime and trace configuration remain in every raw report. To measure lifecycle-observer cost, repeat the complete comparison under a separately labelled common policy with `[lifetimes] enabled = false`, keeping the remaining settings fixed. Do not interpret metric-off states as removing installed probes, trace work or lifecycle bookkeeping. Repeat runs on an otherwise idle host and inspect variation before drawing performance conclusions.
 
+The [Rust comparison candidate](rust-benchmarks.md) uses the same schema-2 results and Grafana queries with `language=rust`. Its SDK is embedded and counted once in application CPU/RSS. It requires the retained original example build and an external new output directory. Rust lifetime and task/service profiles remain separate unfinished work.
+
 ## View the comparison in Grafana
 
 Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate resource panels show Java/Node/Python/C/C++ CPU/operation and RSS by role, including Python and native instrumented supervisors. Native plain is a direct executable and the C++ SDK is embedded in the instrumented application. Compare Java's instrumented JVM with the other languages' application and SDK roles together when assessing total instrumentation cost. The dashboard uses exported driver measurements rather than sampled function-duration histograms.

@@ -44,6 +44,8 @@ The [C allocation lifetime candidate](docs/c-resources.md) binds selected record
 
 The [public Rust candidate](docs/rust-source.md) builds stock and instrumented standalone applications from unchanged sources, using common function selectors and the official C++ SDK pipeline. Its direct launcher supports independent live metric gates and retains final SDK health. The [compiler component](native/rust/compiler/README.md) supplies synchronous MIR probes, including panic unwinding. Cargo builds, prepared host release, automatic lifetimes, async/context integration, equivalent benchmarks and independent qualification remain work.
 
+The [Rust benchmark candidate](docs/rust-benchmarks.md) uses retained stock and woven builds of the ordinary Rust example, the same four live metric states and the shared Grafana comparison format. Actual Rust benchmark execution, protected checks and independent qualification are required before language completion. Rust automatic lifetimes and task/service propagation remain unsupported.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
