@@ -33,11 +33,15 @@ func (p *Recorder) lifetimeSpan(name, boundary string, started time.Time) (trace
 	}
 	_, span := p.tracer.Start(context.Background(), name+" lifetime", options...)
 	if span.SpanContext().IsValid() && !p.options.Detach(span) {
-		span.SetAttributes(attribute.String("boundary", "observer_failure"))
-		span.End()
+		failLifetimeSpan(span)
 		return nil, false
 	}
 	return span, true
+}
+
+func failLifetimeSpan(span trace.Span) {
+	span.SetAttributes(attribute.String("boundary", "observer_failure"))
+	span.End()
 }
 
 func labels(name, boundary string) metric.MeasurementOption {
@@ -88,6 +92,7 @@ func Track[T any](p *Recorder, object *T, id int) bool {
 		resource, ok = p.lifetimeSpan(binding.Name, "resource", started)
 		if !ok {
 			// The GC span is not published as a completed object lifetime.
+			failLifetimeSpan(gc)
 			p.rejectLifetime(binding.Name, "context_detach")
 			return false
 		}
