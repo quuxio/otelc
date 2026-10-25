@@ -10,6 +10,8 @@ on:
       - 'tests/test_go_context_bundle.py'
       - 'tests/test_go_runtime_config.py'
       - 'tests/test_go_scope_patch.py'
+      - 'tests/fixtures/go-detached/**'
+      - 'tests/fixtures/go-telemetry/**'
       - 'ci/go_scope_patch.py'
       - '.github/workflows/go-foundation.yml'
       - 'Makefile'
@@ -59,6 +61,17 @@ jobs:
             .venv/bin/python -m coverage report --data-file=build/go-foundation/python.coverage --include="*/$module.py" --fail-under=80
           done
           .venv/bin/python -m coverage json --data-file=build/go-foundation/python.coverage -o build/go-foundation/python-coverage.json
+      - name: Verify retained fixture dependency checksums
+        env:
+          GOWORK: 'off'
+          GOTOOLCHAIN: local
+        run: |
+          for task_fixture in tests/fixtures/go-detached tests/fixtures/go-telemetry; do
+            go -C "$task_fixture" mod download all
+            go -C "$task_fixture" mod verify
+            go -C "$task_fixture" list -mod=readonly -m all
+            git diff --exit-code -- "$task_fixture/go.mod" "$task_fixture/go.sum"
+          done
       - name: Retain small test and coverage records
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
