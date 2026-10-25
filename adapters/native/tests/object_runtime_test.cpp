@@ -4,10 +4,12 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <future>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 #include "opentelemetry/sdk/metrics/metric_reader.h"
@@ -147,6 +149,87 @@ struct World {
 void Finish(native::ObjectRuntime &engine, const void *address, const char *type = "usr:Item") {
   auto token = engine.Destroying(address, type);
   assert(token && engine.Destroyed(token, 0));
+}
+void AllocationFreeBoundaryKeepsRealReleaseAndCreationIdentity() {
+  World world;
+  auto engine = world.Engine({16, 16, native::LifetimeBoundary::free_entry});
+  auto parent = world.traces->GetTracer("application")->StartSpan("allocate");
+  const auto creation = parent->GetContext();
+  void *allocation = std::malloc(32);
+  assert(allocation && engine->Admit(allocation, "usr:WorkItem", "WorkItem", creation));
+  parent->End();
+  int untracked = 0;
+  assert(engine->Releasing(nullptr) == 0 && engine->Releasing(&untracked) == 0);
+  auto token = engine->Releasing(allocation);
+  assert(token && !engine->Releasing(allocation));
+  assert(engine->Status().live == 0 && engine->Status().destroying == 1);
+  assert(world.span_sink->spans.size() == 1);
+  std::free(allocation);
+  assert(engine->Destroyed(token, 0));
+  const auto &span = *world.span_sink->spans.back();
+  assert(span.GetName() == "WorkItem lifetime" && span.GetLinks().size() == 1);
+  assert(span.GetLinks()[0].GetSpanContext() == creation);
+  assert(opentelemetry::nostd::get<std::string>(span.GetAttributes().at("boundary")) == "free_entry");
+  assert(!span.GetAttributes().count("otelc.destructor.exception_exit"));
+  auto counts = world.Collect();
+  assert(counts.at("otelc.lifetime.admitted") == 1 && counts.at("otelc.lifetime.completed") == 1);
+  assert(engine->Status().lost == 0 && engine->Status().invalid == 0 && engine->Close());
+}
+void FreeGenerationsKeepReusedAddressesAndCrossThreadReleaseSeparate() {
+  World world;
+  auto engine = world.Engine({16, 16, native::LifetimeBoundary::free_entry});
+  // A fixed address makes allocator reuse deterministic without dereferencing
+  // storage that has already been released. The preceding test uses real free.
+  int storage = 0, abandoned = 0;
+  assert(engine->Admit(&storage, "usr:First", "First"));
+  assert(!engine->Admit(&storage, "usr:Alias", "Alias"));
+  auto first = engine->Releasing(&storage);
+  assert(first && engine->Admit(&storage, "usr:Second", "Second"));
+  assert(!engine->Destroyed(first, 1));
+  assert(engine->Destroyed(first, 0) && engine->Status().live == 1);
+  std::uint64_t second = 0;
+  std::thread worker([&] { second = engine->Releasing(&storage); });
+  worker.join();
+  assert(second && second != first && !engine->Close());
+  assert(engine->Destroyed(second, 0) && engine->Close());
+  auto status = engine->Status();
+  assert(status.completed == 2 && status.censored == 0 && status.duplicates == 1);
+  assert(status.lost == 1 && status.invalid == 1);
+  World censored;
+  auto unfinished = censored.Engine({16, 16, native::LifetimeBoundary::free_entry});
+  assert(unfinished->Admit(&abandoned, "usr:Item", "Item") && unfinished->Close());
+  assert(unfinished->Status().completed == 0 && unfinished->Status().censored == 1);
+  const auto &span = *censored.span_sink->spans.back();
+  assert(opentelemetry::nostd::get<std::string>(span.GetAttributes().at("boundary")) == "shutdown_censored");
+  assert(!opentelemetry::nostd::get<bool>(span.GetAttributes().at("otelc.lifetime.complete")));
+  assert(!span.GetAttributes().count("otelc.destructor.exception_exit"));
+}
+void AllocationControlsDoNotChangeTraceBoundariesOrAdmitUnsupportedModes() {
+  for (bool collection : {false, true}) for (bool emission : {false, true}) {
+    World world(collection, emission);
+    auto engine = world.Engine({16, 16, native::LifetimeBoundary::free_entry});
+    int item = 0;
+    assert(engine->Admit(&item, "usr:Item", "Item"));
+    assert(engine->Destroyed(engine->Releasing(&item), 0));
+    world.Collect();
+    assert(world.metric_sink->exports == (collection && emission ? 1u : 0u));
+    assert(world.span_sink->spans.size() == 1 && engine->Status().completed == 1);
+    assert(opentelemetry::nostd::get<std::string>(world.span_sink->spans[0]->GetAttributes().at("boundary")) == "free_entry");
+    assert(world.controller.SetCollection(true) && world.state->SetEmission(true));
+    assert(engine->Admit(&item, "usr:Item", "Item"));
+    assert(engine->Destroyed(engine->Releasing(&item), 0));
+    auto counts = world.Collect();
+    assert(counts.at("otelc.lifetime.completed") == (collection ? 2u : 1u));
+    assert(world.span_sink->spans.size() == 2 && engine->Close());
+  }
+  World world;
+  int item = 0;
+  auto cpp = world.Engine();
+  assert(!cpp->Releasing(&item) && cpp->Status().invalid == 1);
+  bool refused = false;
+  try { world.Engine({16, 16, static_cast<native::LifetimeBoundary>(99)}); }
+  catch (const std::invalid_argument &) { refused = true; }
+  assert(refused);
 }
 void CompletedSpanHasCreationLinkAndEndsBeforeCleanup() {
   World world;
@@ -412,6 +495,9 @@ void CompilerInsertedObjectBoundariesUseTheSDK() {
 }
 }  // namespace
 int main() {
+  AllocationFreeBoundaryKeepsRealReleaseAndCreationIdentity();
+  FreeGenerationsKeepReusedAddressesAndCrossThreadReleaseSeparate();
+  AllocationControlsDoNotChangeTraceBoundariesOrAdmitUnsupportedModes();
   CompletedSpanHasCreationLinkAndEndsBeforeCleanup();
   GenerationsNestedVariantsAndCrossThreadDestruction();
   EqualDisplayNamesAggregateLiveObjectsWithoutMergingIdentities();

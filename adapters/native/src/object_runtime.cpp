@@ -78,7 +78,8 @@ struct ObjectRuntime::Impl {
   mutable std::mutex mutex;
   std::map<std::string, Type> types;
   std::map<std::uint64_t, Observation> observations;
-  std::map<std::pair<std::uintptr_t, std::uint32_t>, std::uint64_t> index;
+  using Index = std::map<std::pair<std::uintptr_t, std::uint32_t>, std::uint64_t>;
+  Index index;
   std::atomic<std::uint64_t> lost{0}, invalid{0}, duplicates{0};
   std::uint64_t next = 1, admitted = 0, completed = 0, censored = 0, ending = 0;
   bool closing = false, closed = false, finalising = false;
@@ -88,16 +89,31 @@ struct ObjectRuntime::Impl {
       opentelemetry::nostd::shared_ptr<trace::Tracer> selected_tracer, ObjectLimits selected_limits)
       : state(std::move(selected_state)), tracer(std::move(selected_tracer)), limits(selected_limits) {
     if (!state || !meter || state->Status().closing || !limits.types || limits.types > 4096 ||
-        !limits.live || limits.live > 1000000)
+        !limits.live || limits.live > 1000000 ||
+        (limits.boundary != LifetimeBoundary::destructor_entry && limits.boundary != LifetimeBoundary::free_entry))
       throw std::invalid_argument("object observations require open SDK inputs and bounded limits");
     admitted_metric = meter->CreateUInt64Counter("otelc.lifetime.admitted", "Successful selected initialisations", "{object}");
-    completed_metric = meter->CreateUInt64Counter("otelc.lifetime.completed", "Observed first destructor entries", "{object}");
+    completed_metric = meter->CreateUInt64Counter("otelc.lifetime.completed", "Observed selected release entries", "{object}");
     incomplete = meter->CreateUInt64Counter("otelc.lifetime.incomplete", "Observations censored at shutdown", "{object}");
-    duration = meter->CreateDoubleHistogram("otelc.lifetime.duration", "Time until destructor entry or censoring", "s");
-    live_metric = meter->CreateInt64ObservableGauge("otelc.lifetime.live", "Selected objects before destructor entry", "{object}");
+    duration = meter->CreateDoubleHistogram("otelc.lifetime.duration", "Time until selected release entry or censoring", "s");
+    live_metric = meter->CreateInt64ObservableGauge("otelc.lifetime.live", "Selected observations before release entry", "{object}");
     live_metric->AddCallback(Observe, this);
   }
   ~Impl() { live_metric->RemoveCallback(Observe, this); }
+  const char *Boundary() const {
+    return limits.boundary == LifetimeBoundary::free_entry ? "free_entry" : "destructor_entry";
+  }
+  // The caller holds mutex. Remove the live-address entry before releasing its
+  // storage, so reuse can start a new generation while this completion drains.
+  std::uint64_t Claim(Index::iterator found, Clock::time_point end) {
+    if (closed || finalising || found == index.end()) return 0;
+    auto &item = observations.at(found->second);
+    item.destroying = true;
+    item.end = end;
+    --item.type->live;
+    index.erase(found);
+    return item.token;
+  }
   static void Observe(metrics::ObserverResult result, void *context) noexcept {
     auto &self = *static_cast<Impl *>(context);
     if (inside_object_runtime) { ++self.lost; return; }
@@ -110,12 +126,12 @@ struct ObjectRuntime::Impl {
       }
       auto observer = opentelemetry::nostd::get<opentelemetry::nostd::shared_ptr<metrics::ObserverResultT<int64_t>>>(result);
       for (const auto &[name, count] : values)
-        observer->Observe(static_cast<int64_t>(count), {{"type", name}, {"boundary", "destructor_entry"}});
+        observer->Observe(static_cast<int64_t>(count), {{"type", name}, {"boundary", self.Boundary()}});
     } catch (...) { ++self.lost; }
   }
   void Emit(const Observation &item, bool complete, bool unwinding = false) noexcept {
     try {
-      const char *boundary = complete ? "destructor_entry" : "shutdown_censored";
+      const char *boundary = complete ? Boundary() : "shutdown_censored";
       if (item.collection && state->Collecting()) {
         (complete ? completed_metric : incomplete)->Add(1, {{"type", item.type->name}, {"boundary", boundary}});
         duration->Record(std::chrono::duration<double>(item.end - item.start).count(),
@@ -133,7 +149,8 @@ struct ObjectRuntime::Impl {
       auto instance = std::to_string(item.token);
       labels.emplace("otelc.lifetime.instance", instance);
       auto span = tracer->StartSpan(item.type->name + " lifetime", labels, links, options);
-      if (complete) span->SetAttribute("otelc.destructor.exception_exit", unwinding);
+      if (complete && limits.boundary == LifetimeBoundary::destructor_entry)
+        span->SetAttribute("otelc.destructor.exception_exit", unwinding);
       trace::EndSpanOptions end;
       end.end_steady_time = item.end;
       span->End(end);
@@ -168,7 +185,11 @@ bool ObjectRuntime::Admit(const void *address, const char *type_usr, const char 
         type = impl_->types.emplace(id, Impl::Type{label, static_cast<std::uint32_t>(impl_->types.size())}).first;
       } else if (type->second.name != label) { ++impl_->invalid; return false; }
       auto key = std::make_pair(reinterpret_cast<std::uintptr_t>(address), type->second.id);
-      if (impl_->index.count(key)) { ++impl_->duplicates; ++impl_->lost; return false; }
+      auto existing = impl_->index.lower_bound({key.first, 0});
+      if (impl_->index.count(key) || (impl_->limits.boundary == LifetimeBoundary::free_entry &&
+          existing != impl_->index.end() && existing->first.first == key.first)) {
+        ++impl_->duplicates; ++impl_->lost; return false;
+      }
       auto token = impl_->next++;
       impl_->observations.emplace(token, Impl::Observation{&type->second, key.first, token, start, {}, epoch, creation, collection});
       try { impl_->index.emplace(key, token); }
@@ -177,7 +198,7 @@ bool ObjectRuntime::Admit(const void *address, const char *type_usr, const char 
       ++impl_->admitted;
     }
     if (collection && impl_->state->Collecting())
-      impl_->admitted_metric->Add(1, {{"type", label}, {"boundary", "destructor_entry"}});
+      impl_->admitted_metric->Add(1, {{"type", label}, {"boundary", impl_->Boundary()}});
     return true;
   } catch (...) { ++impl_->lost; return false; }
 }
@@ -194,13 +215,22 @@ std::uint64_t ObjectRuntime::Destroying(const void *address, const char *type_us
     if (type == impl_->types.end()) return 0;
     auto key = std::make_pair(reinterpret_cast<std::uintptr_t>(address), type->second.id);
     auto found = impl_->index.find(key);
-    if (found == impl_->index.end()) return 0;
-    auto &item = impl_->observations.at(found->second);
-    item.destroying = true;
-    item.end = end;
-    --type->second.live;
-    impl_->index.erase(found);
-    return item.token;
+    return impl_->Claim(found, end);
+  } catch (...) { ++impl_->invalid; return 0; }
+}
+
+std::uint64_t ObjectRuntime::Releasing(const void *address) noexcept {
+  if (inside_object_runtime) { ++impl_->lost; return 0; }
+  Guard guard;
+  if (impl_->limits.boundary != LifetimeBoundary::free_entry) { ++impl_->invalid; return 0; }
+  if (!address) return 0;
+  try {
+    auto end = Clock::now();
+    auto key = reinterpret_cast<std::uintptr_t>(address);
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    auto found = impl_->index.lower_bound({key, 0});
+    if (found == impl_->index.end() || found->first.first != key) return 0;
+    return impl_->Claim(found, end);
   } catch (...) { ++impl_->invalid; return 0; }
 }
 
@@ -212,7 +242,8 @@ bool ObjectRuntime::Destroyed(std::uint64_t token, std::int32_t unwinding) noexc
   {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     auto found = impl_->observations.find(token);
-    if (found == impl_->observations.end() || !found->second.destroying || (unwinding != 0 && unwinding != 1)) {
+    if (found == impl_->observations.end() || !found->second.destroying || (unwinding != 0 && unwinding != 1) ||
+        (impl_->limits.boundary == LifetimeBoundary::free_entry && unwinding != 0)) {
       ++impl_->invalid; return false;
     }
     item = std::move(found->second);
