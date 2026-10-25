@@ -73,3 +73,17 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["language"], "typescript")
             self.assertEqual(run.call_args.kwargs["backend"], "api")
             self.assertEqual(run.call_args.kwargs["comparison_id"], "shared")
+        with patch('otelc.go_benchmark.run', return_value=report) as run:
+            self.invoke(['benchmark', '--language', 'go', '--build', '/tmp/go-build',
+                         '--output', '/tmp/go-comparison', '--comparison-id', 'shared', '--no-publish'])
+            self.assertEqual(str(run.call_args.kwargs['build_directory']), '/tmp/go-build')
+            self.assertEqual(run.call_args.kwargs['comparison_id'], 'shared')
+            self.assertFalse(run.call_args.kwargs['publish'])
+
+    def test_go_benchmark_requires_its_build_and_other_languages_refuse_it(self) -> None:
+        for arguments in (['--language', 'go'], ['--language', 'python', '--build', '/tmp/go-build']):
+            with self.subTest(arguments=arguments), patch('sys.argv', [
+                    'quux-otelc', 'benchmark', '--output', '/tmp/comparison', *arguments]), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                main()
+            self.assertEqual(error.exception.code, 1)

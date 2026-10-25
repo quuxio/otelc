@@ -22,7 +22,7 @@ from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe
 from otelc import native_launch
 from otelc import native_build, prepared_native
-from otelc import go_build, go_prepared_tools, prepared_go
+from otelc import go_benchmark, go_build, go_prepared_tools, prepared_go
 from ci import build_go_upstream
 from otelc import path_boundaries
 from otelc.config import LANGUAGES, Policy
@@ -78,8 +78,9 @@ def main() -> int:
     go_launch.add_argument('arguments', nargs=argparse.REMAINDER)
     compare = commands.add_parser("benchmark")
     compare.add_argument("--output", type=Path, required=True)
+    compare.add_argument('--build', type=Path, help='Go only: existing go-build directory for examples/go')
     compare.add_argument("--no-publish", action="store_true")
-    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python"), default="java")
+    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python", "go"), default="java")
     compare.add_argument("--backend", choices=("native", "api"), default="native")
     compare.add_argument("--comparison-id", help="group equivalent language runs in Grafana")
     example = commands.add_parser("example")
@@ -250,6 +251,13 @@ def application_arguments(arguments: list[str]) -> tuple[str, ...]:
 
 def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
     """Select the benchmark adapter while preserving the common comparison settings."""
+    if args.language == 'go':
+        if args.build is None:
+            raise ValueError('Go benchmark requires --build from the shared examples/go application')
+        return go_benchmark.run(policy, args.output, build_directory=args.build,
+                                publish=not args.no_publish, comparison_id=args.comparison_id)
+    if args.build is not None:
+        raise ValueError('benchmark --build applies only to Go')
     if args.language == "java":
         return benchmark.run(policy, args.output, publish=not args.no_publish,
                              comparison_id=args.comparison_id)
