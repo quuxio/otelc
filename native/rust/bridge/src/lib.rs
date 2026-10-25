@@ -3,6 +3,25 @@
 //! The tooling owns SDK initialisation, selection and linking. Hook calls use
 //! the existing native pipeline and allocate no Rust-side registry or exporter.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static LAST_KEY: AtomicUsize = AtomicUsize::new(0);
+
+// Keys identify observations, not storage. Relaxed ordering supplies uniqueness;
+// SDK admission and ownership remain synchronised at their existing boundaries.
+fn next_key(counter: &AtomicUsize) -> Option<usize> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .ok()
+        .map(|previous| previous + 1)
+}
+
+#[cfg(test)]
+#[path = "keys_tests.rs"]
+mod keys_tests;
+
 mod native {
     unsafe extern "C" {
         pub fn otelc_function_named_enter_v1(name: *const u8, size: u64) -> u64;
@@ -28,6 +47,28 @@ pub mod compiler_mir {
         (2..=4097).contains(&bytes.len())
             && bytes.last() == Some(&0)
             && !bytes[..bytes.len() - 1].contains(&0)
+    }
+
+    /// Allocate an identity independent of object size, address or ownership moves.
+    #[inline(never)]
+    pub fn drop_new(type_usr: &str, name: &str) -> usize {
+        if terminated(type_usr)
+            && terminated(name)
+            && let Some(key) = super::next_key(&super::LAST_KEY)
+        {
+            // The SDK treats this integer as opaque and never reads its address.
+            unsafe {
+                super::native::otelc_object_created_v1(
+                    key as *const u8,
+                    type_usr.as_ptr(),
+                    name.as_ptr(),
+                )
+            }
+            key
+        } else {
+            unsafe { super::native::otelc_object_metadata_error_v1() }
+            0
+        }
     }
 
     /// Observe successful construction; storage is an opaque compiler identity.

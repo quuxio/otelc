@@ -53,6 +53,7 @@ fn action(command:i32)->i32 {
   let long=format!("{}\0","x".repeat(4097));
   for bad in ["","\0","unterminated","a\0b\0",long.as_str()] {
    hooks::drop_created(1,bad,NAME);hooks::drop_created(1,USR,bad);
+   assert_eq!(hooks::drop_new(bad,NAME),0);assert_eq!(hooks::drop_new(USR,bad),0);
    hooks::drop_moved(1,2,bad);assert_eq!(hooks::drop_enter(1,bad),0);
   }
   hooks::drop_exit(0);hooks::drop_unwind(0);return 0
@@ -80,6 +81,34 @@ fn action(command:i32)->i32 {
 fn main(){println!("ready");for line in io::stdin().lock().lines(){
  let command:i32=line.unwrap().parse().unwrap();
  let result=action(command);println!("{} {}",result,DROPS.load(Ordering::SeqCst));
+}}
+'''
+
+# This remains an explicit bridge harness, not compiler-owned MIR insertion.
+DROP_KEYS_HARNESS = r'''use otelc_rust_bridge::compiler_mir as hooks;
+use std::io::{self,BufRead};
+use std::sync::atomic::{AtomicU32,Ordering};
+const USR:&str="rust:private:ZeroSized\0";
+const NAME:&str="ZeroSized\0";
+static DROPS:AtomicU32=AtomicU32::new(0);
+struct ZeroSized;
+impl Drop for ZeroSized {fn drop(&mut self){DROPS.fetch_add(1,Ordering::SeqCst);}}
+fn action(command:i32) {
+ assert_eq!(std::mem::size_of::<ZeroSized>(),0);
+ let first=ZeroSized;let first_key=hooks::drop_new(USR,NAME);
+ let second=ZeroSized;let second_key=hooks::drop_new(USR,NAME);
+ assert_ne!(first_key,0);assert_ne!(second_key,0);assert_ne!(first_key,second_key);
+ let moved=first;let moved_key=first_key;
+ let token=hooks::drop_enter(moved_key,USR);assert_ne!(token,0);
+ drop(moved);hooks::drop_exit(token);
+ if command==2 {std::mem::forget(second)} else {
+  let token=hooks::drop_enter(second_key,USR);assert_ne!(token,0);
+  drop(second);hooks::drop_exit(token);
+ }
+}
+fn main(){println!("ready");for line in io::stdin().lock().lines(){
+ let command:i32=line.unwrap().parse().unwrap();
+ action(command);println!("{}",DROPS.load(Ordering::SeqCst));
 }}
 '''
 
@@ -351,12 +380,54 @@ class RustCompilerCases(unittest.TestCase):
         final = health.read(endpoint.parent / 'health.json')
         self.assertEqual((final['schema_version'], final['pid']), (5, process.pid))
         self.assertEqual(final['lifecycle']['shutdown'], 'succeeded')
-        self.assertEqual(final['function_accounting']['metadata_errors'], '20')
+        self.assertEqual(final['function_accounting']['metadata_errors'], '30')
         self.assertEqual(final['drop_accounting'], dict(types='1', admitted='5', completed='3',
             live='0', dropping='0', ending='0', censored='2', lost='0', duplicates='0', invalid='0',
             closing=True, closed=True))
         self.check_drop_spans(label)
         self.check_drop_metrics(label, collection)
+
+    def test_private_drop_keys_distinguish_zero_size_moves_and_forgotten_values(self) -> None:
+        entry = self.source('private_keys.rs', DROP_KEYS_HARNESS)
+        result, _, product = self.compile(entry, 'weave')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        for collection, emission in ((False, False), (False, True), (True, False), (True, True)):
+            self.exercise_drop_keys(product, f'private-keys-{int(collection)}{int(emission)}',
+                                    collection, emission)
+
+    def exercise_drop_keys(self, product: Path, label: str, collection: bool, emission: bool) -> None:
+        """Keep distinct ZST observations through a move and a forgotten predecessor."""
+        process, endpoint = self.start(product, label,
+            self.policy(collection=collection, emission=emission), drops=True)
+        self.call(process, 1, b'2\n')
+        control.request(endpoint, 'on')
+        self.call(process, 2, b'3\n')
+        self.call(process, 1, b'5\n')
+        self.assertEqual(control.request(endpoint, 'status')['pid'], process.pid)
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual((process.returncode, stdout, stderr), (0, b'', b''))
+        final = health.read(endpoint.parent / 'health.json')
+        self.assertEqual((final['schema_version'], final['pid']), (5, process.pid))
+        self.assertEqual(final['lifecycle']['shutdown'], 'succeeded')
+        self.assertEqual(final['function_accounting']['metadata_errors'], '0')
+        self.assertEqual(final['drop_accounting'], dict(types='1', admitted='6', completed='5',
+            live='0', dropping='0', ending='0', censored='1', lost='0', duplicates='0', invalid='0',
+            closing=True, closed=True))
+        spans = [span for request in self.capture.traces for resource in request.resource_spans
+                 if any(item.key == 'service.name' and item.value.string_value == label
+                        for item in resource.resource.attributes)
+                 for scope in resource.scope_spans for span in scope.spans]
+        self.assertEqual(len(spans), 6)
+        self.assertEqual(len({span.span_id for span in spans}), 6)
+        boundaries = []
+        for span in spans:
+            self.assertEqual(span.name, 'ZeroSized lifetime')
+            labels = {item.key: item.value for item in span.attributes}
+            boundaries.append(labels['boundary'].string_value)
+            self.assertNotIn('otelc.destructor.exception_exit', labels)
+            if labels['boundary'].string_value == 'drop_entry':
+                self.assertFalse(labels['otelc.drop.exception_exit'].bool_value)
+        self.assertEqual(sorted(boundaries), ['drop_entry'] * 5 + ['shutdown_censored'])
 
     def check_drop_spans(self, label: str) -> None:
         """Join independent lifetime traces to their actual action span identities."""
