@@ -1,0 +1,84 @@
+name: Rust lifetime discovery
+on:
+  pull_request:
+    paths:
+      - 'native/rust/**'
+      - 'otelc/rust_lifetimes.py'
+      - 'ci/rust_lifetime_cases.py'
+      - 'tests/test_rust_lifetimes.py'
+      - '.github/workflows/rust-lifetimes.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-lifetimes-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  discovery:
+    name: Rust lifetime compiler discovery
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install pinned compiler and Python checks
+        run: |
+          mkdir -p build/rust-discovery/profiles
+          git rev-parse HEAD > build/rust-discovery/head.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev,clippy,rustfmt,llvm-tools
+          rustup run 1.98.1 rustc -vV | tee build/rust-discovery/rustc-version.txt
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+          rustup run 1.98.1 cargo fetch --locked --manifest-path native/rust/compiler/Cargo.toml
+      - name: Build and review the compiler without an SDK build
+        run: |
+          task_sysroot="$(rustup run 1.98.1 rustc --print sysroot)"
+          export RUSTC="$(rustup which --toolchain 1.98.1 rustc)"
+          export RUSTC_BOOTSTRAP=otelc_rust_compiler
+          export RUSTFLAGS="-C prefer-dynamic -C rpath -C link-arg=-Wl,-rpath,$task_sysroot/lib -C instrument-coverage"
+          export LLVM_PROFILE_FILE="$PWD/build/rust-discovery/profiles/%m-%p.profraw"
+          rustup run 1.98.1 cargo fmt --manifest-path native/rust/compiler/Cargo.toml --check
+          rustup run 1.98.1 cargo build --offline --locked --manifest-path native/rust/compiler/Cargo.toml --target-dir build/rust-discovery/compiler 2>&1 | tee build/rust-discovery/compiler-build.log
+          rustup run 1.98.1 cargo test --offline --locked --manifest-path native/rust/compiler/Cargo.toml --target-dir build/rust-discovery/compiler 2>&1 | tee build/rust-discovery/compiler-tests.log
+          rustup run 1.98.1 cargo clippy --offline --locked --all-targets --manifest-path native/rust/compiler/Cargo.toml --target-dir build/rust-discovery/compiler -- -D warnings 2>&1 | tee build/rust-discovery/clippy.log
+      - name: Check original Rust inputs, common selection and real MIR discovery
+        run: |
+          export OTELC_RUSTC="$(rustup which --toolchain 1.98.1 rustc)"
+          export OTELC_RUST_COMPILER="$PWD/build/rust-discovery/compiler/debug/otelc-rust-compiler"
+          export OTELC_RUST_COMPONENT_OUTPUT="$PWD/build/rust-discovery/profiles"
+          make rust-lifetime-check PYTHON=.venv/bin/python
+          .venv/bin/python -m coverage json --data-file=build/rust-lifetime.coverage -o build/rust-discovery/python-coverage.json
+      - name: Require measured lifetime module coverage
+        run: |
+          task_sysroot="$(rustup run 1.98.1 rustc --print sysroot)"
+          task_host="$(rustup run 1.98.1 rustc -vV | sed -n 's/^host: //p')"
+          task_tools="$task_sysroot/lib/rustlib/$task_host/bin"
+          "$task_tools/llvm-profdata" merge -sparse build/rust-discovery/profiles/*.profraw -o build/rust-discovery/lifetimes.profdata
+          "$task_tools/llvm-cov" export build/rust-discovery/compiler/debug/otelc-rust-compiler -instr-profile=build/rust-discovery/lifetimes.profdata "$PWD/native/rust/compiler/src/lifetimes.rs" > build/rust-discovery/rust-coverage.json
+          .venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          from ci.check_native_controls import summaries
+          path = Path('native/rust/compiler/src/lifetimes.rs').resolve()
+          print(json.dumps(summaries(json.loads(Path('build/rust-discovery/rust-coverage.json').read_bytes()), {path})))
+          PY
+      - name: Retain focused evidence and executable coverage mapping
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-lifetime-discovery-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rust-discovery/*.txt
+            build/rust-discovery/*.log
+            build/rust-discovery/*.json
+            build/rust-discovery/lifetimes.profdata
+            build/rust-discovery/profiles/
+            build/rust-discovery/compiler/debug/otelc-rust-compiler

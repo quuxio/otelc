@@ -16,7 +16,7 @@ The current metadata key is storage address plus resolved type identity. The com
 
 ## Compiler and public integration still required
 
-1. Inventory resolved types, size/layout, construction sites, moves, copies and drop boundaries through the pinned Rust compiler. Apply the common source and lifetime selectors, including exclusions. Keep unsupported or incomplete coverage visible.
+1. Qualify the [compiler-owned discovery candidate](rust-lifetime-discovery.md), which records resolved root-local types, layouts and pre-optimisation ownership sites and applies common source/lifetime selectors. Extend field/container and whole-build coverage; keep unsupported or incomplete cases visible.
 2. Insert private typed hooks after successful construction and at actual ownership transfer/drop paths, including unwind. Do not add fields to application types or change public signatures, traits, ownership, pinning or source bytes. Qualify the MIR phase against optimisation and drop elaboration so elided storage or cleanup cannot silently remove observations.
 3. Qualify the [private compiler bridge and explicit SDK plan](rust-drop-bridge.md) against the genuine matching products, then connect them to automatic compiler insertion. Retain versioned build/selection/health records, bounded metadata, censored/lost observations and actual SDK drain. Existing C/C++ ABI and observation boundaries must keep their meanings.
 4. Exercise local, returned, argument, nested and container moves; copies, address reuse and zero-sized values; ordinary/failed construction and panic/drop cleanup; cross-thread/task ownership, cancellation, pinning and `mem::forget`. Unobserved release must remain censored rather than becoming a fabricated destructor.

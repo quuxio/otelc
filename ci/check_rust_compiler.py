@@ -86,10 +86,11 @@ def check() -> None:
         OTELC_RUST_BRIDGE=str(work / 'bridge/release/libotelc_rust_bridge.rlib'), OTELC_NATIVE_SDK_BUILD=str(sdk))
     data = work / 'python.coverage'
     run([sys.executable, '-m', 'coverage', 'run', '--data-file=' + str(data),
-         '--source=ci.rust_compiler_cases,otelc.health', '-m', 'ci.rust_compiler_cases'], work, 'cases', environment)
+         '--source=ci.rust_compiler_cases,ci.rust_lifetime_cases,otelc.rust_lifetimes,otelc.health',
+         '-m', 'ci.rust_compiler_cases'], work, 'cases', environment)
     tests = json.loads((cases / 'tests-result.json').read_bytes())
     test_result(tests)
-    for name in ('ci/rust_compiler_cases.py', 'otelc/health.py'):
+    for name in ('ci/rust_compiler_cases.py', 'ci/rust_lifetime_cases.py', 'otelc/rust_lifetimes.py', 'otelc/health.py'):
         run([sys.executable, '-m', 'coverage', 'report', '--data-file=' + str(data),
              '--include=*/' + name, '--fail-under=80'], work, Path(name).stem + '-coverage', environment)
     profiles = sorted(cases.glob('*.profraw'))
@@ -98,7 +99,8 @@ def check() -> None:
     merged = work / 'compiler.profdata'
     run([str(binaries / 'llvm-profdata'), 'merge', '-sparse', *map(str, profiles), '-o', str(merged)],
         work, 'profiles', environment)
-    expected = {ROOT / 'native/rust/compiler/src' / name for name in ('main.rs', 'request.rs', 'hooks.rs', 'instrument.rs')}
+    expected = {ROOT / 'native/rust/compiler/src' / name
+                for name in ('main.rs', 'request.rs', 'hooks.rs', 'instrument.rs', 'lifetimes.rs')}
     raw = run([str(binaries / 'llvm-cov'), 'export', environment['OTELC_RUST_COMPILER'],
         '-instr-profile=' + str(merged), *map(str, sorted(expected))], work, 'compiler-coverage', environment)
     coverage = summaries(json.loads(raw), expected)

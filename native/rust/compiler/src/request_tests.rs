@@ -80,6 +80,16 @@ fn accepts_both_modes_without_changing_original_sources() {
 }
 
 #[test]
+fn lifetime_discovery_is_explicit_without_function_selection() {
+    let fixture = Fixture::new();
+    let mut value = fixture.value.clone();
+    value["mode"] = json!("lifetime-inspect");
+    assert_eq!(fixture.load(&value).unwrap().mode, "lifetime-inspect");
+    value["selected"] = json!(["app.rs::main"]);
+    fixture.rejects(&value);
+}
+
+#[test]
 fn rejects_unknown_missing_and_wrongly_typed_fields() {
     let fixture = Fixture::new();
     for field in [

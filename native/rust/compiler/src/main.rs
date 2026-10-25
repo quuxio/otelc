@@ -2,6 +2,7 @@
 //! Compiler-owned component: inspect original definitions, then weave typed MIR.
 extern crate rustc_abi;
 extern crate rustc_ast;
+extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_index;
@@ -12,6 +13,7 @@ extern crate rustc_span;
 
 mod hooks;
 mod instrument;
+mod lifetimes;
 mod request;
 
 use anyhow::{Context, Result, bail};
@@ -47,6 +49,10 @@ fn definition(tcx: TyCtxt<'_>, id: LocalDefId) -> Result<Option<Definition>> {
     ) {
         return Ok(None);
     }
+    source_definition(tcx, id)
+}
+
+fn source_definition(tcx: TyCtxt<'_>, id: LocalDefId) -> Result<Option<Definition>> {
     let span = tcx.def_span(id);
     let map = tcx.sess.source_map();
     let location = map.lookup_char_pos(span.lo());
@@ -85,7 +91,10 @@ fn definition(tcx: TyCtxt<'_>, id: LocalDefId) -> Result<Option<Definition>> {
         compiler_name,
         start: location.file.original_relative_byte_pos(span.lo()).0,
         end: location.file.original_relative_byte_pos(span.hi()).0,
-        asynchronous: tcx.asyncness(id).is_async() || tcx.coroutine_kind(id).is_some(),
+        asynchronous: matches!(
+            tcx.def_kind(id),
+            DefKind::Fn | DefKind::AssocFn | DefKind::Closure
+        ) && (tcx.asyncness(id).is_async() || tcx.coroutine_kind(id).is_some()),
         expanded: span.from_expansion(),
     }))
 }
@@ -128,6 +137,11 @@ fn instrument<'tcx>(tcx: TyCtxt<'tcx>, id: LocalDefId) -> &'tcx Body<'tcx> {
 struct Probe;
 impl Callbacks for Probe {
     fn config(&mut self, config: &mut Config) {
+        if request().mode == "lifetime-inspect" {
+            config.override_queries = Some(|_, providers| {
+                lifetimes::install(&mut providers.queries);
+            });
+        }
         if request().mode == "weave" {
             config.override_queries = Some(|_, providers| {
                 ORIGINAL
@@ -152,7 +166,7 @@ impl Callbacks for Probe {
             if entry != request().entry {
                 bail!("compiler crate root differs from the original entry");
             }
-            if request().mode == "inspect" {
+            if request().mode != "weave" {
                 return Ok(None);
             }
             let mut parser = rustc_parse::new_parser_from_source_str(
@@ -188,6 +202,9 @@ impl Callbacks for Probe {
     }
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         let result = (|| -> Result<()> {
+            if request().mode == "lifetime-inspect" {
+                return lifetimes::publish(tcx);
+            }
             let mut rows = Vec::new();
             for id in tcx.hir_body_owners() {
                 if let Some(row) = definition(tcx, id)? {
@@ -231,7 +248,7 @@ impl Callbacks for Probe {
                 tcx.dcx().err(format!("otelc Rust compiler: {error:#}"));
                 Compilation::Stop
             }
-            Ok(()) if request().mode == "inspect" => Compilation::Stop,
+            Ok(()) if request().mode != "weave" => Compilation::Stop,
             Ok(()) => Compilation::Continue,
         }
     }
