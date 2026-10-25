@@ -239,7 +239,8 @@ def main() -> int:
             return 0
         return run_example(policy, args.language, plain=args.plain)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
-        parser.exit(1, f"quux-otelc: {error}\n")
+        notes = ''.join(f"quux-otelc: {note}\n" for note in getattr(error, '__notes__', ()))
+        parser.exit(1, f"quux-otelc: {error}\n{notes}")
 
 
 def application_arguments(arguments: list[str]) -> tuple[str, ...]:

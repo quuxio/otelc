@@ -77,9 +77,10 @@ native-launch-check:
 
 go-public-check:
 	mkdir -p build
-	PYTHONPATH=tests $(PYTHON) -m coverage run --data-file=build/go-public.coverage --source=otelc.go_build,otelc.go_benchmark,otelc.go_source,otelc.go_build_tags,otelc.go_prepared_tools,otelc.go_supervisor,otelc.prepared_go,otelc.go_http_bundle,otelc.path_boundaries,ci.check_go_http -m unittest test_go_source test_go_build test_go_benchmark test_go_benchmark_failures test_prepared_go test_go_build_tags test_go_prepared_tools test_go_scope_build test_go_scope_tooling test_go_boundaries test_go_http_bundle test_go_http_integration test_go_http2 test_go_baggage test_go_supervisor -v
+	PYTHONPATH=tests $(PYTHON) -m coverage run --data-file=build/go-public.coverage --source=otelc.go_build,otelc.go_benchmark,otelc.benchmark_cleanup,otelc.go_source,otelc.go_build_tags,otelc.go_prepared_tools,otelc.go_supervisor,otelc.prepared_go,otelc.go_http_bundle,otelc.path_boundaries,ci.check_go_http -m unittest test_go_source test_go_build test_go_benchmark test_go_benchmark_failures test_prepared_go test_go_build_tags test_go_prepared_tools test_go_scope_build test_go_scope_tooling test_go_boundaries test_go_http_bundle test_go_http_integration test_go_http2 test_go_baggage test_go_supervisor -v
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_benchmark.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/benchmark_cleanup.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_source.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_build_tags.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_prepared_tools.py' --fail-under=80
@@ -160,6 +161,7 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/ci/go_scope_patch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_benchmark.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/benchmark_cleanup.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_source.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_build_tags.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_prepared_tools.py' --fail-under=80

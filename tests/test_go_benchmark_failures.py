@@ -23,6 +23,21 @@ class GoBenchmarkFailureTests(unittest.TestCase):
         self.policy = Policy.parse({'schema_version': 3})
         self.receipt = {'receipt': {'root': str(self.root), 'target': '.'}}
 
+    def test_every_cleanup_step_runs_without_replacing_the_body_failure(self) -> None:
+        owner = Mock(pid=1234)
+        process = adapter.Application(owner, 5678, 0)
+        original = KeyboardInterrupt('measurement cancelled')
+        owner.stdin.close.side_effect = OSError('input close failed')
+        owner.stdout.close.side_effect = OSError('output close failed')
+        with patch.object(adapter.benchmark, 'stop', side_effect=ValueError('application stop failed')) as stop, \
+                patch.object(adapter, 'stop_group', side_effect=TimeoutError('group stop failed')) as group:
+            adapter.shutdown(owner, process, original)
+        stop.assert_called_once_with(process); group.assert_called_once_with(owner)
+        owner.stdin.close.assert_called_once(); owner.stdout.close.assert_called_once()
+        self.assertEqual(original.__notes__, ['Go benchmark application stop also failed: ValueError',
+            'Go benchmark owner stop also failed: TimeoutError', 'Go benchmark stdin close also failed: OSError',
+            'Go benchmark stdout close also failed: OSError'])
+
     def alias_for(self, path: Path) -> Path:
         alias = path.with_name(path.name.swapcase())
         if not alias.exists():

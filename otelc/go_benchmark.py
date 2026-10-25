@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator, TextIO
 
-from otelc import benchmark, benchmark_process, control, go_health, path_boundaries, prepared_go as prepared
+from otelc import benchmark, benchmark_cleanup, benchmark_process, control, go_health, path_boundaries, prepared_go as prepared
 from otelc import python_launch_files as files
 from otelc.config import Policy
 from otelc.file_inputs import identity
@@ -98,23 +98,15 @@ def completed(process: Application, runtime: Path, *, plain: bool, retain: bool 
 def shutdown(owner: subprocess.Popen[str], process: Application | None,
              failure: BaseException | None) -> None:
     """Always reap the owned group and attempt both pipe closes after a body error."""
-    try:
-        try:
-            if process is not None:
-                benchmark.stop(process)
-        finally:
-            stop_group(owner)
-    except BaseException as error:
-        if failure is None:
-            raise
-        failure.add_note('Go benchmark cleanup also failed: ' + type(error).__name__)
-    finally:
-        try:
-            if owner.stdin is not None:
-                owner.stdin.close()
-        finally:
-            if owner.stdout is not None:
-                owner.stdout.close()
+    cleanup = benchmark_cleanup.Cleanup(failure)
+    if process is not None:
+        cleanup.run(lambda: benchmark.stop(process), 'Go benchmark application stop')
+    cleanup.run(lambda: stop_group(owner), 'Go benchmark owner stop')
+    if owner.stdin is not None:
+        cleanup.run(owner.stdin.close, 'Go benchmark stdin close')
+    if owner.stdout is not None:
+        cleanup.run(owner.stdout.close, 'Go benchmark stdout close')
+    cleanup.finish()
 
 
 @contextmanager
@@ -138,21 +130,12 @@ def application(policy: Policy, runtime: Path, build: Path, *, plain: bool) -> I
             failure = error
             raise
         finally:
-            try:
-                shutdown(owner, process, failure)
-            except BaseException as error:
-                if failure is None:
-                    failure = error
-                    raise
-                failure.add_note('Go benchmark cleanup also failed: ' + type(error).__name__)
-            finally:
-                if process is not None:
-                    try:
-                        completed(process, runtime, plain=plain, retain=failure is None)
-                    except BaseException as error:
-                        if failure is None:
-                            raise
-                        failure.add_note('Go benchmark final validation also failed: ' + type(error).__name__)
+            cleanup = benchmark_cleanup.Cleanup(failure)
+            cleanup.run(lambda: shutdown(owner, process, failure), 'Go benchmark cleanup')
+            if process is not None:
+                cleanup.run(lambda: completed(process, runtime, plain=plain, retain=cleanup.failure is None),
+                            'Go benchmark final validation')
+            cleanup.finish()
 
 
 def switch(endpoint: Path, process: Application, mode: str) -> dict[str, Any]:
