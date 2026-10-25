@@ -12,9 +12,14 @@ from otelc.config import Policy
 from otelc.python_sdk_io import decode
 
 PROFILE = 'llvm22-native-resource-units-v1'
+DIRECTORY = 'resources'
+TOOL_DIRECTORY = 'resource-tool'
+RESOLUTION = 'resolution.json'
+SYMBOL_FLAGS = ('--defined-only', '--extern-only', '--format=just-symbols')
+INTERPOSED = frozenset(name for base in ('malloc', 'calloc', 'realloc', 'free') for name in (base, '_' + base))
 UNIT_FILES = ('source.d', 'dependencies.json', 'dependencies.stderr', 'semantics.stderr',
               'dependencies-after.json', 'dependencies-after.stderr', 'semantics.json.gz',
-              native_resources.MANIFEST, 'resolution.json')
+              native_resources.MANIFEST, RESOLUTION)
 
 
 def require(condition: bool, reason: str) -> None:
@@ -33,9 +38,9 @@ def units(recipe: dict[str, Any]) -> list[dict[str, Any]]:
 
 def artifacts(recipe: dict[str, Any], output: Path) -> set[Path]:
     """Keep the fixed tool, semantic query channels and emitted-site denominator."""
-    paths = {output / 'resource-tool' / name for name in native_object_build.TOOL_FILES}
+    paths = {output / TOOL_DIRECTORY / name for name in native_object_build.TOOL_FILES}
     for unit in units(recipe):
-        paths.update(output / 'resources' / unit['id'] / name for name in UNIT_FILES)
+        paths.update(output / DIRECTORY / unit['id'] / name for name in UNIT_FILES)
     return paths
 
 
@@ -43,12 +48,12 @@ def build(policy: Policy, root: Path, recipe: dict[str, Any], output: Path,
           *, llvm_config: Path | None = None) -> dict[str, Any]:
     """Inspect each unedited unit with its actual flags, cwd and private assets."""
     selected = units(recipe)
-    tool = native_lifetimes.build_tool(output / 'resource-tool', llvm_config=llvm_config,
+    tool = native_lifetimes.build_tool(output / TOOL_DIRECTORY, llvm_config=llvm_config,
                                        profile=native_resources.PROFILE)
-    (output / 'resources').mkdir(mode=0o700)
+    (output / DIRECTORY).mkdir(mode=0o700)
     inventories = {}
     for unit in selected:
-        directory = output / 'resources' / unit['id']
+        directory = output / DIRECTORY / unit['id']
         native_resources.inspect(policy, root, Path(unit['source']), directory, tool=tool,
                                  context=native_object_build.context(recipe, unit))
         inventories[unit['id']] = native_gate.identity(directory / native_resources.MANIFEST)
@@ -58,14 +63,22 @@ def build(policy: Policy, root: Path, recipe: dict[str, Any], output: Path,
 
 def environment(unit: dict[str, Any], output: Path) -> dict[str, str]:
     """Compiler output is a new fixed-name file in the owned unit directory."""
-    directory = output / 'resources' / unit['id']
+    directory = output / DIRECTORY / unit['id']
     return {'OTELC_RESOURCE_INVENTORY': str(directory / native_resources.MANIFEST),
-            'OTELC_RESOURCE_RESOLUTION': str(directory / 'resolution.json')}
+            'OTELC_RESOURCE_RESOLUTION': str(directory / RESOLUTION)}
+
+
+def verify_symbols(path: Path) -> None:
+    """Every linked unit, including neutral drivers, must retain standard C allocation bindings."""
+    raw = path.read_bytes()
+    require(len(raw) <= 64 * 1024 * 1024 and b'\0' not in raw, 'invalid resource symbol record')
+    require(not INTERPOSED.intersection(raw.decode('utf-8').splitlines()),
+            'custom or interposed C allocator/free definition is unsupported')
 
 
 def resolution(document: dict[str, Any], directory: Path) -> None:
     """Bind emitted calls to the original ordered source plan, including zero matches."""
-    value = decode((directory / 'resolution.json').read_bytes())
+    value = decode((directory / RESOLUTION).read_bytes())
     require(type(value) is dict and set(value) == {'schema_version', 'kind', 'source', 'sites'}
             and type(value['schema_version']) is int and value['schema_version'] == 1
             and value['kind'] == 'otelc.native.c-resource-resolution'
@@ -92,10 +105,10 @@ def resolution(document: dict[str, Any], directory: Path) -> None:
 
 def verify(value: dict[str, Any], output: Path) -> None:
     """Reconstruct all input and selection bindings without running metadata commands."""
-    policy, recipe, root = Policy.parse(value['policy']), value['recipe'], Path(value['root'])
+    policy, recipe = Policy.parse(value['policy']), value['recipe']
     require(value['language'] == 'c' and policy.data['lifetimes']['enabled'],
             'resource profile requires enabled C lifetimes')
-    tool_path = output / 'resource-tool' / native_lifetimes.MANIFEST
+    tool_path = output / TOOL_DIRECTORY / native_lifetimes.MANIFEST
     require(value['resource_tool'] == native_gate.identity(tool_path), 'resource tool binding changed')
     tool = native_lifetimes.Tool(tool_path.parent, tool_path.read_text(), native_resources.PROFILE)
     receipt = tool.verify()
@@ -111,7 +124,7 @@ def _verify_unit(value: dict[str, Any], output: Path, tool: native_lifetimes.Too
                  receipt: dict[str, Any], unit: dict[str, Any]) -> None:
     """Check one closed unit record separately from the complete unit denominator."""
     policy, recipe, root = Policy.parse(value['policy']), value['recipe'], Path(value['root'])
-    directory = output / 'resources' / unit['id']
+    directory = output / DIRECTORY / unit['id']
     path = directory / native_resources.MANIFEST
     require(value['resource_inventories'][unit['id']] == native_gate.identity(path),
             'resource inventory binding changed')

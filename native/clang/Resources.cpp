@@ -1,10 +1,12 @@
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Attr.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Analysis/CFG.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Index/USRGeneration.h"
 #include "clang/Tooling/Tooling.h"
@@ -16,26 +18,88 @@
 
 namespace {
 using namespace clang;
+struct FunctionFlow {
+  std::set<const Stmt *> statements;
+  std::set<const VarDecl *> variables;
+};
+
+std::shared_ptr<FunctionFlow> functionFlow(const FunctionDecl *Function, ASTContext &Context) {
+  CFG::BuildOptions Options;
+  Options.setAllAlwaysAdd();
+  auto Graph = CFG::buildCFG(Function, Function->getBody(), &Context, Options);
+  if (!Graph) {
+    auto Id = Context.getDiagnostics().getCustomDiagID(DiagnosticsEngine::Error,
+        "C resource control-flow analysis failed");
+    Context.getDiagnostics().Report(Id);
+    return {};
+  }
+  auto Result = std::make_shared<FunctionFlow>();
+  std::vector<const CFGBlock *> Pending{&Graph->getEntry()};
+  std::set<const CFGBlock *> Visited;
+  while (!Pending.empty()) {
+    const auto *Block = Pending.back();
+    Pending.pop_back();
+    if (!Visited.insert(Block).second) continue;
+    for (const auto &Element : *Block) {
+      auto Statement = Element.getAs<CFGStmt>();
+      if (!Statement) continue;
+      Result->statements.insert(Statement->getStmt());
+      if (const auto *Declarations = llvm::dyn_cast<DeclStmt>(Statement->getStmt()))
+        for (const auto *Declaration : Declarations->decls())
+          if (const auto *Variable = llvm::dyn_cast<VarDecl>(Declaration))
+            Result->variables.insert(Variable);
+    }
+    for (const auto &Successor : Block->succs())
+      if (const auto *Reachable = Successor.getReachableBlock()) Pending.push_back(Reachable);
+  }
+  return Result;
+}
+
 class Visitor : public RecursiveASTVisitor<Visitor> {
  public:
   Visitor(ASTContext &Context, std::string Root)
-      : Sources(Context.getSourceManager()), Root(std::move(Root)) {}
+      : Context(Context), Sources(Context.getSourceManager()), Root(std::move(Root)) {}
 
   bool TraverseDecl(Decl *Declaration) {
     const FunctionDecl *PreviousCaller = Caller;
     QualType PreviousHint = Hint;
-    if (auto *Function = llvm::dyn_cast_or_null<FunctionDecl>(Declaration)) Caller = Function;
+    auto PreviousFlow = Flow;
+    if (auto *Function = llvm::dyn_cast_or_null<FunctionDecl>(Declaration)) {
+      Caller = Function;
+      Flow = Function->doesThisDeclarationHaveABody() && inside(Function->getLocation())
+          ? functionFlow(Function, Context) : nullptr;
+    }
     if (auto *Variable = llvm::dyn_cast_or_null<VarDecl>(Declaration)) Hint = Variable->getType();
     bool Result = RecursiveASTVisitor<Visitor>::TraverseDecl(Declaration);
     Caller = PreviousCaller;
     Hint = PreviousHint;
+    Flow = PreviousFlow;
     return Result;
   }
   bool TraverseStmt(Stmt *Statement) {
     QualType Previous = Hint;
+    // Expected result types belong to value operands, never to an expression's
+    // discarded effects or boolean conditions. An operand's own cast or typed
+    // assignment can still establish its independent record-pointer binding.
+    if (auto *Binary = llvm::dyn_cast_or_null<BinaryOperator>(Statement)) {
+      bool Result = withHint(Binary->getLHS(), QualType{});
+      QualType Value;
+      if (Binary->isAssignmentOp()) Value = Binary->getLHS()->getType();
+      else if (Binary->getOpcode() == BO_Comma) Value = Hint;
+      return Result && withHint(Binary->getRHS(), Value);
+    }
+    if (auto *Choice = llvm::dyn_cast_or_null<ConditionalOperator>(Statement))
+      return withHint(Choice->getCond(), QualType{}) && withHint(Choice->getTrueExpr(), Hint)
+          && withHint(Choice->getFalseExpr(), Hint);
+    if (auto *Unary = llvm::dyn_cast_or_null<UnaryOperator>(Statement))
+      return withHint(Unary->getSubExpr(), QualType{});
+    if (auto *Group = llvm::dyn_cast_or_null<StmtExpr>(Statement)) {
+      auto *Body = Group->getSubStmt();
+      for (auto *Child : Body->body())
+        if (!withHint(Child, Child == Body->body_back() ? Hint : QualType{})) return false;
+      return true;
+    }
     if (auto *Cast = llvm::dyn_cast_or_null<ExplicitCastExpr>(Statement)) Hint = Cast->getType();
-    if (auto *Assignment = llvm::dyn_cast_or_null<BinaryOperator>(Statement))
-      if (Assignment->isAssignmentOp()) Hint = Assignment->getLHS()->getType();
     if (llvm::isa_and_nonnull<ReturnStmt>(Statement) && Caller) Hint = Caller->getReturnType();
     if (auto *Call = llvm::dyn_cast_or_null<CallExpr>(Statement)) {
       Hints[Call] = Hint;
@@ -49,6 +113,7 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
   bool TraverseUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *) { return true; }
   bool VisitVarDecl(VarDecl *Variable) {
     if (llvm::isa<ParmVarDecl>(Variable) || !inside(Variable->getLocation())) return true;
+    if (Flow && Variable->isLocalVarDecl() && !Flow->variables.count(Variable)) return true;
     auto *RecordType = Variable->getType()->getAs<clang::RecordType>();
     if (!RecordType) return true;
     Unsupported.push_back(llvm::json::Object{{"type_usr", type(RecordType->getDecl())},
@@ -64,6 +129,7 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
     std::string Name = Function->getNameAsString();
     if (llvm::StringRef(Name).starts_with("__builtin_")) Name.erase(0, 10);
     if (Name != "malloc" && Name != "calloc" && Name != "free" && Name != "realloc") return true;
+    if (Flow && !Flow->statements.count(Call)) return true;
     llvm::json::Object Row{{"callee", Name}, {"caller", Caller->getNameAsString()},
         {"location", location(Call->getBeginLoc())},
         {"standard", Function->getBuiltinID() != 0 && !Function->getDefinition()},
@@ -93,6 +159,13 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
         {"releases", std::move(Releases)}, {"unsupported", std::move(Unsupported)}};
   }
  private:
+  bool withHint(Stmt *Statement, QualType Value) {
+    auto Previous = Hint;
+    Hint = Value;
+    bool Result = TraverseStmt(Statement);
+    Hint = Previous;
+    return Result;
+  }
   std::string type(const RecordDecl *Record) {
     Record = llvm::cast<RecordDecl>(Record->getCanonicalDecl());
     llvm::SmallString<128> Usr;
@@ -122,9 +195,11 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
     if (Location.isInvalid()) return false;
     return location(Location).getString("file")->starts_with(Root + "/");
   }
+  ASTContext &Context;
   SourceManager &Sources;
   std::string Root;
   const FunctionDecl *Caller = nullptr;
+  std::shared_ptr<FunctionFlow> Flow;
   QualType Hint;
   std::map<const CallExpr *, QualType> Hints;
   std::map<std::string, llvm::json::Object> Types;

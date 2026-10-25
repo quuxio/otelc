@@ -159,6 +159,11 @@ def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: s
                 command = [str(binaries / 'llvm-objcopy'), '--redefine-sym', 'main=__oteleq_original_main',
                            '--redefine-sym', '_main=___oteleq_original_main', str(compiled), str(final)]
                 append(label + '-rename', str(output), command, final)
+            if resource_lifetimes:
+                symbol_label = label + '-resource-symbols'
+                command = [str(binaries / 'llvm-nm'), *native_resource_build.SYMBOL_FLAGS, str(final)]
+                append(symbol_label, str(output), command, output / (symbol_label + '.stdout'),
+                       symbol_check=True, unit=unit['id'], lane=lane)
             objects.append(str(final))
         if lane == 'instrumented':
             bootstrap = output / 'bootstrap.o'
@@ -202,6 +207,10 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
         objcopy = Path(tools['directory']) / 'llvm-objcopy'
         extra_tools['objcopy'] = native_gate.identity(objcopy)
         require(tools['version'] in llvm_backend.query(objcopy, '--version'), 'object tool differs from LLVM')
+    if resources:
+        nm = Path(tools['directory']) / 'llvm-nm'
+        extra_tools['nm'] = native_gate.identity(nm)
+        require(tools['version'] in llvm_backend.query(nm, '--version'), 'resource symbol tool differs from LLVM')
     (output / 'bootstrap.cpp').write_text(native_launch.BOOTSTRAP)
     commands = steps(recipe, output, tools, manifest['plugin']['path'], library, object_lifetimes=objects, resource_lifetimes=resources)
     dependencies, inputs = {}, {}
@@ -209,6 +218,8 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
         environment = llvm_backend.environment(policy, language, source_root=root)
         environment.update(command.get('environment', {}))
         native_launch._compile(command['arguments'], Path(command['directory']), output, command['label'], environment)
+        if command.get('symbol_check'):
+            native_resource_build.verify_symbols(Path(command['output']))
         if 'dependencies' in command:
             rows = native_launch._inputs(Path(command['dependencies']), Path(command['directory']))
             dependencies[command['label']] = rows
@@ -231,8 +242,13 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
         artifacts.update((Path(row['output']), output / (row['label'] + '.stdout'), output / (row['label'] + '.stderr')))
         if 'dependencies' in row:
             artifacts.add(Path(row['dependencies']))
-    value = {'schema_version': 4 if resources else 3 if objects else 2, 'kind': 'otelc.native-build',
-        'profile': native_resource_build.PROFILE if resources else native_object_build.PROFILE if objects else PROFILE,
+    schema, profile = 2, PROFILE
+    if objects:
+        schema, profile = 3, native_object_build.PROFILE
+    elif resources:
+        schema, profile = 4, native_resource_build.PROFILE
+    value = {'schema_version': schema, 'kind': 'otelc.native-build',
+        'profile': profile,
         'language': language, 'root': str(root), 'policy': policy.data,
         'policy_sha256': native_launch.digest(policy.data),
         'selection_sha256': native_launch.digest(native_launch.selection(policy.data, object_lifetimes=objects, resource_lifetimes=resources)),
@@ -291,12 +307,21 @@ def verify(built: native_launch.Build, value: dict[str, Any]) -> None:
     require(len(value['artifacts']) == len(expected_artifacts)
             and {row['path'] for row in value['artifacts']} == expected_artifacts, 'incomplete compiler channel denominator')
     renamed = any(row['rename_main'] for row in recipe['units'])
-    require(set(value['tools']) == ({'objcopy'} if renamed else set()), 'unexpected object tool denominator')
+    expected_tools = {'objcopy'} if renamed else set()
+    if resources:
+        expected_tools.add('nm')
+    require(set(value['tools']) == expected_tools, 'unexpected object tool denominator')
     if renamed:
         require(value['tools']['objcopy']['path'] == str(Path(plugin['toolchain']['directory']) / 'llvm-objcopy'),
                 'object tool differs from matched compiler')
+    if resources:
+        require(value['tools']['nm']['path'] == str(Path(plugin['toolchain']['directory']) / 'llvm-nm'),
+                'resource symbol tool differs from matched compiler')
     for row in [*value['files'], *value['artifacts'], *value['tools'].values()]:
         require(native_gate.identity(Path(row['path'])) == row, 'input, tool or retained compiler channel changed')
+    for row in value['commands']:
+        if row.get('symbol_check'):
+            native_resource_build.verify_symbols(Path(row['output']))
     for unit in recipe['units']:
         for lane in ('plain', 'instrumented'):
             label = lane + '-' + unit['id']

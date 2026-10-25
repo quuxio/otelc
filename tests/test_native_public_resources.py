@@ -137,6 +137,38 @@ class PublicResourceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unit denominator'):
             native_resource_build.verify(altered, self.compiled)
 
+    def interposed_build(self, name, definition, *, driver=False):
+        directory = self.base / 'helpers' if driver else self.root
+        directory.mkdir(exist_ok=True)
+        source = directory / ('override.cpp' if driver else 'override.c')
+        source.write_text('#include <stddef.h>\n' + definition + '\n')
+        def unit(identifier, role, path, language):
+            return {'id': identifier, 'role': role, 'source': str(path), 'language': language,
+                    'directory': str(path.parent), 'flags': ['-O2', '-std=c++17' if language == 'cpp' else '-std=c11'],
+                    'overlay': None, 'rename_main': False}
+        recipe = {'schema_version': 1, 'kind': 'otelc.native.unit-recipe',
+            'assets': [str(source)] if driver else [],
+            'units': [unit('main', 'application', self.source, 'c'),
+                      unit('override', 'driver' if driver else 'application', source, 'cpp' if driver else 'c')],
+            'link': {'language': 'cpp' if driver else 'c', 'directory': str(self.root), 'flags': ['-pthread']}}
+        return native_build.build(self.policy, 'c', self.root, [], self.base / ('compiled-' + name),
+                                   sdk_directory=self.sdk, recipe=recipe)
+
+    def test_another_unit_cannot_replace_the_selected_standard_free(self):
+        with self.assertRaisesRegex(ValueError, 'interposed'):
+            self.interposed_build('free', 'void free(void*p){(void)p;}')
+
+    def test_allocator_weak_and_neutral_driver_definitions_refuse(self):
+        cases = [('malloc', 'void*malloc(size_t n){(void)n;return 0;}'),
+                 ('calloc', 'void*calloc(size_t n,size_t m){(void)n;(void)m;return 0;}'),
+                 ('realloc', 'void*realloc(void*p,size_t n){(void)n;return p;}'),
+                 ('weak', '__attribute__((weak)) void free(void*p){(void)p;}')]
+        for name, definition in cases:
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'interposed'):
+                self.interposed_build(name, definition)
+        with self.assertRaisesRegex(ValueError, 'interposed'):
+            self.interposed_build('driver', 'extern "C" void free(void*p){(void)p;}', driver=True)
+
     def test_each_startup_state_retains_traces_and_can_enable_metrics(self):
         self.build()
         for index, (collection, emission) in enumerate(((False, False), (False, True), (True, False), (True, True))):

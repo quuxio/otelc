@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from otelc import native_gate, native_launch, native_lifetimes, native_units
+from otelc import native_gate, native_launch, native_lifetimes
 from otelc.config import Policy
 from otelc.python_sdk_io import decode
 
@@ -84,6 +84,8 @@ def catalogue(document: dict[str, Any], policy: Policy, root: Path) -> dict[str,
 
 def compile_context(root: Path, source: Path, value: dict[str, Any] | None) -> dict[str, Any]:
     """Reuse the native unit recipe's flags, private assets and VFS checks."""
+    from otelc import native_units
+
     if value is None:
         value = {'directory': str(root), 'flags': ['-std=c11', '-O2', '-fexceptions', '-pthread', '-I', str(root)],
                  'overlay': None, 'assets': []}

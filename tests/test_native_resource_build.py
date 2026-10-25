@@ -64,6 +64,19 @@ class ResourceBuildRecordTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resource.units({'units': selected})
 
+    def test_only_actual_standard_c_symbol_definitions_are_interposition(self):
+        path = self.base / 'symbols.stdout'
+        for text in ('', '_main\n', '_ZN4work4freeEv\n', 'allocation_malloc\n'):
+            path.write_text(text)
+            resource.verify_symbols(path)
+        for name in resource.INTERPOSED:
+            path.write_text('_main\n' + name + '\n')
+            with self.subTest(symbol=name), self.assertRaisesRegex(ValueError, 'interposed'):
+                resource.verify_symbols(path)
+        path.write_bytes(b'\0')
+        with self.assertRaisesRegex(ValueError, 'symbol record'):
+            resource.verify_symbols(path)
+
 
 if __name__ == '__main__':
     unittest.main()

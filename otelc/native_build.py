@@ -127,11 +127,11 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
         native_fields |= {'object_tool', 'object_inventories'}
     if resources:
         native_fields |= {'resource_tool', 'resource_inventories'}
-    expected_schema, expected_profile = {
-        2: (1, 'llvm22-native-launch-v1'),
-        3: (2, native_units.PROFILE),
-        4: (3, native_object_build.PROFILE),
-        5: (4, native_resource_build.PROFILE),
+    expected_schema, expected_profile, expected_plugin = {
+        2: (1, 'llvm22-native-launch-v1', llvm_backend.SOURCE_PROFILE),
+        3: (2, native_units.PROFILE, llvm_backend.SOURCE_PROFILE),
+        4: (3, native_object_build.PROFILE, llvm_backend.OBJECT_PROFILE),
+        5: (4, native_resource_build.PROFILE, llvm_backend.RESOURCE_PROFILE),
     }[value['schema_version']]
     if (set(metadata) != native_fields or type(metadata.get('schema_version')) is not int
             or metadata['schema_version'] != expected_schema or metadata.get('kind') != 'otelc.native-build'
@@ -145,7 +145,7 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
             or metadata.get('source_complete') is not False
             or type(plugin.get('schema_version')) is not int or plugin['schema_version'] != 1
             or plugin.get('kind') != 'otelc.llvm-plugin' or plugin.get('source_complete') is not False
-            or plugin.get('profile') != (llvm_backend.RESOURCE_PROFILE if resources else llvm_backend.OBJECT_PROFILE if objects else llvm_backend.SOURCE_PROFILE)
+            or plugin.get('profile') != expected_plugin
             or objects and plugin.get('object_probe_abi') != 'otelc.object.v1'
             or resources and plugin.get('resource_probe_abi') != 'otelc.resource.v1'
             or plugin.get('probe_abi') != 'otelc.function.v2'

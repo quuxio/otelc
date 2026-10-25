@@ -184,6 +184,64 @@ class CResourcePassTests(unittest.TestCase):
         self.assertEqual(counts['admitted'], 2)
         self.assertEqual(counts['completed'], 2)
 
+    def test_frontend_discarded_constant_branch_preserves_stock_execution(self):
+        self.source.write_text('''#include <stdlib.h>
+typedef struct WorkItem {int value;} WorkItem;
+int main(void){if(0){WorkItem*p=malloc(sizeof *p);free(p);}return 0;}
+''')
+        self.inventory = native_resources.inspect(self.policy, self.root, self.source,
+                                                  self.folder / 'discarded-inventory', tool=self.tool)
+        counts = self.run_pair(expected_exit=0, expected_output=b'')
+        self.assertEqual(counts, {'admitted': 0, 'completed': 0, 'live': 0, 'untracked': 0})
+
+    def test_discarded_comma_result_does_not_create_a_record_lifetime(self):
+        self.source.write_text('''#include <stdlib.h>
+typedef struct WorkItem {int value;} WorkItem;
+static WorkItem*work(void){return (malloc(32),malloc(sizeof(WorkItem)));}
+int main(void){WorkItem*p=work();free(p);return 0;}
+''')
+        self.inventory = native_resources.inspect(self.policy, self.root, self.source,
+                                                  self.folder / 'comma-inventory', tool=self.tool)
+        counts = self.run_pair(expected_exit=0, expected_output=b'', extra=('-O0',))
+        self.assertEqual(counts, {'admitted': 1, 'completed': 1, 'live': 0, 'untracked': 0})
+
+    def test_conditional_condition_does_not_inherit_its_result_pointer_type(self):
+        self.source.write_text('''#include <stdlib.h>
+typedef struct WorkItem {int value;} WorkItem;
+static WorkItem*work(void){return malloc(32)?malloc(sizeof(WorkItem)):NULL;}
+int main(void){WorkItem*p=work();free(p);return 0;}
+''')
+        self.inventory = native_resources.inspect(self.policy, self.root, self.source,
+                                                  self.folder / 'condition-inventory', tool=self.tool)
+        counts = self.run_pair(expected_exit=0, expected_output=b'', extra=('-O0',))
+        self.assertEqual(counts, {'admitted': 1, 'completed': 1, 'live': 0, 'untracked': 0})
+
+    def test_constant_loops_switch_and_generic_keep_only_the_emitted_allocation(self):
+        self.source.write_text('''#include <stdlib.h>
+typedef struct WorkItem {int value;} WorkItem;
+int main(void){
+ while(0){WorkItem*p=malloc(sizeof *p);free(p);}
+ for(int i=0;0;++i){WorkItem*p=malloc(sizeof *p);free(p);}
+ switch(0){case 1:{WorkItem*p=malloc(sizeof *p);free(p);break;}default:break;}
+ WorkItem*volatile p=_Generic(0,int:malloc(sizeof(WorkItem)),default:calloc(1,sizeof(WorkItem)));
+ free(p);return 0;
+}
+''')
+        self.inventory = native_resources.inspect(self.policy, self.root, self.source,
+                                                  self.folder / 'constant-inventory', tool=self.tool)
+        counts = self.run_pair(expected_exit=0, expected_output=b'', extra=('-O0',))
+        self.assertEqual(counts, {'admitted': 1, 'completed': 1, 'live': 0, 'untracked': 0})
+
+    def test_goto_retains_an_allocation_inside_a_constant_false_branch(self):
+        self.source.write_text('''#include <stdlib.h>
+typedef struct WorkItem {int value;} WorkItem;
+int main(void){goto allocate;if(0){allocate:;WorkItem*volatile p=malloc(sizeof *p);free(p);}return 0;}
+''')
+        self.inventory = native_resources.inspect(self.policy, self.root, self.source,
+                                                  self.folder / 'goto-inventory', tool=self.tool)
+        counts = self.run_pair(expected_exit=0, expected_output=b'', extra=('-O0',))
+        self.assertEqual(counts, {'admitted': 1, 'completed': 1, 'live': 0, 'untracked': 0})
+
     def test_inlined_source_site_accounts_for_each_remaining_allocation(self):
         self.source.write_text('''#include <stdlib.h>
 #include <stdio.h>

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,18 @@ from otelc.config import Policy
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'typedef struct WorkItem {int seed;} Alias;\n'
+
+
+class CResourceImportTests(unittest.TestCase):
+    def test_frontend_and_build_modules_import_in_each_fresh_process_order(self):
+        for name in ('native_resources', 'native_resource_build', 'native_units', 'native_build'):
+            command = [sys.executable, '-I', '-S', '-c',
+                f'import importlib,sys;sys.path.insert(0,{str(ROOT)!r});'
+                f'importlib.import_module("otelc.{name}");'
+                'from otelc import native_resources;assert native_resources.MANIFEST=="native-resources.json"']
+            with self.subTest(module=name):
+                result = subprocess.run(command, capture_output=True, timeout=10)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b'', b''))
 
 
 class CResourceSemanticsTests(unittest.TestCase):
@@ -95,6 +108,43 @@ Alias *workload(void){Alias *p=malloc(sizeof *p);Alias *q;
             'void work(void){WorkItem*p=malloc(sizeof *p);free(p);}\n')
         self.assertEqual([row['name'] for row in value['types']], ['WorkItem'])
         self.assertEqual(len(value['allocations']), 1)
+
+    def test_only_value_producing_operands_inherit_record_pointer_results(self):
+        cases = [
+            ('return (malloc(32),malloc(sizeof(Alias)));', 1),
+            ('return malloc(32)?malloc(sizeof(Alias)):calloc(1,sizeof(Alias));', 2),
+            ('return (Alias*)(malloc(32)!=0);', 0),
+            ('return _Generic(0,int:malloc(sizeof(Alias)),default:malloc(32));', 1),
+            ('return __builtin_choose_expr(1,malloc(sizeof(Alias)),malloc(32));', 1),
+            ('return ({malloc(32);malloc(sizeof(Alias));});', 1),
+            ('Alias*p;return (p=malloc(sizeof *p),p);', 1),
+        ]
+        for index, (body, expected) in enumerate(cases):
+            with self.subTest(body=body):
+                value = self.inspect('#include <stdlib.h>\n' + MODEL + 'Alias*work(void){' + body + '}\n',
+                                     output='value-' + str(index))
+                self.assertEqual(len(value['allocations']), expected)
+
+    def test_control_flow_filters_discarded_statements_and_unevaluated_choices(self):
+        value = self.inspect('#include <stdlib.h>\n' + MODEL + '''
+Alias*work(void){
+ if(0){Alias unused;Alias*p=malloc(sizeof(Alias));free(p);}
+ while(0){Alias*p=malloc(sizeof(Alias));free(p);}
+ for(int i=0;0;++i){Alias*p=malloc(sizeof(Alias));free(p);}
+ switch(0){case 1:{Alias*p=malloc(sizeof(Alias));free(p);break;}default:break;}
+ return _Generic(0,int:malloc(sizeof(Alias)),default:calloc(1,sizeof(Alias)));
+}
+''')
+        self.assertEqual(len(value['allocations']), 1)
+        self.assertEqual(value['allocations'][0]['callee'], 'malloc')
+        self.assertEqual(value['releases'], [])
+
+    def test_goto_can_enter_a_constant_false_branch(self):
+        value = self.inspect('#include <stdlib.h>\n' + MODEL + '''
+void work(void){goto allocate;if(0){allocate:;Alias*p=malloc(sizeof(Alias));free(p);}}
+''')
+        self.assertEqual(len(value['allocations']), 1)
+        self.assertEqual(len(value['releases']), 1)
 
     def test_unrelated_call_arguments_and_unevaluated_expressions_are_not_allocations(self):
         value = self.inspect('#include <stdlib.h>\n' + MODEL + '''
