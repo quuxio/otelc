@@ -177,6 +177,9 @@ def verify(value: Build) -> dict[str, Any]:
     for row in [*metadata['inputs'], metadata['sdk_library'], *metadata['products']]:
         if identity(Path(row['path'])) != row:
             raise ValueError('native source, SDK or executable changed after building')
+    if metadata['profile'] == 'llvm22-native-units-v1':
+        from otelc import native_units
+        native_units.verify(value, metadata)
     return metadata
 
 
