@@ -20,6 +20,7 @@ pub(crate) struct Request {
     pub sources: BTreeMap<PathBuf, String>,
     pub selected: BTreeSet<String>,
     pub lifetimes: Option<BTreeMap<String, BTreeMap<u32, String>>>,
+    pub lifetime_bodies: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -48,9 +49,13 @@ impl Request {
     fn profile(&self) -> bool {
         if self.schema_version == 1 {
             return matches!(self.mode.as_str(), "inspect" | "weave" | "lifetime-inspect")
-                && self.lifetimes.is_none();
+                && self.lifetimes.is_none()
+                && self.lifetime_bodies.is_none();
         }
         let Some(bodies) = &self.lifetimes else {
+            return false;
+        };
+        let Some(fingerprints) = &self.lifetime_bodies else {
             return false;
         };
         self.schema_version == 2
@@ -58,6 +63,13 @@ impl Request {
             && !bodies.is_empty()
             && bodies.len() <= 4096
             && bodies.values().map(BTreeMap::len).sum::<usize>() <= 65536
+            && bodies.keys().eq(fingerprints.keys())
+            && fingerprints.values().all(|value| {
+                value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
             && bodies.iter().all(|(name, locals)| {
                 !name.is_empty()
                     && name.len() <= 4096

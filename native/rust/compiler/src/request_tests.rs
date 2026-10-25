@@ -96,6 +96,7 @@ fn lifetime_weaving_requires_a_separate_closed_nonempty_local_binding_profile() 
     value["schema_version"] = json!(2);
     value["mode"] = json!("lifetime-weave");
     value["lifetimes"] = json!({"app.rs::workload":{"1":"app::Item"}});
+    value["lifetime_bodies"] = json!({"app.rs::workload":"a".repeat(64)});
     let request = fixture
         .load(&value)
         .expect("valid private lifetime binding");
@@ -120,6 +121,10 @@ fn lifetime_weaving_requires_a_separate_closed_nonempty_local_binding_profile() 
         ("lifetimes", json!({"app.rs::workload":{"1":""}})),
         ("lifetimes", json!({"app.rs::workload":{"1":"bad\0type"}})),
         ("lifetimes", json!({"bad\0body":{"1":"app::Item"}})),
+        ("lifetime_bodies", json!(null)),
+        ("lifetime_bodies", json!({})),
+        ("lifetime_bodies", json!({"another-body":"a".repeat(64)})),
+        ("lifetime_bodies", json!({"app.rs::workload":"BAD"})),
     ] {
         let mut changed = value.clone();
         changed[field] = replacement;
@@ -127,6 +132,9 @@ fn lifetime_weaving_requires_a_separate_closed_nonempty_local_binding_profile() 
     }
     let mut legacy = fixture.value.clone();
     legacy["lifetimes"] = value["lifetimes"].clone();
+    fixture.rejects(&legacy);
+    legacy = fixture.value.clone();
+    legacy["lifetime_bodies"] = value["lifetime_bodies"].clone();
     fixture.rejects(&legacy);
 }
 

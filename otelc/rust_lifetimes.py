@@ -157,7 +157,7 @@ def inventory(path: Path, root: Path, sources: dict[str, str], inputs: dict[str,
     return document
 
 
-def read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dict:
+def _read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> tuple[dict, dict]:
     """Read one discovery product and select types using the schema-3 TOML policy."""
     if 'rust' not in policy.data['languages'] or root.resolve(strict=True) != root:
         raise ValueError('Rust lifetime discovery requires Rust and a canonical source root')
@@ -174,10 +174,20 @@ def read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dic
             indexes = {item['local'] for item in locals_}
             selected.append(row | {'locals': locals_, 'sites': [item for item in row['sites'] if item['local'] in indexes]})
     selection = {key: policy.data[key] for key in ('sources', 'lifetimes')}
-    return {'schema_version': 1, 'kind': 'otelc.rust.lifetime-selection', 'bodies': selected,
+    return document, {'schema_version': 1, 'kind': 'otelc.rust.lifetime-selection', 'bodies': selected,
         'selection_sha256': hashlib.sha256(json.dumps(selection, sort_keys=True).encode()).hexdigest(),
         'target': document['target'], 'pointer_width': document['pointer_width'],
         'source_complete': False, 'instrumentation_complete': False, 'skipped': document['skipped']}
+
+
+def read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dict:
+    """Read one discovery product and apply the common source/type selectors."""
+    return _read(path, policy, root, sources)[1]
+
+
+def _locals(selected: dict) -> dict[str, dict[str, str]]:
+    return {body['function']['identity']: {str(row['local']): row['compiler_type']
+            for row in body['locals']} for body in selected['bodies']}
 
 
 def weave_bindings(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dict[str, dict[str, str]]:
@@ -186,6 +196,19 @@ def weave_bindings(path: Path, policy: Policy, root: Path, sources: dict[str, st
     Keep unsupported argument/layout/drop shapes in the request: the compiler
     must refuse them, rather than quietly instrumenting a smaller selection.
     """
-    selected = read(path, policy, root, sources)
-    return {body['function']['identity']: {str(row['local']): row['compiler_type']
-            for row in body['locals']} for body in selected['bodies']}
+    return _locals(read(path, policy, root, sources))
+
+
+def weave_request(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dict:
+    """Bind locals and complete lifetime MIR bodies from one checked discovery.
+
+    The compiler rehashes its own complete snapshot before adding any hooks.
+    Compact sorted UTF-8 JSON matches serde_json Value object ordering; the
+    snapshot schema contains integer positions/layouts and no floating values.
+    """
+    document, selected = _read(path, policy, root, sources)
+    bindings = _locals(selected)
+    bodies = {body['function']['identity']: hashlib.sha256(json.dumps(body, sort_keys=True,
+        separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+        for body in document['bodies'] if body['function']['identity'] in bindings}
+    return {'schema_version': 2, 'lifetimes': bindings, 'lifetime_bodies': bodies}

@@ -244,6 +244,7 @@ impl Callbacks for Probe {
                 inventory["schema_version"] = serde_json::json!(2);
                 inventory["kind"] = serde_json::json!("otelc.rust.lifetime-weave");
                 inventory["lifetimes"] = serde_json::to_value(&request().lifetimes)?;
+                inventory["lifetime_bodies"] = serde_json::to_value(&request().lifetime_bodies)?;
                 inventory["instrumentation_complete"] = serde_json::json!(false);
             }
             let bytes = serde_json::to_vec(&inventory)?;

@@ -38,11 +38,11 @@ class RustAutomaticDropCases:
         data['lifetimes'].update(enabled=True, include=['*Item*', '*Zero'])
         return Policy.parse(data)
 
-    def lifetime_bindings(self, entry: Path, policy: Policy) -> dict[str, dict[str, str]]:
-        result, inventory, product = self.compile(entry, 'lifetime-inspect')
+    def lifetime_request(self, entry: Path, policy: Policy, *, optimisation: int = 2) -> dict:
+        result, inventory, product = self.compile(entry, 'lifetime-inspect', optimisation=optimisation)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertFalse(product.exists())
-        return rust_lifetimes.weave_bindings(inventory, policy, self.root, self.sources)
+        return rust_lifetimes.weave_request(inventory, policy, self.root, self.sources)
 
     def test_automatic_drop_mir_preserves_stock_moves_zero_size_and_panic_paths(self) -> None:
         application = 'use std::io::{self,BufRead};mod work;\n' \
@@ -53,17 +53,19 @@ class RustAutomaticDropCases:
             'println!("{} {}",result,work::drops());}}\n'
         entry = self.source('app.rs', application)
         self.source('work.rs', WORK)
-        bindings = self.lifetime_bindings(entry, self.lifetime_policy())
-        self.assertEqual(set(bindings), {'work.rs::work::workload'})
-        self.assertGreaterEqual(len(next(iter(bindings.values()))), 4)
         selected = self.selected(entry)
         for optimisation in (0, 3):
+            requested = self.lifetime_request(entry, self.lifetime_policy(), optimisation=optimisation)
+            bindings = requested['lifetimes']
+            self.assertEqual(set(bindings), {'work.rs::work::workload'})
+            self.assertGreaterEqual(len(next(iter(bindings.values()))), 4)
             result, inventory, product = self.compile(entry, 'lifetime-weave', selected=selected,
-                optimisation=optimisation, request_changes={'schema_version': 2, 'lifetimes': bindings})
+                optimisation=optimisation, request_changes=requested)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             woven = json.loads(inventory.read_bytes())
             self.assertEqual(woven['kind'], 'otelc.rust.lifetime-weave')
             self.assertEqual(woven['lifetimes'], bindings)
+            self.assertEqual(woven['lifetime_bodies'], requested['lifetime_bodies'])
             self.assertFalse(woven['instrumentation_complete'])
             stock = self.base / f'automatic-stock-{optimisation}'
             result = self.command([str(self.rustc), str(entry), '--edition=2024',
@@ -145,11 +147,14 @@ class RustAutomaticDropCases:
                 policy = self.lifetime_policy()
                 # Test a precise private binding refusal without hiding any
                 # rejected selection behind a successful partial build.
-                bindings = {key: value for key, value in self.lifetime_bindings(entry, policy).items()
+                requested = self.lifetime_request(entry, policy)
+                bindings = {key: value for key, value in requested['lifetimes'].items()
                             if key.endswith('::workload')}
+                requested.update(lifetimes=bindings, lifetime_bodies={key: requested['lifetime_bodies'][key]
+                                 for key in bindings})
                 self.assertTrue(bindings)
                 result, inventory, product = self.compile(entry, 'lifetime-weave',
-                    request_changes={'schema_version': 2, 'lifetimes': bindings})
+                    request_changes=requested)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message.encode(), result.stderr)
                 self.assertNotIn(b'internal compiler error', result.stderr)
@@ -157,15 +162,16 @@ class RustAutomaticDropCases:
 
         entry = self.source('bound.rs', prefix + 'fn workload(){let item=Item;'
                             'std::hint::black_box(&item);}fn main(){workload();}')
-        original = self.lifetime_bindings(entry, self.lifetime_policy())
-        body, locals_ = next(iter(original.items()))
+        original = self.lifetime_request(entry, self.lifetime_policy())
+        body, locals_ = next(iter(original['lifetimes'].items()))
         local, typename = next(iter(locals_.items()))
         for changed, message in (({body: {local: 'WrongType'}}, 'binding differs'),
                                  ({body: {'65535': typename}}, 'local is missing'),
                                  ({'bound.rs::missing': locals_}, 'binding is missing')):
             with self.subTest(changed=changed):
                 result, inventory, product = self.compile(entry, 'lifetime-weave',
-                    request_changes={'schema_version': 2, 'lifetimes': changed})
+                    request_changes=original | {'lifetimes': changed, 'lifetime_bodies':
+                        {name: original['lifetime_bodies'][body] for name in changed}})
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message.encode(), result.stderr)
                 self.assertFalse(product.exists()); self.assertFalse(inventory.exists())
@@ -173,7 +179,7 @@ class RustAutomaticDropCases:
     def test_automatic_drop_requires_matching_typed_private_sdk_hooks(self) -> None:
         entry = self.source('hooks.rs', 'struct Item;impl Drop for Item{fn drop(&mut self){}}'
             'fn workload(){let item=Item;std::hint::black_box(&item);}fn main(){workload();}')
-        bindings = self.lifetime_bindings(entry, self.lifetime_policy())
+        requested = self.lifetime_request(entry, self.lifetime_policy())
         valid = {'new': 'pub fn drop_new(_: &str,_: &str)->usize{1}',
             'enter': 'pub fn drop_enter(_:usize,_: &str)->u64{1}',
             'exit': 'pub fn drop_exit(_:u64){}', 'unwind': 'pub fn drop_unwind(_:u64){}'}
@@ -190,8 +196,19 @@ class RustAutomaticDropCases:
                 '--crate-name', 'otelc_rust_bridge', '--crate-type', 'rlib', '-o', str(bridge)])
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             result, inventory, product = self.compile(entry, 'lifetime-weave', bridge=bridge,
-                request_changes={'schema_version': 2, 'lifetimes': bindings})
+                request_changes=requested)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(b'incompatible signature', result.stderr)
             self.assertNotIn(b'internal compiler error', result.stderr)
             self.assertFalse(product.exists()); self.assertFalse(inventory.exists())
+
+    def test_automatic_drop_refuses_discovery_from_another_compiler_flag_profile(self) -> None:
+        entry = self.source('flags.rs', 'struct Item(i32);impl Drop for Item{fn drop(&mut self){}}'
+            'fn workload(value:i32)->i32{let item=Item(value*7);std::hint::black_box(&item);item.0}'
+            'fn main(){std::hint::black_box(workload(3));}')
+        requested = self.lifetime_request(entry, self.lifetime_policy(), optimisation=0)
+        result, inventory, product = self.compile(entry, 'lifetime-weave', optimisation=3,
+                                                   request_changes=requested)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'MIR body binding differs', result.stderr)
+        self.assertFalse(product.exists()); self.assertFalse(inventory.exists())

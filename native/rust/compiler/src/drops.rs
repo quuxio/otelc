@@ -71,6 +71,16 @@ fn weave<'tcx>(tcx: TyCtxt<'tcx>, id: LocalDefId) -> &'tcx Steal<Body<'tcx>> {
             bail!("Rust automatic lifetimes require an ordinary synchronous non-const body");
         }
         let mut body = original.borrow().clone();
+        let expected = request()
+            .lifetime_bodies
+            .as_ref()
+            .and_then(|rows| rows.get(&row.identity))
+            .context("Rust lifetime MIR body fingerprint is missing")?;
+        if crate::lifetimes::body_digest(tcx, id, &body)? != *expected {
+            bail!(
+                "Rust lifetime MIR body binding differs; rediscover with matching compiler flags"
+            );
+        }
         insert(tcx, id, &mut body, bindings)?;
         OBSERVED
             .get_or_init(Default::default)
@@ -194,7 +204,10 @@ fn values<'tcx>(
             bail!("Rust lifetime arguments/returns require the ownership call profile");
         }
         let ty::Adt(adt, _) = declaration.ty.kind() else {
-            bail!("Rust lifetime local is not an ADT")
+            bail!(
+                "Rust lifetime local {index} is not an ADT: {}",
+                declaration.ty
+            )
         };
         let source = source_definition(
             tcx,

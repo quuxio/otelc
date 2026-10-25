@@ -98,6 +98,21 @@ class RustLifetimeSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'original source changed'):
             lifetimes.weave_bindings(self.path, self.policy, self.root, self.sources)
 
+    def test_weave_request_binds_complete_body_even_when_policy_selects_a_subset(self) -> None:
+        self.read()
+        data = copy.deepcopy(self.policy.data)
+        data['lifetimes'].update(include=['*CopyItem'])
+        requested = lifetimes.weave_request(self.path, Policy.parse(data), self.root, self.sources)
+        self.assertEqual(requested['lifetimes'], {'app.rs::main': {'4': 'model::CopyItem'}})
+        raw = json.dumps(self.document['bodies'][0], sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+        self.assertEqual(requested['lifetime_bodies'], {'app.rs::main': hashlib.sha256(raw).hexdigest()})
+        changed = copy.deepcopy(self.document)
+        changed['bodies'][0]['block_count'] += 1
+        self.read(changed)
+        other = lifetimes.weave_request(self.path, Policy.parse(data), self.root, self.sources)
+        self.assertEqual(other['lifetimes'], requested['lifetimes'])
+        self.assertNotEqual(other['lifetime_bodies'], requested['lifetime_bodies'])
+
     def test_unknown_missing_wrongly_typed_header_and_completion_claims_refuse(self) -> None:
         for key, bad in [('schema_version', True), ('schema_version', 1.0), ('kind', 'foreign'),
                          ('sources', {}), ('target', None), ('target', ''), ('pointer_width', 32),
