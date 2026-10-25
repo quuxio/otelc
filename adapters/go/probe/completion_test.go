@@ -41,7 +41,8 @@ func TestWatchBoundFenceRepeatedEndAndUnknown(t *testing.T) {
 		t.Fatal("shared function/observer bound exceeded")
 	}
 	c.boundary = "missing.boundary"
-	if c.End(false) || c.End(false) {
+	first, repeated := c.End(false), c.End(false)
+	if first || repeated {
 		t.Fatal("unknown or repeated end admitted")
 	}
 	h.probe.Close()

@@ -39,7 +39,8 @@ func TestWeakLifetimesDistinguishFailedDuplicateReleaseAndObservedGC(t *testing.
 	h := newHarness(t, true, nil)
 	func() {
 		object := new(testObject)
-		if !Track(h.probe, object, 0) || !Track(h.probe, object, 0) {
+		first, repeated := Track(h.probe, object, 0), Track(h.probe, object, 0)
+		if !first || !repeated {
 			t.Fatal("track failed")
 		}
 		Release(h.probe, object, false)

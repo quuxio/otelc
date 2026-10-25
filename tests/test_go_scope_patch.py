@@ -67,8 +67,9 @@ class GoScopePatchTests(unittest.TestCase):
         for key, wrong in (('schema_version', True), ('profile', 'other'),
                            ('patch', {}), ('base_files', {}), ('files', {}), ('extra', 0)):
             manifest.write_text(json.dumps(value | {key: wrong}))
+            changed = backport.digest(manifest.read_bytes())
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'fixed profile'):
-                backport.verify(self.output, backport.digest(manifest.read_bytes()))
+                backport.verify(self.output, changed)
         manifest.write_bytes(raw)
         source = self.output / 'source'
         target = source / 'go.mod'

@@ -39,6 +39,8 @@ The target checks formatting and `go vet`, runs real SDK tests with the race det
 
 Tests cover all four initial states, cached synchronous instruments, constructor and registered observable callbacks, callback metadata/errors/unregistration, disabling during a callback, real periodic-reader retention, application-provider isolation, export cancellation/barriers, exporter errors/shutdown and trace continuity. A delta-temporality negative control loses the paused counter observations; cumulative mode must preserve them.
 
+The focused `Go owned foundation` workflow runs these same race and per-file coverage gates on Linux and macOS, plus the common-policy health/context/configuration record tests. It checks the 8 GiB storage floor before SDK compilation, uses explicit Bash pipeline failure handling and retains only small dependency/test/coverage records for 14 days. Compiler caches and binaries are excluded. This supplements the full repository and Sonar gates; it does not qualify public weaving, benchmarks or the whole language.
+
 ## Remaining Go integration
 
 The [compiler/runtime foundation](go-source.md) connects the official compile-time rule engine and these controls to internal original-source fixtures, function/resource/GC probes, common live controls and health. General common-policy source builds, public owned launch commands, the HTTP adapter and paired benchmarks remain separate delivery work. Broader source/dependency profiles, independent oteleq qualification, final gates and protected delivery remain required. The SDK control foundation alone does not establish language completion.
