@@ -26,7 +26,7 @@ def _observers(value: object) -> bool:
 def _identity(value: Any) -> None:
     if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
             or value["schema_version"] != 1 or value.get("kind") != "otelc.runtime-health"
-            or value.get("language") != "java" or value.get("scope") != "sdk_pipeline"
+            or value.get("language") not in ("java", "c", "cpp") or value.get("scope") != "sdk_pipeline"
             or type(value.get("pid")) is not int or value["pid"] <= 0
             or value.get("phase") not in ("running", "final")
             or type(value.get("sdk_attached")) is not bool):
@@ -71,6 +71,13 @@ def validate(value: Any) -> dict[str, Any]:
     _span_accounting(value.get("span_accounting"))
     _exports(value.get("trace_exports"), "spans")
     _exports(value.get("metric_exports"), "metric_points")
+    if value['language'] in ('c', 'cpp'):
+        functions = value.get('function_accounting')
+        counters = ('registered', 'started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors')
+        if (not isinstance(functions, dict) or type(functions.get('closed')) is not bool
+                or any(not isinstance(functions.get(key), str) or not _counter(functions[key]) for key in counters)
+                or value.get('source_complete') is not False):
+            raise ValueError('invalid native function accounting')
     if value.get("downstream_receipt") != "unavailable" or value.get("otlp_partial_rejection") != "unavailable":
         raise ValueError("unsupported runtime health delivery claim")
     return value

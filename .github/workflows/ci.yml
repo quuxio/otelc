@@ -63,7 +63,7 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Install native observer tools
-        run: brew install llvm@22 cmake ninja
+        run: brew install llvm@22 cmake ninja protobuf curl
       - run: make setup check PYTHON=.venv/bin/python
   sonar:
     name: SonarQube

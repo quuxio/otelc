@@ -39,9 +39,17 @@ The compiler emits a read-only array of selected function addresses and NUL-term
 
 Tooling-supplied callbacks must honour the header's non-throwing ABI and retain only data valid for the loaded image lifetime. The existing calling-convention, definition, return/parameter and function-attribute checks apply to the new callback. Function registration describes compiler selection; it does not prove a function ran. Native runtime/export/control wiring, object/resource lifetimes, dynamic-image unload and broader source/build profiles remain required work.
 
+## Explicit source-aware profile
+
+`--source-aware` builds `llvm22-itanium-source-v1`, using the same registered ABI2 descriptor layout. The Python API takes `source_aware=True, function_registry=True` and `environment(policy, language, source_root=canonical_project_root)`. Compile application translation units with `-g`; missing module debug metadata is refused. Default and name-only registered profiles retain their existing behaviour.
+
+The source profile applies common `[sources]` include/exclude patterns before function selection. Path `*` and `?` do not cross `/`; `**` does, and `**/` also matches zero directories. Unicode and literal punctuation retain the common policy semantics. Definitions must resolve to physical files inside the canonical application root; a project symlink to an external header does not bring that header into selection. Missing or compiler-generated source identities are omitted. Debug paths are not an attestation of source origin; complete compiler-input closure remains unsupported.
+
+Registered names become `relative/file.cpp::demangled_function_signature`. Two translation units' same-named local functions therefore have distinct telemetry identities. Native SDK frontends can consume this profile; runtime metric flags and task/lifetime behaviour remain separate.
+
 ## Common selection and probe contract
 
-`otelc.llvm_backend.environment(policy, 'c')` or `'cpp'` translates the common `[functions] include/exclude` lists into the compiler environment. `*` matches zero or more characters, `?` matches one Unicode character, and C++ punctuation such as `[]` is literal. Exclusion wins. C++ selection uses demangled function signatures. Metric switches do not change which calls the compiler inserts; the future runtime must apply those switches live.
+`otelc.llvm_backend.environment(policy, 'c')` or `'cpp'` translates the common `[functions] include/exclude` lists into the compiler environment. `*` matches zero or more characters, `?` matches one Unicode character, and C++ punctuation such as `[]` is literal. Exclusion wins. C++ selection uses demangled function signatures. Metric switches do not change which calls the compiler inserts; the runtime applies those switches live.
 
 The component API builds and verifies the library, then returns selection separately:
 
@@ -56,7 +64,7 @@ record = verify(plugin)
 compiler_environment = environment(policy, 'cpp')
 ```
 
-This is tooling code, not code developers add to an application. A frontend can pass the returned library to Clang's `-fpass-plugin=...` option with that environment. Source-file selection, build-system interception, SDK linking and public native launch commands remain frontend work. Passing every source file directly to this component does not enforce `[sources]` selection.
+This is tooling code, not code developers add to an application. A frontend can pass the returned library to Clang's `-fpass-plugin=...` option with that environment. The explicit source profile adds source-file selection; general build-system interception remains frontend work. Passing every source file to either older profile does not enforce `[sources]` selection.
 
 The inserted C ABI is:
 
@@ -73,7 +81,9 @@ Clang semantic annotations can be read by the internal pass: `__attribute__((ann
 
 ## Evidence and remaining work
 
-`make llvm-check` runs the matched real compiler and enforces at least 80% line coverage independently for the Python component and each native pass variant. The registered variant repeats the base compiler corpus and additionally checks selected address/name agreement, UTF-8 and demangled C++ names, exclusions, ordinary pre-main initialisers, empty selection and incompatible registration declarations. The full `make check` also discovers these tests and enforces the floors. Default artifacts use `build/llvm-pass*`; registered artifacts use `build/llvm-pass-registry*` and a separately retained plugin. Python component coverage is under `build/llvm-python.coverage`. C++ Sonar uses the registered compilation context, which includes the base implementation and registration code.
+`make llvm-check` runs the matched real compiler and enforces at least 80% line coverage independently for the Python component and each native pass variant. The registered variant repeats the base compiler corpus and additionally checks selected address/name agreement, UTF-8 and demangled C++ names, exclusions, ordinary pre-main initialisers, empty selection and incompatible registration declarations. The full `make check` also discovers these tests and enforces the floors. Default artifacts use `build/llvm-pass*`; registered artifacts use `build/llvm-pass-registry*` and a separately retained plugin. Python component coverage is under `build/llvm-python.coverage`. C++ Sonar uses the source-aware compilation context, which includes the base, registration and source-selection implementations.
+
+The source-aware group checks duplicate file-local function names, standard-library exclusion, physical project boundaries including external symlink targets, Unicode/path-glob agreement, missing debug metadata, original exceptions and annotation exclusion. Its artifacts use `build/llvm-pass-source*`.
 
 The ordinary fixtures cover C, C++ exceptions, recursion, threads, `-O0`/`-O2`, Unicode and C++ operator selection, exclusions, annotations and compiler refusals. `examples/llvm/workload.ll` is a separate ordinary IR example with no telemetry calls; stock and instrumented executables must both print `42`. Tests compare actual application stdout/stderr and balanced diagnostic probe counts, and check that original fixture files remain unchanged.
 

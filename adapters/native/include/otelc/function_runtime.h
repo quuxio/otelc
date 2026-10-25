@@ -19,9 +19,13 @@ void ConfigureFunctionMetrics(opentelemetry::sdk::metrics::MeterProvider &provid
     std::uint32_t functions = 4096,
     const std::vector<double> &boundaries = {1e-6, 1e-5, 1e-4, .001, .01, .1, 1.});
 
+enum class FunctionContext { ambient, owned };
+
 struct FunctionLimits {
   std::uint32_t functions = 4096;
   std::uint32_t active = 512;
+  // Owned mode uses explicit probe parentage without SDK thread-local scopes.
+  FunctionContext context = FunctionContext::ambient;
 };
 
 struct FunctionStatus {

@@ -192,6 +192,26 @@ void BalancedScopesErrorsAndApplicationParents() {
   assert(engine->Close() && engine->Status().closed);
 }
 
+void OwnedParentsDoNotReadOrChangeAmbientSDKScopes() {
+  World world;
+  auto engine = world.Engine({4096, 512, native::FunctionContext::owned}); Register(*engine);
+  auto application = world.traces->GetTracer("application")->StartSpan("application");
+  {
+    trace::Scope scope(application);
+    auto outer = engine->Enter(&outer_address);
+    auto inner = engine->Enter(&inner_address);
+    assert(outer && inner && engine->Leave(inner, 0) && engine->Leave(outer, 0));
+    assert(trace::GetSpan(opentelemetry::context::RuntimeContext::GetCurrent())->GetContext() == application->GetContext());
+  }
+  application->End();
+  assert(world.span_sink->spans.size() == 3);
+  const auto &inner = *world.span_sink->spans[0], &outer = *world.span_sink->spans[1];
+  assert(inner.GetParentSpanId() == outer.GetSpanId());
+  assert(inner.GetTraceId() == outer.GetTraceId() && outer.GetTraceId() != application->GetContext().trace_id());
+  assert(!outer.GetParentSpanId().IsValid());
+  assert(engine->Close());
+}
+
 void AllLiveStatesAndEntryExitWindows() {
   for (bool collection : {false, true}) for (bool emission : {false, true}) {
     World world(collection, emission);
@@ -417,6 +437,7 @@ bool WideSelectionKeepsEachSeriesAndSecondBuckets() {
 int main() {
   using namespace engine_test;
   BalancedScopesErrorsAndApplicationParents();
+  OwnedParentsDoNotReadOrChangeAmbientSDKScopes();
   AllLiveStatesAndEntryExitWindows();
   ThreadOwnershipCapacityAndIncompleteClose();
   RegistrationIsBoundedAtomicAndOwnsNames();

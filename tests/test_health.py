@@ -37,6 +37,18 @@ def report() -> dict[str, Any]:
 
 
 class HealthShapeTests(unittest.TestCase):
+    def test_native_profile_requires_its_own_function_and_source_evidence(self) -> None:
+        functions = {key: '0' for key in ('registered', 'started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors')}
+        for language in ('c', 'cpp'):
+            native = report() | {'language': language, 'source_complete': False,
+                                 'function_accounting': functions | {'closed': False}}
+            self.assertIs(health.validate(native), native)
+            for update in ({'function_accounting': None}, {'source_complete': True},
+                           {'function_accounting': functions | {'closed': 'false'}},
+                           {'function_accounting': functions | {'closed': True, 'active': None}}):
+                with self.subTest(language=language, update=update), self.assertRaises(ValueError):
+                    health.validate(native | update)
+
     def test_refused_reports_and_stream_errors_close_all_descriptors(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:
             path = Path(directory) / "health.json"

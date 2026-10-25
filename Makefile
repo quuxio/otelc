@@ -7,8 +7,9 @@ NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
 BENCHMARK_LANGUAGE ?= java
 LLVM_OUTPUT ?= build/llvm-plugin
+NATIVE_LAUNCH_OUTPUT ?= build/native-launch-sdk
 
-.PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
+.PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check native-launch-sdk native-launch-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
 
 help:
@@ -54,6 +55,17 @@ native-check:
 	$(PYTHON) -m coverage run --append --data-file=build/native-tooling.coverage --source=ci.check_native_controls -m ci.check_native_controls
 	$(PYTHON) -m coverage report --data-file=build/native-tooling.coverage --fail-under=80
 
+native-launch-sdk:
+	mkdir -p build
+	$(PYTHON) -m otelc.native_launch --output "$(NATIVE_LAUNCH_OUTPUT)"
+
+native-launch-check:
+	mkdir -p build
+	$(PYTHON) -m coverage run --data-file=build/native-launch-tooling.coverage --source=ci.check_native_launch -m ci.check_native_launch
+	$(PYTHON) -m coverage report --data-file=build/native-launch-tooling.coverage --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/otelc/native_launch.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/ci/native_launch_suite.py' --fail-under=80
+
 go-check:
 	mkdir -p build
 	cd adapters/go && test -z "$$(gofmt -l metriccontrol/*.go)"
@@ -85,10 +97,10 @@ lint:
 	ci/markdownlint/node_modules/.bin/markdownlint '**/*.md' --ignore '**/node_modules/**' --ignore '.venv/**' --ignore '**/target/**' --ignore 'build/**'
 	$(PYTHON) -m compileall -q otelc ci tests
 
-test: java-build node-observer node-http native-check
+test: java-build node-observer node-http native-check native-launch-check
 	mkdir -p build
 	OTELC_NODE="$(NODE)" OTELC_TEST_NODE="$(NODE)" $(PYTHON) -m coverage run --source=otelc,ci -m unittest discover -s tests -v
-	$(PYTHON) -m coverage combine --append --keep build/native-tooling.coverage
+	$(PYTHON) -m coverage combine --append --keep build/native-tooling.coverage build/native-launch-tooling.coverage build/native-launch-python.coverage
 	$(PYTHON) -m coverage report --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_encoder.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_origin_chain.py' --fail-under=80
@@ -96,6 +108,9 @@ test: java-build node-observer node-http native-check
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_execution.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/llvm_backend.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_sonar.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/native_launch.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/check_native_launch.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/native_launch_suite.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 	$(PYTHON) -m ci.native_sonar
 
