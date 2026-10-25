@@ -25,6 +25,8 @@ bin/quux-otelc --config examples/functions.toml rust-build \
 
 The compiler and bridge use fixed offline, locked Cargo recipes. Cargo dependency fetching above is a separate preparation step. The build records original inputs, compiler/bridge/SDK identities, compiler inventories, selectors and both application products. Readers recheck them before launch and after normal execution; this does not establish complete dependency or source-origin closure. An existing SDK must match the current checkout's native sources; do not repair or relocate old build records to make them pass.
 
+Each compiler command retains its arguments, working directory, stdout, stderr, process exit and elapsed time. A failed command also includes its exit code and the last 4096 stderr bytes, decoded with replacement and escaped, in the raised error. This preserves useful diagnostics if a temporary test directory is later removed; the complete original stderr remains the authoritative channel while retained. The focused `Rust public compiler tools` workflow exercises the exact public tool builder and original-source inspection on Linux and macOS without an SDK build or application execution. It retains small command/diagnostic records for 14 days, excluding regenerable Cargo build trees. These focused checks do not replace the full runtime, coverage or protected delivery gates.
+
 `examples/rust/BenchmarkApp.rs` contains ordinary application code. Its selected function performs the same 128-step integer workload as the other language examples:
 
 ```rust

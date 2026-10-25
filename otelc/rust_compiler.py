@@ -86,7 +86,12 @@ def execute(arguments: list[str], output: Path, label: str,
                 'pid': process.pid, 'exit_code': process.returncode,
                 'seconds': time.monotonic() - started}) + '\n')
     if process.returncode:
-        raise ValueError('Rust compilation failed; inspect ' + str(output / (label + '.stderr')))
+        diagnostics = output / (label + '.stderr')
+        with diagnostics.open('rb') as stream:
+            stream.seek(max(0, diagnostics.stat().st_size - 4096))
+            tail = stream.read(4096).decode('utf-8', errors='replace')
+        raise ValueError(f'Rust compilation failed (exit {process.returncode}); '
+                         f'inspect {diagnostics}; stderr tail: {tail!r}')
     return (output / (label + '.stdout')).read_bytes()
 
 

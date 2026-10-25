@@ -1,0 +1,60 @@
+name: Rust public compiler tools
+on:
+  pull_request:
+    paths:
+      - 'native/rust/**'
+      - 'otelc/rust_compiler.py'
+      - 'tests/test_rust_compiler.py'
+      - '.github/workflows/rust-public-tools.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-public-tools-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  tools:
+    name: Public Rust tools (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Prepare pinned offline compiler inputs
+        run: |
+          mkdir -p build/rust-public-tools
+          git rev-parse HEAD > build/rust-public-tools/head.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev
+          rustup run 1.98.1 cargo fetch --locked --manifest-path native/rust/compiler/Cargo.toml
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+      - name: Exercise the exact public builder and compiler inspection
+        env:
+          PYTHONPATH: .:tests
+          OTELC_RUST_TOOLS_TEST_OUTPUT: ${{ github.workspace }}/build/rust-public-tools/actual
+        run: |
+          .venv/bin/python -m unittest test_rust_compiler -v 2>&1 | tee build/rust-public-tools/tests.log
+      - name: Retain bounded source, command and diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-public-tools-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rust-public-tools/head.txt
+            build/rust-public-tools/tests.log
+            build/rust-public-tools/actual/*.json
+            build/rust-public-tools/actual/application/*.rs
+            build/rust-public-tools/actual/tools/*.json
+            build/rust-public-tools/actual/tools/*.stdout
+            build/rust-public-tools/actual/tools/*.stderr
