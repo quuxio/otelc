@@ -39,7 +39,7 @@ def report() -> dict[str, Any]:
 class HealthShapeTests(unittest.TestCase):
     def test_native_profile_requires_its_own_function_and_source_evidence(self) -> None:
         functions = {key: '0' for key in ('registered', 'started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors')}
-        for language in ('c', 'cpp'):
+        for language in ('c', 'cpp', 'rust'):
             native = report() | {'language': language, 'source_complete': False,
                                  'function_accounting': functions | {'closed': False}}
             self.assertIs(health.validate(native), native)
@@ -48,6 +48,16 @@ class HealthShapeTests(unittest.TestCase):
                            {'function_accounting': functions | {'closed': True, 'active': None}}):
                 with self.subTest(language=language, update=update), self.assertRaises(ValueError):
                     health.validate(native | update)
+
+    def test_rust_function_health_cannot_claim_cpp_destruction_or_c_free_accounting(self) -> None:
+        functions = {key: '0' for key in ('registered', 'started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors')}
+        native = report() | {'language': 'rust', 'source_complete': False,
+                             'function_accounting': functions | {'closed': False}}
+        for field, pending in (('object_accounting', 'destroying'), ('resource_accounting', 'releasing')):
+            counters = {key: '0' for key in ('types', 'admitted', 'completed', 'live', pending,
+                        'ending', 'censored', 'lost', 'duplicates', 'invalid')}
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                health.validate(native | {field: counters | {'closing': False, 'closed': False}})
 
     def test_refused_reports_and_stream_errors_close_all_descriptors(self) -> None:
         with tempfile.TemporaryDirectory(dir="/tmp") as directory:

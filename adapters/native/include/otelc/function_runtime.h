@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "function_abi.h"
@@ -53,6 +54,10 @@ class FunctionRuntime {
 
   bool Register(const otelc_function_descriptor_v1 *functions, std::uint64_t count) noexcept;
   std::uint64_t Enter(const void *address) noexcept;
+  // Compiler-owned identities need not have a reifiable native function
+  // address (for example generic Rust bodies). Names are copied and share the
+  // same registration budget as address-backed functions.
+  std::uint64_t EnterNamed(std::string_view name) noexcept;
   bool Leave(std::uint64_t token, std::int32_t unwinding) noexcept;
   FunctionStatus Status() const;
   // Snapshot the selected function's explicit context without reading SDK TLS.

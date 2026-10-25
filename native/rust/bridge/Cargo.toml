@@ -1,0 +1,12 @@
+[package]
+name = "otelc-rust-bridge"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "AGPL-3.0-only"
+description = "Private compiler hooks for the tooling-owned native OpenTelemetry pipeline"
+
+[lib]
+crate-type = ["rlib"]
+
+[workspace]

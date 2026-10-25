@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -80,6 +81,7 @@ struct FunctionRuntime::Impl {
   FunctionLimits limits;
   mutable std::mutex mutex;
   std::map<const void *, std::string> functions;
+  std::set<std::string, std::less<>> named_functions;
   std::array<Frame, MaxActive> frames;
   std::atomic<std::uint64_t> lost{0}, invalid{0};
   std::uint64_t next = 1, started = 0, ended = 0, active = 0;
@@ -157,6 +159,48 @@ bool FunctionRuntime::Register(const otelc_function_descriptor_v1 *functions, st
   } catch (...) {
     ++impl_->lost;
     return false;
+  }
+}
+
+std::uint64_t FunctionRuntime::EnterNamed(std::string_view name) noexcept {
+  if (inside_runtime) {
+    ++impl_->lost;
+    return 0;
+  }
+  if (name.empty() || name.size() > MaxName || name.find('\0') != name.npos) {
+    ++impl_->invalid;
+    return 0;
+  }
+  const void *address = nullptr;
+  try {
+    {
+      ProbeGuard probe;
+      std::lock_guard<std::mutex> guard(impl_->mutex);
+      auto found = impl_->named_functions.find(name);
+      if (impl_->closing || (found == impl_->named_functions.end()
+          && impl_->functions.size() >= impl_->limits.functions)) {
+        ++impl_->lost;
+        return 0;
+      }
+      if (found == impl_->named_functions.end()) {
+        found = impl_->named_functions.emplace(name).first;
+        try {
+          // A set node supplies an opaque stable key, not an application code
+          // address. Its lifetime covers every frame and later named lookup.
+          impl_->functions.emplace(std::addressof(*found), *found);
+        } catch (...) {
+          impl_->named_functions.erase(found);
+          throw;
+        }
+      }
+      address = std::addressof(*found);
+    }
+    // Ordinary entry owns span creation and reentry protection. No registry
+    // lock or temporary ProbeGuard may span that call.
+    return Enter(address);
+  } catch (...) {
+    ++impl_->lost;
+    return 0;
   }
 }
 

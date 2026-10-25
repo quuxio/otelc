@@ -1,0 +1,95 @@
+//! Closed compiler component request; common policy resolution stays in tooling.
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Request {
+    pub schema_version: u32,
+    pub mode: String,
+    pub root: PathBuf,
+    pub entry: PathBuf,
+    pub output: PathBuf,
+    pub sources: BTreeMap<PathBuf, String>,
+    pub selected: BTreeSet<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct Definition {
+    pub identity: String,
+    pub file: PathBuf,
+    pub compiler_name: String,
+    pub start: u32,
+    pub end: u32,
+    pub asynchronous: bool,
+    pub expanded: bool,
+}
+
+pub(crate) fn digest(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+impl Request {
+    pub fn load(path: &Path) -> Result<Self> {
+        let mut bytes = Vec::new();
+        fs::File::open(path)?
+            .take(8 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            bail!("Rust compiler request exceeds 8 MiB");
+        }
+        let value: Self = serde_json::from_slice(&bytes).context("read Rust compiler request")?;
+        if value.schema_version != 1
+            || !matches!(value.mode.as_str(), "inspect" | "weave")
+            || value.root.canonicalize()? != value.root
+            || !value.root.is_dir()
+            || value.entry.canonicalize()? != value.entry
+            || !value.entry.starts_with(&value.root)
+            || !value.sources.contains_key(&value.entry)
+            || value.sources.len() > 65536
+            || value.selected.len() > 4096
+            || !value.output.is_absolute()
+            || value.output.exists()
+            || value.output.starts_with(&value.root)
+            || value
+                .output
+                .parent()
+                .context("missing Rust output directory")?
+                .canonicalize()?
+                != value
+                    .output
+                    .parent()
+                    .context("missing Rust output directory")?
+            || (value.mode == "inspect" && !value.selected.is_empty())
+        {
+            bail!("invalid Rust compiler component request");
+        }
+        for (source, hash) in &value.sources {
+            if source.canonicalize()? != *source
+                || !source.starts_with(&value.root)
+                || hash.len() != 64
+                || !hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || digest(&fs::read(source)?) != *hash
+            {
+                bail!("Rust original source binding differs: {}", source.display());
+            }
+        }
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+#[path = "request_tests.rs"]
+mod tests;

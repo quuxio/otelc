@@ -26,7 +26,7 @@ def _observers(value: object) -> bool:
 def _identity(value: Any) -> None:
     if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
             or value["schema_version"] != 1 or value.get("kind") != "otelc.runtime-health"
-            or value.get("language") not in ("java", "c", "cpp") or value.get("scope") != "sdk_pipeline"
+            or value.get("language") not in ("java", "c", "cpp", "rust") or value.get("scope") != "sdk_pipeline"
             or type(value.get("pid")) is not int or value["pid"] <= 0
             or value.get("phase") not in ("running", "final")
             or type(value.get("sdk_attached")) is not bool):
@@ -71,7 +71,7 @@ def validate(value: Any) -> dict[str, Any]:
     _span_accounting(value.get("span_accounting"))
     _exports(value.get("trace_exports"), "spans")
     _exports(value.get("metric_exports"), "metric_points")
-    if value['language'] in ('c', 'cpp'):
+    if value['language'] in ('c', 'cpp', 'rust'):
         functions = value.get('function_accounting')
         counters = ('registered', 'started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors')
         if (not isinstance(functions, dict) or type(functions.get('closed')) is not bool
