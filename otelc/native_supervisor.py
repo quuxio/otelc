@@ -17,9 +17,40 @@ if __package__ in (None, ''):
     from otelc.cli_bootstrap import install_sdk_paths
     install_sdk_paths()
 
-from otelc import health, native_launch, prepared_native as prepared
+from otelc import health, native_gate, native_launch, prepared_native as prepared
 from otelc import python_launch_files as files
 from otelc.config import Policy
+
+
+def _host_release(runtime: Path, waiting: native_gate.Waiting, original: dict[str, Any]) -> None:
+    """Wait for the matching host acknowledgement within the original budget."""
+    deadline = time.monotonic() + original['wait_ms'] / 1000
+    release = runtime / 'native-host-release.json'
+    value = None
+    while value is None:
+        if waiting.process.poll() is not None:
+            raise ValueError('native gate ended without host release')
+        if time.monotonic() >= deadline:
+            raise ValueError('native host release deadline expired')
+        try:
+            value, _ = files.read(release)
+        except (FileNotFoundError, files.PublicationPending):
+            time.sleep(.005)
+    expected = {'schema_version': 1, 'kind': 'otelc.native.host-release',
+                'launch_id': original['launch_id'], 'pid': waiting.process.pid, 'supervisor_pid': os.getpid()}
+    if not prepared.same(value, expected):
+        raise ValueError('native host release does not match the owned waiting process')
+    prepared.verify(runtime)
+    waiting.release()
+
+
+def _exit_status(code: int | None, released: bool, failures: dict[str, str], interrupted: int | None) -> int:
+    """Keep actual child/signal exits distinct from a supervisor-only refusal."""
+    if interrupted is not None:
+        return 128 + interrupted
+    if released and code:
+        return 128 - code if code < 0 else code
+    return 1 if failures else 0
 
 
 def execute(runtime: Path) -> int:
@@ -54,25 +85,8 @@ def execute(runtime: Path) -> int:
                        'phase': 'waiting_exec', 'source_complete': False}
         if application['parent_pid'] != os.getpid():
             raise ValueError('native child is not parented by the owned supervisor')
-        files.write(runtime / 'native-application-start.json', application)
-        deadline = time.monotonic() + original['wait_ms'] / 1000
-        release = runtime / 'native-host-release.json'
-        value = None
-        while value is None:
-            if waiting.process.poll() is not None:
-                raise ValueError('native gate ended without host release')
-            if time.monotonic() >= deadline:
-                raise ValueError('native host release deadline expired')
-            try:
-                value, _ = files.read(release)
-            except (FileNotFoundError, files.PublicationPending):
-                time.sleep(.005)
-        expected = {'schema_version': 1, 'kind': 'otelc.native.host-release',
-                    'launch_id': original['launch_id'], 'pid': waiting.process.pid, 'supervisor_pid': os.getpid()}
-        if not prepared.same(value, expected):
-            raise ValueError('native host release does not match the owned waiting process')
-        prepared.verify(runtime)
-        waiting.release()
+        files.write(runtime / prepared.APPLICATION_START, application)
+        _host_release(runtime, waiting, original)
         released = True
         waiting.process.wait()
         if not original['plain']:
@@ -91,9 +105,7 @@ def execute(runtime: Path) -> int:
             except (OSError, ValueError, subprocess.SubprocessError) as error:
                 failures['cleanup'] = type(error).__name__
     code = waiting.process.returncode if waiting is not None else None
-    exit_code = (128 - code if code < 0 else code) if released and code else 1 if failures else 0
-    if interrupted is not None:
-        exit_code = 128 + interrupted
+    exit_code = _exit_status(code, released, failures, interrupted)
     final = {'schema_version': 1, 'kind': 'otelc.native.execution', 'profile': prepared.PROFILE,
              'request_sha256': native_launch.digest(original), 'plan_sha256': native_launch.digest(resolved),
              'supervisor': supervisor, 'application': application, 'released': released,
