@@ -9,10 +9,11 @@ BENCHMARK_LANGUAGE ?= java
 LLVM_OUTPUT ?= build/llvm-plugin
 NATIVE_LAUNCH_OUTPUT ?= build/native-launch-sdk
 
-.PHONY: help setup check lint test go-check go-upstream node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check native-launch-sdk native-launch-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
+.PHONY: help setup check lint test go-check go-upstream go-public-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check native-launch-sdk native-launch-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
 
 help:
+	@printf '%s\n' 'go-public-check Check real common-policy Go builds/launch, live controls and Python component floors'
 	@printf '%s\n' 'go-upstream Build the pinned original-source Go compiler wrapper; --scope-safe is a separate private profile'
 	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint, adapter tests and native compiler/SDK component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'llvm-plugin Build the LLVM 22 function-hook component in a new directory' 'llvm-check  Check real C/C++/IR compilation and 80% native/Python coverage' 'native-check Check official C++ SDK metric controls and 80% component coverage' 'native-units-check Check explicit native build contexts and 80% component coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
@@ -73,6 +74,19 @@ native-launch-check:
 	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/otelc/native_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/ci/native_launch_suite.py' --fail-under=80
 
+go-public-check:
+	mkdir -p build
+	PYTHONPATH=tests $(PYTHON) -m coverage run --data-file=build/go-public.coverage --source=otelc.go_build,otelc.go_source,otelc.go_build_tags,otelc.go_prepared_tools,otelc.go_supervisor,otelc.prepared_go,otelc.go_http_bundle,otelc.path_boundaries,ci.check_go_http -m unittest test_go_source test_go_build test_prepared_go test_go_build_tags test_go_prepared_tools test_go_scope_build test_go_scope_tooling test_go_boundaries test_go_http_bundle test_go_http_integration test_go_http2 test_go_baggage test_go_supervisor -v
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_source.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_build_tags.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_prepared_tools.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_supervisor.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/prepared_go.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_http_bundle.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/path_boundaries.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/ci/check_go_http.py' --fail-under=80
+
 go-upstream:
 	$(PYTHON) -m ci.build_go_upstream --go "$(GO)"
 
@@ -86,6 +100,14 @@ go-check:
 	cd adapters/go && $(GO) tool cover -func="$(CURDIR)/build/go-coverage.out" | awk '/^total:/ {gsub("%", "", $$3); print; found=1; if ($$3 < 80) exit 1} END {if (!found) exit 1}'
 	awk 'NR>1 {split($$1, p, ":"); total[p[1]]+=$$2; if ($$3>0) hit[p[1]]+=$$2} END {for (file in total) {files++; percent=100*hit[file]/total[file]; printf "%s: %.2f%% statements\n", file, percent; if (percent<80) failed=1} if (files!=16 || failed) exit 1}' build/go-coverage.out
 	sed 's|^io\.quux\.otelc/go/|adapters/go/|' build/go-coverage.out > build/go-sonar-coverage.out
+
+	cd adapters/go-source && test -z "$$(gofmt -l *.go)"
+	cd adapters/go-source && GOWORK=off $(GO) vet -mod=readonly ./...
+	cd adapters/go-source && GOWORK=off $(GO) test -mod=readonly -race -count=1 -coverprofile="$(CURDIR)/build/go-source-coverage.out" ./...
+	cd adapters/go-source && $(GO) tool cover -func="$(CURDIR)/build/go-source-coverage.out" | awk '/^total:/ {gsub("%", "", $$3); print; found=1; if ($$3 < 80) exit 1} END {if (!found) exit 1}'
+	sed '1d; s|^io\.quux\.otelc/go-source/|adapters/go-source/|' build/go-source-coverage.out >> build/go-sonar-coverage.out
+	$(PYTHON) -m ci.check_go_http
+	sed '1d; s|^io\.quux\.otelc/go-http/|adapters/go-http/|' build/go-http-coverage.out >> build/go-sonar-coverage.out
 
 java-build:
 	$(MAVEN) -q -f adapters/java/pom.xml -DskipTests package
@@ -134,6 +156,15 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/otelc/go_health.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/build_go_upstream.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/go_scope_patch.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_source.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_build_tags.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_prepared_tools.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_supervisor.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/prepared_go.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_http_bundle.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/path_boundaries.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/check_go_http.py' --fail-under=80
 	$(PYTHON) -m coverage xml -o build/coverage.xml
 	$(PYTHON) -m ci.native_sonar
 

@@ -1,6 +1,6 @@
 # Go SDK metric controls
 
-This component wraps the pinned official OpenTelemetry Go metric API/SDK 1.47.0. It supplies separate live collection and emission switches for an isolated otelc-owned push pipeline. It does not yet supply a public Go launch/control command or a source-free application adapter. `plan` continues to list Go as remaining.
+This component wraps the pinned official OpenTelemetry Go metric API/SDK 1.47.0. It supplies separate live collection and emission switches for an isolated otelc-owned push pipeline. The [source candidate](go-source.md) connects it to public application builds/launch, function and lifetime observations and common controls. `plan` lists Go as a candidate and keeps it in `remaining` pending complete language qualification.
 
 ## Runtime candidate dependencies
 

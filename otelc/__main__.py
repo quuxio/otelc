@@ -22,6 +22,9 @@ from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe
 from otelc import native_launch
 from otelc import native_build, prepared_native
+from otelc import go_build, go_prepared_tools, prepared_go
+from ci import build_go_upstream
+from otelc import path_boundaries
 from otelc.config import LANGUAGES, Policy
 
 
@@ -50,6 +53,29 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("examples/otelc.toml"))
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("plan")
+    go_protocols = commands.add_parser('go-protocols', help='describe candidate Go build/prepared formats without compiling')
+    go_protocols.add_argument('--build-tags', action='store_true', help='describe the explicit tagged build profile')
+    go_protocols.add_argument('--prepared-tools', action='store_true', help='describe fixed installed tooling reuse')
+    go_protocols.add_argument('--scope-safe', action='store_true', help='describe the private-bootstrap helper and tooling2 profile')
+    go_build_parser = commands.add_parser('go-build', help='candidate: build checked stock and instrumented Go binaries')
+    go_build_parser.add_argument('--root', type=Path, default=Path.cwd())
+    go_build_parser.add_argument('--target', default='.', help='one relative main package, such as ./cmd/app')
+    go_build_parser.add_argument('--output', type=Path, required=True)
+    go_build_parser.add_argument('--go', default='go', help='base compiler used to select the pinned native toolchain')
+    go_build_parser.add_argument('--build-tag', action='append', default=[], metavar='NAME',
+                                 help='explicit literal Go build tag; repeat for multiple tags')
+    go_build_parser.add_argument('--prepared-tools', action='store_true',
+                                 help='reuse fixed installed tooling; requires its exact recorded --go compiler')
+    go_build_parser.add_argument('--scope-safe', action='store_true',
+                                 help='use the explicit private-bootstrap helper and verified raw-rule backport')
+    go_build_parser.add_argument('--tooling-directory', type=Path,
+                                 help='installation directory containing fixed bin/otelc and toolchain.json')
+    go_launch = commands.add_parser('go', help='candidate: launch an existing Go build without compiling')
+    go_launch.add_argument('--build', type=Path, required=True)
+    go_launch.add_argument('--runtime', type=Path, required=True)
+    go_launch.add_argument('--plain', action='store_true')
+    go_launch.add_argument('--prepare-only', action='store_true')
+    go_launch.add_argument('arguments', nargs=argparse.REMAINDER)
     compare = commands.add_parser("benchmark")
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument("--no-publish", action="store_true")
@@ -132,6 +158,11 @@ def main() -> int:
         if args.command == 'native-protocols':
             print(json.dumps(prepared_native.protocols(build_version=args.build_version), indent=2))
             return 0
+        if args.command == 'go-protocols':
+            print(json.dumps(prepared_go.protocols(build_tags=args.build_tags,
+                                                   prepared_tools=args.prepared_tools,
+                                                   scope_safe=args.scope_safe), indent=2))
+            return 0
         policy = Policy.load(args.config)
         if args.command == 'native-build':
             recipe = native_build.read(args.recipe)[0] if args.recipe else None
@@ -150,6 +181,33 @@ def main() -> int:
             process = native_launch.start(built, args.runtime, plain=args.plain,
                                           arguments=application_arguments(args.arguments))
             return process.wait()
+        if args.command == 'go-build':
+            installed = args.tooling_directory or build_go_upstream.ROOT / (
+                'build/go-upstream-scope' if args.scope_safe else 'build/go-upstream')
+            if (path_boundaries.within(args.output, args.root)
+                    or path_boundaries.within(installed, args.root)):
+                raise ValueError('Go application output and tooling must be outside original inputs')
+            binding = go_prepared_tools.prepare(args.go, installed) if args.prepared_tools else None
+            tools = binding.toolchain() if binding is not None else build_go_upstream.build(
+                args.go, installed, scope_safe=args.scope_safe)
+            if args.scope_safe and binding is None:
+                binding = go_prepared_tools.prepare(tools['go'], installed)
+            result = go_build.build_project(args.root, args.target, policy, args.output, tools,
+                                            build_tags=tuple(args.build_tag), prepared_tools=binding,
+                                            scope_safe=args.scope_safe)
+            print(json.dumps({'schema_version': 3, 'kind': 'otelc.go.build-result',
+                              'profile': prepared_go.PROFILE, 'build': str(args.output.resolve() / 'build.json'),
+                              'plain': result['plain'], 'instrumented': result['instrumented'],
+                              'functions': [row['name'] for row in result['selection']['functions']],
+                              'lifetimes': [row['name'] for row in result['selection']['types']],
+                              'allocations': len(result['selection']['allocations']),
+                              'release_hooks': len(result['selection']['releases']),
+                              'source_complete': False}, indent=2))
+            return 0
+        if args.command == 'go':
+            return prepared_go.run(policy, args.runtime, build_directory=args.build,
+                                   arguments=application_arguments(args.arguments), plain=args.plain,
+                                   prepare_only=args.prepare_only)
         if args.command == "python":
             arguments = application_arguments(args.arguments)
             return python_adapter.run(policy, args.runtime, root=args.root, entry=args.entry,
@@ -171,7 +229,7 @@ def main() -> int:
                                      diagnostic_profile=args.diagnostic_profile, **witness_options)
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"],
-                              "candidates": ["typescript", "javascript", "python"],
+                              "candidates": ["typescript", "javascript", "python", "go"],
                               "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":

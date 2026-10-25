@@ -1,4 +1,4 @@
-# One policy for the ordinary Java, JavaScript, TypeScript and Python HTTP apps.
+# One policy for the ordinary Java, JavaScript, TypeScript, Python and Go HTTP apps.
 schema_version = 3
 
 [resource]
@@ -9,11 +9,11 @@ endpoint = "http://127.0.0.1:4320"
 interval_ms = 1000
 
 [sources]
-include = ["examples/**"]
+include = ["examples/**", "**/*.go"]
 exclude = []
 
 [functions]
-include = ["*.workloadRequest", "*.workloadHandle", "HttpContextApp.request(*)", "HttpContextApp.handle(*)"]
+include = ["*.workloadRequest", "*.workloadHandle", "*.workloadChild", "HttpContextApp.request(*)", "HttpContextApp.handle(*)"]
 
 [context]
 http = true

@@ -21,7 +21,7 @@ class CliTests(unittest.TestCase):
     def test_inspection_reports_current_and_future_adapters(self) -> None:
         result = json.loads(self.invoke(["plan"]))
         self.assertEqual(result["implemented"], ["java"])
-        self.assertEqual(result["candidates"], ["typescript", "javascript", "python"])
+        self.assertEqual(result["candidates"], ["typescript", "javascript", "python", "go"])
         self.assertIn("rust", result["remaining"])
 
     def test_not_implemented_is_an_execution_error(self) -> None:
