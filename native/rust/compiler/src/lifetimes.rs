@@ -51,6 +51,15 @@ struct Site {
     unwind: Option<String>,
 }
 #[derive(Serialize)]
+struct UnavailableValue {
+    local: usize,
+    role: &'static str,
+    compiler_type: String,
+    rendered_type: String,
+    kind: &'static str,
+    needs_drop: bool,
+}
+#[derive(Serialize)]
 struct Snapshot {
     function: crate::request::Definition,
     phase: String,
@@ -58,7 +67,66 @@ struct Snapshot {
     block_count: usize,
     argument_count: usize,
     locals: Vec<Value>,
+    unavailable_locals: Vec<UnavailableValue>,
     sites: Vec<Site>,
+}
+
+fn role(local: usize, arguments: usize) -> &'static str {
+    if local == 0 {
+        "return"
+    } else if local <= arguments {
+        "argument"
+    } else {
+        "local"
+    }
+}
+
+fn owns_adt(typ: ty::Ty<'_>) -> bool {
+    match typ.kind() {
+        ty::Adt(..) => true,
+        ty::Array(element, _) => owns_adt(*element),
+        ty::Tuple(fields) => (0..fields.len()).any(|index| owns_adt(fields[index])),
+        // Borrowed references do not own the objects named by their targets.
+        _ => false,
+    }
+}
+
+fn unavailable_values<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    id: LocalDefId,
+    body: &Body<'tcx>,
+    known: &BTreeSet<usize>,
+) -> Vec<UnavailableValue> {
+    let environment = ty::TypingEnv::post_analysis(tcx, id);
+    let mut rows = Vec::new();
+    for (local, declaration) in body.local_decls.iter_enumerated() {
+        let index = local.as_usize();
+        if known.contains(&index) {
+            continue;
+        }
+        let needs_drop = declaration.ty.needs_drop(tcx, environment);
+        let kind = match declaration.ty.kind() {
+            ty::Adt(..) => "foreign_adt",
+            ty::Array(..) if owns_adt(declaration.ty) => "array",
+            ty::Tuple(..) if owns_adt(declaration.ty) => "tuple",
+            _ if needs_drop => "opaque",
+            _ => continue,
+        };
+        let rendered_type = declaration.ty.to_string();
+        let compiler_type = match declaration.ty.kind() {
+            ty::Adt(adt, _) => tcx.def_path_str(adt.did()),
+            _ => rendered_type.clone(),
+        };
+        rows.push(UnavailableValue {
+            local: index,
+            role: role(index, body.arg_count),
+            compiler_type,
+            rendered_type,
+            kind,
+            needs_drop,
+        });
+    }
+    rows
 }
 
 pub(crate) fn install(providers: &mut rustc_middle::query::Providers) {
@@ -135,13 +203,7 @@ fn values<'tcx>(tcx: TyCtxt<'tcx>, id: LocalDefId, body: &Body<'tcx>) -> Result<
         let index = local.as_usize();
         rows.push(Value {
             local: index,
-            role: if index == 0 {
-                "return"
-            } else if index <= body.arg_count {
-                "argument"
-            } else {
-                "local"
-            },
+            role: role(index, body.arg_count),
             compiler_type: source.compiler_name.clone(),
             rendered_type: declaration.ty.to_string(),
             source,
@@ -183,6 +245,7 @@ fn capture<'tcx>(
     }
     let locals = values(tcx, id, body)?;
     let tracked: BTreeSet<_> = locals.iter().map(|row| row.local).collect();
+    let unavailable_locals = unavailable_values(tcx, id, body, &tracked);
     let mut sites = Vec::new();
     for (block, data) in body.basic_blocks.iter_enumerated() {
         let mut site = |kind, statement, place: Place<'_>, other: Option<Place<'_>>, unwind| {
@@ -262,6 +325,7 @@ fn capture<'tcx>(
         block_count: body.basic_blocks.len(),
         argument_count: body.arg_count,
         locals,
+        unavailable_locals,
         sites,
     })
 }
@@ -293,7 +357,7 @@ pub(crate) fn publish(tcx: TyCtxt<'_>) -> Result<()> {
     if !state.errors.is_empty() {
         bail!("Rust lifetime observations failed: {:?}", state.errors);
     }
-    let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":1,
+    let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":2,
         "kind":"otelc.rust.lifetime-inventory","sources":request().sources,
         "target":tcx.sess.target.llvm_target.to_string(),"pointer_width":tcx.sess.target.pointer_width,
         "bodies":state.bodies.values().collect::<Vec<_>>(),"skipped":skipped,

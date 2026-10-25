@@ -165,6 +165,34 @@ class RustLifetimeCases(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(output.exists()); self.assertFalse(product.exists())
 
+    def test_foreign_and_owned_container_types_are_visible_and_cannot_be_woven(self) -> None:
+        self.entry.write_text('''struct Item;impl Drop for Item{fn drop(&mut self){}}
+struct Plain;
+fn opaque<T>(value:T){std::hint::black_box(value);}
+fn workload(){
+ let file=std::fs::File::open("must-not-run-during-discovery").unwrap();
+ let pair=(Item,Item);let array=[Item,Item];let plain=[Plain,Plain];
+ let vector=Vec::<Item>::new();let borrowed=(&array,&pair);
+ std::hint::black_box((&file,&pair,&array,&plain,&vector,borrowed));
+}
+fn main(){workload();opaque(7_u32);}
+''')
+        self.sources[str(self.entry)] = digest(self.entry)
+        result, output, product = self.inspect()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertFalse(product.exists()); self.assertEqual(result.stdout, b'')
+        document = json.loads(output.read_bytes())
+        self.assertEqual(document['schema_version'], 2)
+        rows = [row for body in document['bodies'] for row in body['unavailable_locals']]
+        self.assertTrue({'foreign_adt', 'array', 'tuple', 'opaque'} <= {row['kind'] for row in rows})
+        self.assertTrue(any(row['compiler_type'].endswith('::File') for row in rows))
+        self.assertTrue(any(row['kind'] == 'array' and not row['needs_drop'] for row in rows))
+        self.assertFalse(any(row['kind'] == 'tuple' and row['rendered_type'].startswith('(&') for row in rows))
+        for include in (['*File*'], ['[Item;*'], ['(Item,*'], ['T']):
+            policy = self.policy(lifetimes={'enabled': True, 'include': include})
+            with self.subTest(include=include), self.assertRaisesRegex(ValueError, 'unavailable'):
+                rust_lifetimes.weave_request(output, policy, self.root, self.sources)
+
 
 def main() -> int:
     """Keep genuine selected/executed counts; a skipped class cannot qualify."""
@@ -175,7 +203,7 @@ def main() -> int:
         'selected': selected, 'tests_run': result.testsRun, 'skipped': len(result.skipped),
         'failures': len(result.failures), 'errors': len(result.errors),
         'successful': result.wasSuccessful(), 'application_launches': 0}, indent=2) + '\n')
-    return 0 if selected == 4 and result.testsRun == selected and not result.skipped and result.wasSuccessful() else 1
+    return 0 if selected == 5 and result.testsRun == selected and not result.skipped and result.wasSuccessful() else 1
 
 
 if __name__ == '__main__':
