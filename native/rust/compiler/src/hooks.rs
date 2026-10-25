@@ -87,7 +87,8 @@ fn borrowed_str(input: ty::Ty<'_>) -> bool {
 }
 
 pub(crate) fn string<'tcx>(tcx: TyCtxt<'tcx>, value: &str, span: Span) -> Operand<'tcx> {
-    let ty = ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_static, tcx.types.str_);
+    // Runtime MIR has already erased regions, including literal references.
+    let ty = ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_);
     let alloc_id = tcx.allocate_bytes_dedup(value.as_bytes(), 0);
     Operand::Constant(Box::new(ConstOperand {
         span,
