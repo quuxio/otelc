@@ -24,17 +24,19 @@ REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'poli
 
 def protocols(*, build_version: int = 2) -> dict[str, Any]:
     """Negotiate the candidate formats without application or tool execution."""
-    if type(build_version) is not int or build_version not in (2, 3, 4):
-        raise ValueError('native protocols support explicit build2,3 or4')
+    if type(build_version) is not int or build_version not in (2, 3, 4, 5):
+        raise ValueError('native protocols support explicit build2,3,4 or5')
     value = {'schema_version': 1, 'kind': 'otelc.native.protocols', 'profile': PROFILE,
             'build': build_version, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
             'execution': 1, 'host_release': 1, 'gate': 1, 'embedded_sdk': True,
             'source_complete': False}
-    if build_version in (3, 4):
+    if build_version in (3, 4, 5):
         value['unit_recipe'] = 1
     if build_version == 4:
         value['object_inventory'] = 2
         value['object_probe_abi'] = 'otelc.object.v1'
+    if build_version == 5:
+        value.update(resource_inventory=1, resource_resolution=1, resource_probe_abi='otelc.resource.v1')
     return value
 
 

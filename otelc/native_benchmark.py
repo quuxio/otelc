@@ -47,17 +47,19 @@ def validate_drain(report: dict[str, Any] | None, policy: Policy) -> None:
         failures.extend(exports[key] for key in ('batches_failed', 'batches_pending', 'units_failed'))
     if spans['sampled_ended'] != int(value['trace_exports']['units_succeeded']):
         raise ValueError('native benchmark sampled spans differ from SDK exports')
-    if ('object_accounting' in value) != policy.data['lifetimes']['enabled']:
+    lifetime_key = 'resource_accounting' if value['language'] == 'c' else 'object_accounting'
+    pending = 'releasing' if value['language'] == 'c' else 'destroying'
+    if (lifetime_key in value) != policy.data['lifetimes']['enabled']:
         raise ValueError('native benchmark lifetime profile differs')
     if policy.data['lifetimes']['enabled']:
-        objects = value.get('object_accounting')
+        objects = value.get(lifetime_key)
         if type(objects) is not dict or objects['closed'] is not True or objects['closing'] is not True:
             raise ValueError('native benchmark lifetime accounting is unavailable')
-        counts = counters(objects, ('admitted', 'completed', 'live', 'destroying', 'ending',
+        counts = counters(objects, ('admitted', 'completed', 'live', pending, 'ending',
                                     'censored', 'lost', 'duplicates', 'invalid'))
         if counts['admitted'] != counts['completed']:
             raise ValueError('native benchmark has incomplete object lifetimes')
-        failures.extend(counts[key] for key in ('live', 'destroying', 'ending', 'censored', 'lost', 'duplicates', 'invalid'))
+        failures.extend(counts[key] for key in ('live', pending, 'ending', 'censored', 'lost', 'duplicates', 'invalid'))
     if any(failures):
         raise ValueError('native benchmark has observation loss or failed exports')
 
@@ -106,7 +108,7 @@ def measure(policy: Policy, built: native_launch.Build, output: Path, *, plain: 
 def run(policy: Policy, output: Path, *, language: str, sdk_directory: Path,
         comparison_id: str | None = None, publish: bool = True) -> dict[str, Any]:
     """Build both matched lanes without changing the maintained example source."""
-    native_launch.validate_policy(policy, language, object_lifetimes=language == 'cpp')
+    native_launch.validate_policy(policy, language, object_lifetimes=language == 'cpp', resource_lifetimes=language == 'c')
     source = ROOT / 'examples' / language / ('BenchmarkApp.c' if language == 'c' else 'BenchmarkApp.cpp')
     before = native_gate.identity(source)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)

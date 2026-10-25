@@ -2,6 +2,7 @@
 #include "otelc/function_runtime.h"
 #include "otelc/object_runtime.h"
 #include "otelc/deadline.h"
+#include "resource_abi.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -11,6 +12,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -37,6 +39,10 @@ using Micros = std::chrono::microseconds;
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 namespace native = otelc::native;
+struct SavedErrno {
+  const int value = errno;
+  ~SavedErrno() noexcept { errno = value; }
+};
 namespace metrics = opentelemetry::sdk::metrics;
 namespace traces = opentelemetry::sdk::trace;
 namespace otlp = opentelemetry::exporter::otlp;
@@ -176,6 +182,7 @@ class Runtime {
  public:
   std::unique_ptr<native::FunctionRuntime> functions;
   std::unique_ptr<native::ObjectRuntime> objects;
+  native::LifetimeBoundary lifetime_boundary = native::LifetimeBoundary::destructor_entry;
   ExportStats metric_stats, trace_stats;
   std::shared_ptr<native::MetricState> state;
   std::shared_ptr<metrics::MeterProvider> meters;
@@ -202,14 +209,19 @@ class Runtime {
     native::ConfigureFunctionMetrics(*meters, 4096, policy.at("boundaries").get<std::vector<double>>());
     bool object_enabled = false;
     std::uint32_t object_limit = 0;
-    if (policy.contains("object_lifetimes")) {
-      const auto &object = policy.at("object_lifetimes");
+    const bool resources = policy.contains("resource_lifetimes");
+    Require(!(resources && policy.contains("object_lifetimes")), "native lifetime profiles cannot be combined");
+    const char *lifetime_key = resources ? "resource_lifetimes" : "object_lifetimes";
+    if (policy.contains(lifetime_key)) {
+      const auto &object = policy.at(lifetime_key);
       Require(object.is_object() && object.size() == 2 && object.at("enabled").is_boolean()
               && object.at("max_live").is_number_integer(), "invalid native object settings");
       auto limit = object.at("max_live").get<std::int64_t>();
       Require(limit > 0 && limit <= 1048576, "invalid native object live limit");
       object_enabled = object.at("enabled").get<bool>();
-      Require(!object_enabled || plan.at("language") == "cpp", "object SDK profile requires C++");
+      Require(!object_enabled || plan.at("language") == (resources ? "c" : "cpp"),
+              "native lifetime settings do not match the application language");
+      lifetime_boundary = resources ? native::LifetimeBoundary::free_entry : native::LifetimeBoundary::destructor_entry;
       object_limit = static_cast<std::uint32_t>(limit);
       if (object_enabled)
         native::ConfigureObjectMetrics(*meters, 4096, policy.at("boundaries").get<std::vector<double>>());
@@ -250,7 +262,7 @@ class Runtime {
         native::FunctionLimits{4096, 512, native::FunctionContext::owned});
     if (object_enabled)
       objects = std::make_unique<native::ObjectRuntime>(state, meters->GetMeter(native::FunctionScopeName), selected,
-          native::ObjectLimits{4096, object_limit});
+          native::ObjectLimits{4096, object_limit, lifetime_boundary});
   }
 
   ~Runtime() { StopControl(); }
@@ -305,9 +317,10 @@ class Runtime {
       {"source_complete", false}, {"downstream_receipt", "unavailable"}, {"otlp_partial_rejection", "unavailable"}};
     if (objects) {
       const auto object = objects->Status();
-      result["object_accounting"] = {{"types", Decimal(object.types)}, {"admitted", Decimal(object.admitted)},
+      const bool resources = lifetime_boundary == native::LifetimeBoundary::free_entry;
+      result[resources ? "resource_accounting" : "object_accounting"] = {{"types", Decimal(object.types)}, {"admitted", Decimal(object.admitted)},
         {"completed", Decimal(object.completed)}, {"live", Decimal(object.live)},
-        {"destroying", Decimal(object.destroying)}, {"ending", Decimal(object.ending)},
+        {resources ? "releasing" : "destroying", Decimal(object.destroying)}, {"ending", Decimal(object.ending)},
         {"censored", Decimal(object.censored)}, {"lost", Decimal(object.lost)},
         {"duplicates", Decimal(object.duplicates)}, {"invalid", Decimal(object.invalid)},
         {"closing", object.closing}, {"closed", object.closed}};
@@ -511,6 +524,30 @@ extern "C" std::uint64_t otelc_object_destroying_v1(const void *address, const c
 extern "C" void otelc_object_destroyed_v1(std::uint64_t token, std::int32_t unwinding) noexcept {
   if (auto *runtime = Installed(); runtime && runtime->objects)
     runtime->objects->Destroyed(token, unwinding);
+  else
+    ++Global().errors;
+}
+extern "C" void otelc_resource_allocated_v1(const void *address, const char *type, const char *name) noexcept {
+  const SavedErrno saved;
+  if (auto *runtime = Installed(); runtime && runtime->objects &&
+      runtime->lifetime_boundary == native::LifetimeBoundary::free_entry)
+    runtime->objects->Admit(address, type, name, runtime->functions->CurrentContext());
+  else
+    ++Global().errors;
+}
+extern "C" std::uint64_t otelc_resource_releasing_v1(const void *address) noexcept {
+  const SavedErrno saved;
+  if (auto *runtime = Installed(); runtime && runtime->objects &&
+      runtime->lifetime_boundary == native::LifetimeBoundary::free_entry)
+    return runtime->objects->Releasing(address);
+  ++Global().errors;
+  return 0;
+}
+extern "C" void otelc_resource_released_v1(std::uint64_t token) noexcept {
+  const SavedErrno saved;
+  if (auto *runtime = Installed(); runtime && runtime->objects &&
+      runtime->lifetime_boundary == native::LifetimeBoundary::free_entry)
+    runtime->objects->Destroyed(token, 0);
   else
     ++Global().errors;
 }

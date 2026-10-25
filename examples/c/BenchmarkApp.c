@@ -3,19 +3,23 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 struct WorkItem { uint32_t seed; };
 
 uint64_t workload(uint32_t seed) {
-  struct WorkItem item = {seed};
-  uint64_t value = item.seed;
+  struct WorkItem *volatile item = malloc(sizeof *item);
+  if (!item) exit(4);
+  item->seed = seed;
+  uint64_t value = item->seed;
   uint64_t sum = 0;
   for (int step = 0; step < 128; ++step) {
     value = (value * 1664525 + 1013904223) & 65535;
     sum += value;
   }
+  free(item);
   return sum;
 }
 

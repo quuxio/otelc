@@ -40,7 +40,7 @@ The explicit [native build-3 context](docs/native-build-context.md) adds per-uni
 
 The [native paired benchmark candidate](docs/native-benchmarks.md) compares equivalent C/C++ applications against direct stock baselines and all four live metric states. It retains actual CPU/RSS, owned shutdown and SDK loss/export checks, using the shared report and Grafana format. C++ lifetime cost can be compared under a separate common policy; C resource lifetimes and independent benchmark qualification remain work.
 
-The [C allocation lifetime components](docs/c-resources.md) now bind selected record-pointer `malloc`/`calloc` sites with Clang and observe matching calls after LLVM optimisation. Their separate runtime uses allocation-to-`free` boundaries. The public C lifetime route remains disconnected and refuses enabled lifetimes; component tests do not promote C to a completed adapter.
+The [C allocation lifetime candidate](docs/c-resources.md) binds selected record-pointer `malloc`/`calloc` sites with Clang and observes matching calls after LLVM optimisation. Public build 5 connects those probes to allocation-to-`free` SDK spans/metrics, live controls, resource health and the common-policy C benchmark. Stack scopes, custom/interposed allocators, `realloc`, independent qualification and complete C language acceptance remain work.
 
 ## Java example and Grafana
 

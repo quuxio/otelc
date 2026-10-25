@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from otelc import llvm_backend, native_gate, native_launch, native_object_build
+from otelc import llvm_backend, native_gate, native_launch, native_object_build, native_resource_build
 from otelc.config import Policy
 from otelc.python_sdk_io import decode
 
@@ -126,7 +126,7 @@ def validate(value: Any, root: Path) -> dict[str, Any]:
 
 
 def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: str,
-          library: Path, *, object_lifetimes: bool = False) -> list[dict[str, Any]]:
+          library: Path, *, object_lifetimes: bool = False, resource_lifetimes: bool = False) -> list[dict[str, Any]]:
     """Derive the two matched compiler/link recipes, preserving explicit unit order."""
     binaries = Path(tools['directory'])
     result = []
@@ -147,8 +147,12 @@ def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: s
                 command.extend(['-ivfsoverlay', unit['overlay']])
             if lane == 'instrumented' and unit['role'] == 'application':
                 command.append('-fpass-plugin=' + plugin)
-            extra = {'environment': native_object_build.environment(unit, output)} if (
-                object_lifetimes and lane == 'instrumented' and unit['role'] == 'application') else {}
+            extra = {}
+            if lane == 'instrumented' and unit['role'] == 'application':
+                if object_lifetimes:
+                    extra['environment'] = native_object_build.environment(unit, output)
+                elif resource_lifetimes:
+                    extra['environment'] = native_resource_build.environment(unit, output)
             append(label, unit['directory'], command, compiled, source=unit['source'],
                    dependencies=str(dependencies), unit=unit['id'], lane=lane, **extra)
             if unit['rename_main']:
@@ -174,8 +178,9 @@ def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: s
 def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], output: Path,
           *, library: Path, llvm_config: Path | None = None) -> native_launch.Build:
     """Compile a caller-selected context without editing its application inputs."""
-    objects = policy.data['lifetimes']['enabled']
-    native_launch.validate_policy(policy, language, object_lifetimes=objects)
+    objects = policy.data['lifetimes']['enabled'] and language == 'cpp'
+    resources = policy.data['lifetimes']['enabled'] and language == 'c'
+    native_launch.validate_policy(policy, language, object_lifetimes=objects, resource_lifetimes=resources)
     root = root.resolve(strict=True)
     require(root.is_dir() and root != Path('/'), 'invalid application root')
     recipe = validate(recipe, root)
@@ -187,8 +192,9 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
     output.mkdir(mode=0o700)
     output = output.resolve(strict=True)
     object_records = native_object_build.build(policy, root, recipe, output, llvm_config=llvm_config) if objects else {}
+    resource_records = native_resource_build.build(policy, root, recipe, output, llvm_config=llvm_config) if resources else {}
     plugin = llvm_backend.build(output / 'plugin', config=llvm_config, function_registry=True,
-                                source_aware=True, object_lifetimes=objects)
+                                source_aware=True, object_lifetimes=objects, resource_lifetimes=resources)
     manifest = llvm_backend.verify(plugin)
     tools = manifest['toolchain']
     extra_tools = {}
@@ -197,7 +203,7 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
         extra_tools['objcopy'] = native_gate.identity(objcopy)
         require(tools['version'] in llvm_backend.query(objcopy, '--version'), 'object tool differs from LLVM')
     (output / 'bootstrap.cpp').write_text(native_launch.BOOTSTRAP)
-    commands = steps(recipe, output, tools, manifest['plugin']['path'], library, object_lifetimes=objects)
+    commands = steps(recipe, output, tools, manifest['plugin']['path'], library, object_lifetimes=objects, resource_lifetimes=resources)
     dependencies, inputs = {}, {}
     for command in commands:
         environment = llvm_backend.environment(policy, language, source_root=root)
@@ -219,20 +225,22 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
     artifacts = {output / 'bootstrap.cpp', output / 'compile_commands.json'}
     if objects:
         artifacts.update(native_object_build.artifacts(recipe, output))
+    if resources:
+        artifacts.update(native_resource_build.artifacts(recipe, output))
     for row in commands:
         artifacts.update((Path(row['output']), output / (row['label'] + '.stdout'), output / (row['label'] + '.stderr')))
         if 'dependencies' in row:
             artifacts.add(Path(row['dependencies']))
-    value = {'schema_version': 3 if objects else 2, 'kind': 'otelc.native-build',
-        'profile': native_object_build.PROFILE if objects else PROFILE,
+    value = {'schema_version': 4 if resources else 3 if objects else 2, 'kind': 'otelc.native-build',
+        'profile': native_resource_build.PROFILE if resources else native_object_build.PROFILE if objects else PROFILE,
         'language': language, 'root': str(root), 'policy': policy.data,
         'policy_sha256': native_launch.digest(policy.data),
-        'selection_sha256': native_launch.digest(native_launch.selection(policy.data, object_lifetimes=objects)),
+        'selection_sha256': native_launch.digest(native_launch.selection(policy.data, object_lifetimes=objects, resource_lifetimes=resources)),
         'inputs': list(inputs.values()), 'sdk_library': sdk,
         'products': [native_launch.identity(output / lane) for lane in ('plain', 'instrumented')],
         'commands': commands, 'recipe': recipe, 'files': list(held.values()), 'tools': extra_tools,
         'artifacts': [native_gate.identity(item) for item in sorted(artifacts)],
-        'dependencies': dependencies, 'source_complete': False, **object_records}
+        'dependencies': dependencies, 'source_complete': False, **object_records, **resource_records}
     encoded = json.dumps(value, sort_keys=True, indent=2) + '\n'
     (output / 'native-build.json').write_text(encoded)
     result = native_launch.Build(output, encoded, plugin)
@@ -244,9 +252,10 @@ def verify(built: native_launch.Build, value: dict[str, Any]) -> None:
     """Check retained contexts and products without executing recorded commands."""
     recipe = validate(value['recipe'], Path(value['root']))
     objects = value['profile'] == native_object_build.PROFILE
+    resources = value['profile'] == native_resource_build.PROFILE
     plugin = llvm_backend.verify(built.plugin)
     require(value['commands'] == steps(recipe, built.directory, plugin['toolchain'],
-            plugin['plugin']['path'], Path(value['sdk_library']['path']), object_lifetimes=objects),
+            plugin['plugin']['path'], Path(value['sdk_library']['path']), object_lifetimes=objects, resource_lifetimes=resources),
             'retained compiler context changed')
     require(type(value['dependencies']) is dict and type(value['tools']) is dict
             and all(type(value[name]) is list for name in ('files', 'artifacts')), 'invalid retained record collections')
@@ -272,6 +281,8 @@ def verify(built: native_launch.Build, value: dict[str, Any]) -> None:
     expected_artifacts = {str(built.directory / name) for name in ('bootstrap.cpp', 'compile_commands.json')}
     if objects:
         expected_artifacts.update(map(str, native_object_build.artifacts(recipe, built.directory)))
+    if resources:
+        expected_artifacts.update(map(str, native_resource_build.artifacts(recipe, built.directory)))
     for row in value['commands']:
         expected_artifacts.update((row['output'], str(built.directory / (row['label'] + '.stdout')),
                                    str(built.directory / (row['label'] + '.stderr'))))
@@ -297,3 +308,5 @@ def verify(built: native_launch.Build, value: dict[str, Any]) -> None:
             'retained compilation database differs from executed commands')
     if objects:
         native_object_build.verify(value, built.directory)
+    if resources:
+        native_resource_build.verify(value, built.directory)

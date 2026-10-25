@@ -78,15 +78,18 @@ def validate(value: Any) -> dict[str, Any]:
                 or any(not isinstance(functions.get(key), str) or not _counter(functions[key]) for key in counters)
                 or value.get('source_complete') is not False):
             raise ValueError('invalid native function accounting')
-    if 'object_accounting' in value:
-        objects = value['object_accounting']
-        counters = ('types', 'admitted', 'completed', 'live', 'destroying', 'ending',
+    for field, language, pending in (('object_accounting', 'cpp', 'destroying'),
+                                      ('resource_accounting', 'c', 'releasing')):
+        if field not in value:
+            continue
+        objects = value[field]
+        counters = ('types', 'admitted', 'completed', 'live', pending, 'ending',
                     'censored', 'lost', 'duplicates', 'invalid')
-        if (value['language'] != 'cpp' or type(objects) is not dict
+        if (value['language'] != language or type(objects) is not dict
                 or set(objects) != set(counters) | {'closing', 'closed'}
                 or any(type(objects.get(key)) is not bool for key in ('closing', 'closed'))
                 or any(type(objects.get(key)) is not str or not _counter(objects[key]) for key in counters)):
-            raise ValueError('invalid native object accounting')
+            raise ValueError('invalid native ' + ('object' if language == 'cpp' else 'resource') + ' accounting')
     if value.get("downstream_receipt") != "unavailable" or value.get("otlp_partial_rejection") != "unavailable":
         raise ValueError("unsupported runtime health delivery claim")
     return value

@@ -6,7 +6,7 @@ The native candidate adds ordinary [C](../examples/c/BenchmarkApp.c) and [C++](.
 
 ## Run with one common policy
 
-Use the [shared metrics comparison policy](../examples/benchmark-metrics.toml) for every language in a comparison. It disables lifetime observation consistently. C resource lifetime instrumentation is still unsupported and an enabled lifetime policy is refused, rather than silently ignored.
+Use the [shared metrics comparison policy](../examples/benchmark-metrics.toml) for every language in a comparison. It disables lifetime observation consistently. To include the declared lifetime observers, use the unchanged [example policy](../examples/otelc.toml) for every language instead: C observes allocated `WorkItem` records until `free` entry, while C++ observes construction until destructor entry. The C workload deliberately retains its allocation with a volatile pointer; original source hashes and stock timings identify this workload version. These different lifetime boundaries must not be presented as identical durations.
 
 With the documented [native prerequisites](native-launch.md), build the matching SDK and start the [local collection stack](benchmarks.md#run-equivalent-language-comparisons):
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from otelc import file_inputs, llvm_backend, native_gate, native_launch, native_units, native_object_build
+from otelc import file_inputs, llvm_backend, native_gate, native_launch, native_units, native_object_build, native_resource_build
 from otelc.config import Policy
 from otelc.python_sdk_io import decode
 
@@ -39,7 +39,7 @@ def sdk(directory: Path) -> dict[str, Any]:
         raise ValueError('native prepared profile requires the fixed SDK build record/product')
     source = native_launch.ROOT / 'adapters/native'
     expected = [source / 'CMakeLists.txt', source / 'launcher/CMakeLists.txt',
-                *sorted(source.rglob('*.cpp')), *sorted(source.rglob('*.h')), llvm_backend.HEADER, native_launch.ROOT / 'native/llvm/object_abi.h']
+                *sorted(source.rglob('*.cpp')), *sorted(source.rglob('*.h')), llvm_backend.HEADER, native_launch.ROOT / 'native/llvm/object_abi.h', native_launch.ROOT / 'native/llvm/resource_abi.h']
     if value['sources'] != [native_launch.identity(path) for path in expected]:
         raise ValueError('native SDK does not bind the current fixed source recipe')
     for record in value['build_tools']:
@@ -51,17 +51,19 @@ def sdk(directory: Path) -> dict[str, Any]:
 def build(policy: Policy, language: str, root: Path, sources: list[Path], output: Path,
           *, sdk_directory: Path, recipe: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build both lanes and the fixed gate, preserving original application files."""
-    objects = policy.data['lifetimes']['enabled']
-    if objects:
-        native_launch.validate_policy(policy, language, object_lifetimes=True)
+    lifetimes = policy.data['lifetimes']['enabled']
+    objects, resources = lifetimes and language == 'cpp', lifetimes and language == 'c'
+    if lifetimes:
+        native_launch.validate_policy(policy, language, object_lifetimes=objects, resource_lifetimes=resources)
         if recipe is None:
             root = root.resolve(strict=True)
             recipe = {'schema_version': 1, 'kind': native_units.RECIPE_KIND, 'assets': [],
                 'units': [{'id': 'unit_' + str(index), 'role': 'application',
-                    'source': str((root / source).resolve(strict=True)), 'language': 'cpp',
-                    'directory': str(root), 'flags': ['-O2', '-fexceptions', '-pthread', '-std=c++17', '-I', str(root)],
+                    'source': str((root / source).resolve(strict=True)), 'language': language,
+                    'directory': str(root), 'flags': ['-O2', '-fexceptions', '-pthread',
+                        '-std=c11' if resources else '-std=c++17', '-I', str(root)],
                     'overlay': None, 'rename_main': False} for index, source in enumerate(sources)],
-                'link': {'language': 'cpp', 'directory': str(root), 'flags': ['-pthread']}}
+                'link': {'language': language, 'directory': str(root), 'flags': ['-pthread']}}
             sources = []
     source_sdk = sdk(sdk_directory)
     if recipe is None:
@@ -78,6 +80,8 @@ def build(policy: Policy, language: str, root: Path, sources: list[Path], output
         version = 3
     if objects:
         version = 4
+    if resources:
+        version = 5
     value = {'schema_version': version,
              'kind': 'otelc.native.source-build', 'profile': PROFILE,
              'native': native_gate.identity(built.directory / 'native-build.json'),
@@ -93,10 +97,10 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
     """Reconstruct only fixed product paths and recheck all declared bindings."""
     directory = directory.resolve(strict=True)
     value, _ = read(directory / MANIFEST)
-    if (set(value) != FIELDS or type(value['schema_version']) is not int or value['schema_version'] not in (2, 3, 4)
+    if (set(value) != FIELDS or type(value['schema_version']) is not int or value['schema_version'] not in (2, 3, 4, 5)
             or value['kind'] != 'otelc.native.source-build' or value['profile'] != PROFILE
             or value['source_complete'] is not False):
-        raise ValueError('native preparation requires source-build2,3 or4/native-owned-v1')
+        raise ValueError('native preparation requires source-build2,3,4 or5/native-owned-v1')
     fixed = {'native': directory / 'native-build.json', 'plugin': directory / 'plugin' / llvm_backend.MANIFEST,
              'gate': directory / 'gate/gate.json'}
     for field, path in fixed.items():
@@ -114,16 +118,20 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
     gate, gate_raw = read(fixed['gate'])
     native_fields = {'schema_version', 'kind', 'profile', 'language', 'root', 'policy', 'policy_sha256',
                      'selection_sha256', 'inputs', 'sdk_library', 'products', 'commands', 'source_complete'}
-    units = value['schema_version'] in (3, 4)
+    units = value['schema_version'] in (3, 4, 5)
     objects = value['schema_version'] == 4
+    resources = value['schema_version'] == 5
     if units:
         native_fields |= {'recipe', 'files', 'artifacts', 'tools', 'dependencies'}
     if objects:
         native_fields |= {'object_tool', 'object_inventories'}
+    if resources:
+        native_fields |= {'resource_tool', 'resource_inventories'}
     expected_schema, expected_profile = {
         2: (1, 'llvm22-native-launch-v1'),
         3: (2, native_units.PROFILE),
         4: (3, native_object_build.PROFILE),
+        5: (4, native_resource_build.PROFILE),
     }[value['schema_version']]
     if (set(metadata) != native_fields or type(metadata.get('schema_version')) is not int
             or metadata['schema_version'] != expected_schema or metadata.get('kind') != 'otelc.native-build'
@@ -137,8 +145,9 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
             or metadata.get('source_complete') is not False
             or type(plugin.get('schema_version')) is not int or plugin['schema_version'] != 1
             or plugin.get('kind') != 'otelc.llvm-plugin' or plugin.get('source_complete') is not False
-            or plugin.get('profile') != (llvm_backend.OBJECT_PROFILE if objects else llvm_backend.SOURCE_PROFILE)
+            or plugin.get('profile') != (llvm_backend.RESOURCE_PROFILE if resources else llvm_backend.OBJECT_PROFILE if objects else llvm_backend.SOURCE_PROFILE)
             or objects and plugin.get('object_probe_abi') != 'otelc.object.v1'
+            or resources and plugin.get('resource_probe_abi') != 'otelc.resource.v1'
             or plugin.get('probe_abi') != 'otelc.function.v2'
             or metadata.get('sdk_library') != source_sdk['library']
             or [row['path'] for row in metadata['products']] != [str(directory / name) for name in ('plain', 'instrumented')]
@@ -151,7 +160,7 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
     native_launch.verify(built)
     held_gate = native_gate.Product(gate_raw.decode())
     held_gate.verify()
-    native_launch.validate_policy(policy, metadata['language'], object_lifetimes=objects)
-    if native_launch.digest(native_launch.selection(policy.data, object_lifetimes=objects)) != metadata['selection_sha256']:
+    native_launch.validate_policy(policy, metadata['language'], object_lifetimes=objects, resource_lifetimes=resources)
+    if native_launch.digest(native_launch.selection(policy.data, object_lifetimes=objects, resource_lifetimes=resources)) != metadata['selection_sha256']:
         raise ValueError('native policy differs from compiled source/function selection')
     return built, held_gate, value

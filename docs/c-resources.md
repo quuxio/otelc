@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development. The SDK runtime has a separate `free_entry` boundary with type-erased release lookup. Clang resolves selected C record-pointer allocations, and a separate LLVM candidate observes matching compiled allocation/free calls. The public C build/launch route is not connected yet; the current CLI still refuses enabled C lifetimes. This is not C language admission.
+Status: public launch candidate. Source-build 5 connects Clang-resolved C record-pointer allocations and the late LLVM probe pass to the official SDK pipeline. `native-build` and `native-run` use the common lifetime policy, preserve developer source and keep live collection/emission independent. Independent review, full exact-head checks, protected delivery and oteleq qualification remain required; this is not complete C language admission.
 
 ## Expected behaviour and acceptance
 
@@ -23,8 +23,32 @@ The initial compiler profile will not cover `realloc`, custom or interposed allo
 
 LLVM can remove allocations and frees during optimisation. The candidate validates source/type/call bindings before optimisation, retains an immutable string plan in the module and inserts probes after optimisation. Inlining can produce several emitted calls for one source site; an optimiser can also replace a `malloc`/zero-fill pair with `calloc`. The exclusive per-unit resolution record retains actual emitted call counts and callee names. A zero-match source site produces no fabricated lifetime. These counts describe static compiler boundaries, not runtime invocation counts or complete allocation coverage.
 
-`make native-resources-check` runs the real Clang/LLVM tests and independent 80% native/Python coverage floors. The tests compare stock and instrumented outcomes for retained allocations, allocator elision, inlining, allocator-family replacement and unoptimised builds. They also refuse changed, incomplete or ambiguous source bindings, conflicting callback ABIs and an existing resolution output. Compiler tests use test-owned observation callbacks; actual SDK/public launch and decoded OTLP acceptance remain separate work.
+`make native-resources-check` runs the real Clang/LLVM tests and independent 80% native/Python coverage floors. The tests compare stock and instrumented outcomes for retained allocations, allocator elision, inlining, allocator-family replacement and unoptimised builds. They also refuse changed, incomplete or ambiguous source bindings, conflicting callback ABIs and an existing resolution output. Compiler-only tests use test-owned observation callbacks. The separate public tests use the actual SDK, owned prepared execution, both CLI lanes, successful/failed allocation, `errno`, decoded OTLP, all four live metric states and censored shutdown. Private per-unit headers, VFS helpers and a neutral C++ caller have a distinct fixture.
 
 ## Runtime checks
 
 `make native-check` exercises actual allocation/free and deterministic address reuse, type-erased and cross-thread release, all four initial metric states, startup enable, creation links, pending release and censored shutdown. It also runs the existing C++ destruction, exception cleanup and SDK control checks. Each native implementation retains its own coverage floor.
+
+## Run the ordinary C example
+
+The [C example](../examples/c/BenchmarkApp.c) uses an ordinary heap-allocated `WorkItem` with a volatile pointer binding so optimisation retains its allocation. This is an example workload choice; developers do not need annotations or source changes for existing applications. Elided allocations remain unobserved. Both stock and instrumented builds consume exactly the same source.
+
+```sh
+make native-launch-sdk
+make stack-up
+run_root=$(mktemp -d /tmp/otelc-c-resources.XXXXXX)
+bin/quux-otelc --config examples/otelc.toml native-build \
+  --language c --root "$PWD" --source examples/c/BenchmarkApp.c \
+  --sdk-build build/native-launch-sdk --output "$run_root/build"
+printf '1000\nquit\n' | bin/quux-otelc --config examples/otelc.toml native-run \
+  --build "$run_root/build" --runtime "$run_root/runtime"
+```
+
+Source-build 5 negotiates `unit_recipe=1`, `resource_inventory=1`, `resource_resolution=1` and `resource_probe_abi="otelc.resource.v1"`. Older function-only and C++ object profiles keep their own versioned contracts. The SDK records C `resource_accounting` with `releasing`, separately from C++ destruction accounting. Resource callbacks preserve application `errno`; untracked/null release creates no lifetime. The health checkpoint still cannot prove downstream storage or complete source origin.
+
+Use `<runtime>/app/control.json` with the shared `metrics` command for live collection/emission changes. See [native benchmarks](native-benchmarks.md) for stock/four-state comparisons and [Grafana](benchmarks.md) for dashboards. Compare `free_entry` durations only with compatible allocation/release boundaries; C++ destruction and GC observations have different meanings.
+
+```sh
+make native-public-resources-check
+make benchmark BENCHMARK_LANGUAGE=c BENCHMARK_CONFIG=examples/otelc.toml
+```
