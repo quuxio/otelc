@@ -10,15 +10,18 @@ import concurrent.futures
 import copy
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from otelc.config import Policy
+from otelc.python_handoff import HEADER, PAYLOAD
 from otelc.python_sdk_process import SdkProcess
 from test_java_integration import Capture
 from test_python_sdk_protocol import context, span
@@ -228,11 +231,42 @@ assert channel.seal({'function_completions':1,'active_functions':0,'runtime_loss
         self.capture.trace_response_gate.clear()
         count = 5600
 
-        def send(index):
+        def record(index):
             value = span(context=context(trace_id=f'{index + 1:032x}',
                                          span_id=f'{index + 1:016x}'))
-            self.assertTrue(sdk.channel.writer.send({'kind': 'span', 'span': value}))
+            return {'kind': 'span', 'span': value}
 
+        # Acknowledgements empty the event pipe without draining the SDK's
+        # blocked exporter. Two span frames plus a status request fit even the
+        # minimum atomic pipe window, so this tests SDK loss, not handoff loss.
+        encoded = json.dumps(record(count - 1), separators=(',', ':')).encode()
+        request = json.dumps({'kind': 'request', 'command': 'status', 'id': 2 ** 32 - 1},
+                             separators=(',', ':')).encode()
+        self.assertLessEqual(len(encoded), PAYLOAD)
+        self.assertLessEqual(2 * (len(encoded) + HEADER.size) + len(request) + HEADER.size, 512)
+
+        def send(index):
+            self.assertTrue(sdk.channel.writer.send(record(index)))
+            if (index + 1) % 2 == 0:
+                status = sdk.channel.request('status')
+                self.assertEqual(status['span_accounting']['received'], index + 1)
+                self.assertFalse(status['collection'])
+                self.assertFalse(status['emission'])
+                self.assertEqual(sdk.channel.writer.snapshot()['lost'], 0)
+
+        def resume_sdk():
+            if sdk.process.poll() is None:
+                try:
+                    os.kill(sdk.process.pid, signal.SIGCONT)
+                except ProcessLookupError:
+                    pass
+
+        # Force a receiver scheduling gap longer than the 50 ms handoff
+        # budget. A paced burst fits the pipe while its status reply waits;
+        # an unpaced flood fails at the transport before testing the SDK.
+        resume = threading.Timer(.15, resume_sdk)
+        os.kill(sdk.process.pid, signal.SIGSTOP)
+        resume.start()
         try:
             for index in range(600):
                 send(index)
@@ -240,6 +274,9 @@ assert channel.seal({'function_completions':1,'active_functions':0,'runtime_loss
             for index in range(600, count):
                 send(index)
         finally:
+            resume_sdk()
+            resume.cancel()
+            resume.join()
             self.capture.trace_response_gate.set()
         before_close = sdk.channel.request('flush')
         self.assertEqual(before_close['span_accounting']['queue_evidence'], 'unavailable')
@@ -247,6 +284,11 @@ assert channel.seal({'function_completions':1,'active_functions':0,'runtime_loss
             'sampled_started': count, 'sampled_ended': count, 'handed_off': count}))
         actual = sum(len(scope.spans) for request in self.capture.traces
                      for resource in request.resource_spans for scope in resource.scope_spans)
+        identities = [(int(value.trace_id.hex(), 16), int(value.span_id.hex(), 16))
+                      for request in self.capture.traces for resource in request.resource_spans
+                      for scope in resource.scope_spans for value in scope.spans]
+        self.assertEqual(len(set(identities)), actual)
+        self.assertTrue(all(trace == span_id and 1 <= trace <= count for trace, span_id in identities))
         self.assertEqual((report['phase'], report['sdk_phase']), ('failed', 'closed'))
         self.assertEqual(report['traces']['failed'], 0)
         self.assertEqual(report['span_accounting']['received'], count)
