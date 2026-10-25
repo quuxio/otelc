@@ -23,12 +23,17 @@ REQUEST_FIELDS = {'schema_version', 'kind', 'profile', 'build', 'runtime', 'poli
                   'arguments', 'plain', 'wait_ms', 'launch_id'}
 
 
-def protocols() -> dict[str, Any]:
+def protocols(*, build_version: int = 2) -> dict[str, Any]:
     """Negotiate the candidate formats without application or tool execution."""
-    return {'schema_version': 1, 'kind': 'otelc.native.protocols', 'profile': PROFILE,
-            'build': 2, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
+    if type(build_version) is not int or build_version not in (2, 3):
+        raise ValueError('native protocols support explicit build2 or3')
+    value = {'schema_version': 1, 'kind': 'otelc.native.protocols', 'profile': PROFILE,
+            'build': build_version, 'request': 1, 'plan': 1, 'prepared': 1, 'command': 1,
             'execution': 1, 'host_release': 1, 'gate': 1, 'embedded_sdk': True,
             'source_complete': False}
+    if build_version == 3:
+        value['unit_recipe'] = 1
+    return value
 
 
 def same(value: Any, expected: Any) -> bool:

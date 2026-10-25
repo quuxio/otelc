@@ -86,11 +86,14 @@ def main() -> int:
     native.add_argument("--sdk-library", type=Path, required=True, help="explicit built native SDK launch library")
     native.add_argument("--plain", action="store_true")
     native.add_argument("arguments", nargs=argparse.REMAINDER)
-    commands.add_parser('native-protocols', help='describe explicit owned native formats without compiling')
+    native_protocol_parser = commands.add_parser('native-protocols', help='describe explicit owned native formats without compiling')
+    native_protocol_parser.add_argument('--build-version', type=int, choices=(2, 3), default=2)
     native_build_parser = commands.add_parser('native-build', help='candidate: retain a native build for owned execution')
     native_build_parser.add_argument('--language', choices=('c', 'cpp'), required=True)
     native_build_parser.add_argument('--root', type=Path, required=True)
-    native_build_parser.add_argument('--source', type=Path, action='append', required=True)
+    native_inputs = native_build_parser.add_mutually_exclusive_group(required=True)
+    native_inputs.add_argument('--source', type=Path, action='append')
+    native_inputs.add_argument('--recipe', type=Path, help='explicit build-3 per-unit recipe JSON')
     native_build_parser.add_argument('--output', type=Path, required=True)
     native_build_parser.add_argument('--sdk-build', type=Path, required=True)
     native_run_parser = commands.add_parser('native-run', help='candidate: execute a retained native build through its host gate')
@@ -127,12 +130,13 @@ def main() -> int:
             print(json.dumps(value, indent=2))
             return 0
         if args.command == 'native-protocols':
-            print(json.dumps(prepared_native.protocols(), indent=2))
+            print(json.dumps(prepared_native.protocols(build_version=args.build_version), indent=2))
             return 0
         policy = Policy.load(args.config)
         if args.command == 'native-build':
-            value = native_build.build(policy, args.language, args.root, args.source,
-                                       args.output, sdk_directory=args.sdk_build)
+            recipe = native_build.read(args.recipe)[0] if args.recipe else None
+            value = native_build.build(policy, args.language, args.root, args.source or [],
+                                       args.output, sdk_directory=args.sdk_build, recipe=recipe)
             print(json.dumps(value, indent=2))
             return 0
         if args.command == 'native-run':
