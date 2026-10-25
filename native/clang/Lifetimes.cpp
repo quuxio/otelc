@@ -40,9 +40,12 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
 
   bool TraverseDecl(Decl *Declaration) {
     const FunctionDecl *Previous = Caller;
+    const VarDecl *PreviousVariable = Variable;
     if (auto *Function = llvm::dyn_cast_or_null<FunctionDecl>(Declaration)) Caller = Function;
+    if (auto *Value = llvm::dyn_cast_or_null<VarDecl>(Declaration)) Variable = Value;
     bool Result = RecursiveASTVisitor<Visitor>::TraverseDecl(Declaration);
     Caller = Previous;
+    Variable = PreviousVariable;
     return Result;
   }
 
@@ -52,7 +55,7 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
   }
 
   bool VisitCXXConstructExpr(CXXConstructExpr *Expression) {
-    if (!inside(Expression->getBeginLoc()) || !Statements.insert(Expression).second) return true;
+    if (!inside(Expression->getBeginLoc())) return true;
     const CXXConstructorDecl *Constructor = Expression->getConstructor();
     llvm::json::Object Row = site(Expression->getBeginLoc(), Constructor->getParent());
     Row["kind"] = llvm::isa<CXXTemporaryObjectExpr>(Expression) ? "CXXTemporaryObjectExpr" : "CXXConstructExpr";
@@ -69,6 +72,25 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
     Row["elidable"] = Expression->isElidable();
     Row["array_type"] = Context.getAsArrayType(Expression->getType())
         ? llvm::json::Value(Expression->getType().getAsString()) : llvm::json::Value(nullptr);
+    bool Global = !Caller && Variable && Variable->hasGlobalStorage() && !Variable->isLocalVarDecl();
+    if (Global && Variable->getTLSKind() != VarDecl::TLS_None) {
+      std::string Name;
+      llvm::raw_string_ostream Stream(Name);
+      llvm::cast<ItaniumMangleContext>(Mangler.get())->mangleItaniumThreadLocalInit(Variable, Stream);
+      Row["caller"] = Row["caller_base"] = Name;
+      Row["thread_local_initialiser"] = true;
+    } else if (Global) {
+      Row["global_initialiser"] = true;
+    }
+    auto Name = Row.getString("caller").value_or("").str();
+    if (Name.empty() && !Global) {
+      // A field's syntactic default can be visited before the constructor that
+      // actually materialises it. Preserve unresolved sites if no caller binds.
+      if (!ConstructionCallers.count(Expression)) UnboundConstructions.emplace(Expression, std::move(Row));
+      return true;
+    }
+    UnboundConstructions.erase(Expression);
+    if (!ConstructionCallers[Expression].insert(Name).second) return true;
     Constructions.push_back(std::move(Row));
     return true;
   }
@@ -108,6 +130,7 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
   }
 
   llvm::json::Object result() {
+    for (auto &Entry : UnboundConstructions) Constructions.push_back(std::move(Entry.second));
     llvm::json::Array Records;
     for (auto &Entry : Types) Records.push_back(std::move(Entry.second));
     return llvm::json::Object{{"schema_version", 1}, {"kind", "otelc.clang.lifetime-semantics"},
@@ -199,6 +222,9 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
   std::string Root;
   std::unique_ptr<MangleContext> Mangler;
   const FunctionDecl *Caller = nullptr;
+  const VarDecl *Variable = nullptr;
+  std::map<const Stmt *, std::set<std::string>> ConstructionCallers;
+  std::map<const Stmt *, llvm::json::Object> UnboundConstructions;
   std::map<std::string, llvm::json::Object> Types;
   std::set<const Stmt *> Statements;
   llvm::json::Array Constructions, Variables;

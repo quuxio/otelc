@@ -51,7 +51,7 @@ def object_refusals(work: Path, inventory: dict[str, Any], manifest: dict[str, A
         value = copy.deepcopy(inventory)
         unit = value['translation_units'][0]
         complete = next(row for row in unit['constructions'] if row['construction_kind'] == 'complete')
-        if name == 'schema': value['schema_version'] = 2
+        if name == 'schema': value['schema_version'] = 3
         elif name == 'source': value['translation_units'] = []
         elif name == 'type': unit['types'].append(copy.deepcopy(unit['types'][0]))
         elif name == 'ambiguous': unit['constructions'].append(copy.deepcopy(complete))
@@ -73,6 +73,17 @@ def object_refusals(work: Path, inventory: dict[str, Any], manifest: dict[str, A
             raise ValueError('native object refusal control did not reject: ' + name)
         results.append({'case': name, 'expected_diagnostic': reason, 'exit_code': result.returncode})
     (work / 'object-refusals.json').write_text(json.dumps(results, indent=2) + '\n')
+    source = work / 'mixed-c.c'
+    source.write_text('int object_fixture_c(int input){return input+1;}\n')
+    ir = work / 'mixed-c.ll'
+    c_environment = {**environment, 'OTELC_OBJECT_C_UNIT': '1', 'OTELC_SOURCE_ROOT': str(work),
+                     'LLVM_PROFILE_FILE': str(work / 'object-compiler-%m-%p.profraw')}
+    command = [str(binaries / 'clang'), '-std=c11', '-g', '-O1', '-S', '-emit-llvm',
+               '-fpass-plugin=' + manifest['plugin']['path'], str(source), '-o', str(ir)]
+    result = subprocess.run(command, env=c_environment, capture_output=True, timeout=60)
+    (work / 'mixed-c.stderr').write_bytes(result.stderr)
+    if result.returncode or 'otelc_function_enter_v1' not in ir.read_text() or 'otelc_object_created_v1' in ir.read_text():
+        raise ValueError('mixed C object profile lost function probes or introduced object probes')
 
 
 def object_report(output: Path, work: Path, plugin: llvm_backend.Plugin,
@@ -107,6 +118,29 @@ def object_report(output: Path, work: Path, plugin: llvm_backend.Plugin,
         'line_coverage': lines}, indent=2) + '\n')
 
 
+def object_storage(work: Path, manifest: dict[str, Any], binaries: Path,
+                   environment: dict[str, str]) -> None:
+    """Bind real global/TLS and shared member initialisers; omit observer code."""
+    source = ROOT / 'tests/fixtures/native-object-storage.cpp'
+    policy = Policy.parse({'schema_version': 3, 'languages': ['cpp'],
+        'sources': {'include': ['**']}, 'lifetimes': {
+            'enabled': True, 'include': ['native_object_storage::Item']}})
+    flags = ['-std=c++17', '-O1', '-fexceptions']
+    native_lifetimes.inspect(policy, source.parent, [source], work / 'storage-inventory',
+        context={'directory': str(source.parent), 'flags': flags, 'overlay': None, 'assets': []})
+    ir = work / 'object-storage.ll'
+    command = [str(binaries / 'clang++'), *flags, '-g', '-S', '-emit-llvm',
+               '-fpass-plugin=' + manifest['plugin']['path'], str(source), '-o', str(ir)]
+    result = subprocess.run(command, env={**environment,
+        'OTELC_OBJECT_INVENTORY': str(work / 'storage-inventory/native-lifetimes.json'),
+        'LLVM_PROFILE_FILE': str(work / 'object-compiler-%m-%p.profraw')},
+        capture_output=True, timeout=60)
+    (work / 'object-storage.stderr').write_bytes(result.stderr)
+    (work / 'object-storage-command.json').write_text(json.dumps(command) + '\n')
+    if result.returncode or ir.read_text().count('call void @otelc_object_created_v1(') != 6:
+        raise ValueError('global/TLS/member/static object boundaries or observer exclusion differ')
+
+
 def check() -> None:
     """Compile the pinned upstream SDK; retain compact results after real tests."""
     llvm = llvm_backend.discover()
@@ -123,7 +157,8 @@ def check() -> None:
     sources = [NATIVE / 'CMakeLists.txt', *sorted(NATIVE.rglob('*.cpp')),
                *sorted(NATIVE.rglob('*.c')), *sorted(NATIVE.rglob('*.h')),
                llvm_backend.HEADER, *llvm_backend.OBJECT_INPUTS, native_lifetimes.SOURCE,
-               ROOT / 'tests/fixtures/native-objects.cpp', Path(__file__).resolve()]
+               ROOT / 'tests/fixtures/native-objects.cpp',
+               ROOT / 'tests/fixtures/native-object-storage.cpp', Path(__file__).resolve()]
     before = [llvm_backend.identity(path) for path in sources]
     expected = {path.resolve() for path in (NATIVE / 'src').glob('*.cpp')}
     if not expected:
@@ -168,6 +203,7 @@ def check() -> None:
              'otelc_native_functions_test', 'otelc_native_objects_test', '--parallel', '2'])
         run([str(ctest), '--test-dir', str(work), '--output-on-failure'])
         object_refusals(work, inventory, object_manifest, binaries, environment)
+        object_storage(work, object_manifest, binaries, environment)
         profiles = sorted(path for path in work.glob('*.profraw')
                           if not path.name.startswith('object-compiler-'))
         if not profiles:
