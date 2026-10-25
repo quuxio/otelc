@@ -151,6 +151,34 @@ func TestDetachFailuresRemainLoss(t *testing.T) {
 		if s := h.probe.Snapshot(); s.LifetimeLoss != 1 || s.ObjectsObserved != 0 {
 			t.Fatalf("missing detach failure %+v", s)
 		}
+		assertLifetimeObserverFailure(t, h, failAt)
+	}
+}
+
+func assertLifetimeObserverFailure(t *testing.T, h *harness, started int) {
+	t.Helper()
+	spans := h.exporter.GetSpans()
+	if len(spans) != started {
+		t.Fatalf("observer failure left a span open: ended=%d started=%d", len(spans), started)
+	}
+	for _, span := range spans {
+		boundary := ""
+		for _, value := range span.Attributes {
+			if value.Key == "boundary" {
+				boundary = value.Value.AsString()
+			}
+		}
+		if boundary != "observer_failure" {
+			t.Fatalf("observer failure invented a completed lifetime: %q", boundary)
+		}
+	}
+	for _, name := range []string{"otelc.lifetime.admitted", "otelc.lifetime.completed"} {
+		if metricCount(t, h, name) != 0 {
+			t.Fatalf("observer failure recorded %s", name)
+		}
+	}
+	if state := h.probe.Snapshot(); state.GCObserved != 0 || state.Released != 0 || state.LiveObjects != 0 || state.OpenResources != 0 {
+		t.Fatalf("observer failure retained or completed application state: %+v", state)
 	}
 }
 
