@@ -102,4 +102,6 @@ jobs:
             build/go-http-check.json
             build/go-detach-component-coverage.json
             build/go-telemetry-component-coverage.json
+            build/go-detach-component-coverage.out
+            build/go-telemetry-component-coverage.out
             build/go-upstream/toolchain.json
