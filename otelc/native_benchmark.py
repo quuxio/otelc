@@ -25,7 +25,7 @@ def counters(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, int]:
 def validate_drain(report: dict[str, Any] | None, policy: Policy) -> None:
     """Require closed engines and complete SDK accounting before publishing timings."""
     value = health.validate(report)
-    if (value['language'] not in ('c', 'cpp') or value['phase'] != 'final' or value['sdk_attached'] is not True
+    if (value['language'] not in ('c', 'cpp', 'rust') or value['phase'] != 'final' or value['sdk_attached'] is not True
             or value['lifecycle'] != {'flush': 'succeeded', 'shutdown': 'succeeded'}):
         raise ValueError('native benchmark SDK shutdown is incomplete')
     failures = [counters(value['metric_flush'], ('failed_attempts',))['failed_attempts']]

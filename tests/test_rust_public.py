@@ -19,7 +19,7 @@ from unittest import mock
 
 from ci.rust_compiler_cases import APPLICATION, WORK
 from otelc import control, health, native_build, native_gate, native_launch
-from otelc import rust_build, rust_compiler, rust_launch
+from otelc import rust_build, rust_compiler, rust_launch, rust_benchmark
 from otelc.config import Policy
 from test_java_integration import Capture
 
@@ -533,3 +533,77 @@ class RustPublicExecutionTests(unittest.TestCase):
             changed[key] = value
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'does not identify'):
                 rust_launch.validate_health(changed, self.built, self.policy, child.pid)
+
+    def test_ordinary_benchmark_example_all_startup_states_and_public_cli(self) -> None:
+        """Build the maintained example with real tools and SDK, never a protocol double."""
+        original = native_gate.identity(rust_benchmark.ROOT / rust_benchmark.EXAMPLE)
+        root = self.base / 'benchmark-application'
+        source = root / rust_benchmark.EXAMPLE
+        source.parent.mkdir(parents=True)
+        source.write_bytes((rust_benchmark.ROOT / rust_benchmark.EXAMPLE).read_bytes())
+        data = Policy.load(rust_benchmark.ROOT / 'examples/benchmark-metrics.toml').data
+        data['export'].update(endpoint=f'http://127.0.0.1:{self.capture.server.server_port}',
+                              interval_ms=60000, shutdown_timeout_ms=5000)
+        data['traces'].update(sample_ratio=1.)
+        data['benchmark'].update(iterations=3, warmup=1, samples=2)
+        selected = Policy.parse(data)
+        metadata = self.built.manifest()
+        built = rust_build.build(selected, root, rust_benchmark.EXAMPLE, self.base / 'benchmark-compiled',
+            tools_directory=Path(metadata['tools']['path']).parent,
+            sdk_directory=Path(metadata['sdk']['path']).parent)
+        for collection, emission in ((False, False), (False, True), (True, False), (True, True)):
+            data['metrics'].update(collection=collection, emission=emission)
+            service = f'rust-benchmark-{int(collection)}{int(emission)}'
+            data['resource']['service_name'] = service
+            current = Policy.parse(data)
+            output = self.base / service
+            report = rust_benchmark.run(current, output, build_directory=built.directory,
+                                       comparison_id='actual-rust-example', publish=False)
+            self.assertEqual(report['expected_checksum'], rust_benchmark.benchmark.checksum(3))
+            self.assertEqual(set(report['samples_ns_per_operation']), {'plain', *rust_benchmark.benchmark.STATES})
+            self.assertTrue(all(len(values) == 2 for values in report['samples_ns_per_operation'].values()))
+            rows = report['process_samples']
+            self.assertEqual(len(rows), 10)
+            self.assertTrue(all(row['checksum'] == report['expected_checksum'] for row in rows))
+            self.assertTrue(all(set(row['process_usage']) == {'application'} for row in rows))
+            for row in rows:
+                usage = row['process_usage']['application']
+                self.assertEqual(row['pid'], report['pids']['plain' if row['mode'] == 'plain' else 'instrumented'])
+                self.assertEqual(usage['before']['pid'], row['pid'])
+                self.assertEqual(usage['after']['pid'], row['pid'])
+                self.assertGreater(usage['rss_bytes'], 0)
+                self.assertGreaterEqual(usage['cpu_ns'], 0)
+            self.assertIsNone(report['sdk_pid'])
+            self.assertEqual(len(report['transitions']), 8)
+            self.assertEqual({row['pid'] for row in report['transitions']}, {report['pids']['instrumented']})
+            self.assertEqual(report['sdk_health']['function_accounting']['started'], '28')
+            self.assertEqual(report['sdk_health']['span_accounting']['sampled_ended'], '28')
+            self.assertFalse((output / 'plain/health.json').exists())
+            self.assertFalse((output / 'plain/plan.json').exists())
+            self.assertTrue((output / 'metric-finalization.json').is_file())
+            for lane in ('plain', 'instrumented'):
+                self.assertGreater(report['launch_to_first_response'][lane]['elapsed_ns'], 0)
+                for name, expected in report['launch_evidence'][lane].items():
+                    self.assertEqual(native_gate.identity(output / lane / name), expected)
+            spans = [span for request in self.capture.traces for resource in request.resource_spans
+                     if any(attr.key == 'service.name' and attr.value.string_value == service
+                            for attr in resource.resource.attributes)
+                     for scope in resource.scope_spans for span in scope.spans]
+            self.assertEqual(len(spans), 28)
+            self.assertTrue(all('workload' in span.name and 'excluded' not in span.name for span in spans))
+        configuration = self.base / 'rust-benchmark-cli.toml'
+        configuration.write_text((rust_benchmark.ROOT / 'examples/benchmark-metrics.toml').read_text()
+            .replace('http://127.0.0.1:4320', data['export']['endpoint'])
+            .replace('iterations = 10000', 'iterations = 3')
+            .replace('warmup = 5', 'warmup = 1').replace('samples = 15', 'samples = 2'))
+        command = [str(rust_benchmark.ROOT / 'bin/quux-otelc'), '--config', str(configuration),
+            'benchmark', '--language', 'rust', '--build', str(built.directory),
+            '--output', str(self.base / 'rust-benchmark-cli'), '--comparison-id', 'actual-rust-cli']
+        result = subprocess.run(command, env=os.environ | {'OTELC_PYTHON': sys.executable},
+            cwd=rust_benchmark.ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cli_report = json.loads(Path(json.loads(result.stdout)['report']).read_text())
+        self.assertEqual(cli_report['comparison_id'], 'actual-rust-cli')
+        self.assertTrue(self.capture.points('otelc.benchmark.operation.duration'))
+        rust_build.verify(built, selected)
+        self.assertEqual(native_gate.identity(rust_benchmark.ROOT / rust_benchmark.EXAMPLE), original)

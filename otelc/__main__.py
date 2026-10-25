@@ -21,7 +21,7 @@ from otelc import benchmark, control, health, java, node, node_benchmark, prepar
 from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe, native_benchmark
 from otelc import native_launch
-from otelc import native_build, prepared_native, rust_compiler, rust_build, rust_launch
+from otelc import native_build, prepared_native, rust_compiler, rust_build, rust_launch, rust_benchmark
 from otelc.config import LANGUAGES, Policy
 
 
@@ -53,7 +53,8 @@ def main() -> int:
     compare = commands.add_parser("benchmark")
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument("--no-publish", action="store_true")
-    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python", "c", "cpp"), default="java")
+    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python", "c", "cpp", "rust"), default="java")
+    compare.add_argument('--build', type=Path, help='retained Rust build of the unchanged common benchmark example')
     compare.add_argument('--sdk-build', type=Path, default=Path('build/native-launch-sdk'),
                          help='matching native SDK build for C/C++ benchmarks')
     compare.add_argument("--backend", choices=("native", "api"), default="native")
@@ -207,7 +208,8 @@ def main() -> int:
             return 0
         return run_example(policy, args.language, plain=args.plain)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
-        parser.exit(1, f"quux-otelc: {error}\n")
+        notes = ''.join(f'  {note}\n' for note in getattr(error, '__notes__', ()))
+        parser.exit(1, f"quux-otelc: {error}\n{notes}")
 
 
 def application_arguments(arguments: list[str]) -> tuple[str, ...]:
@@ -219,6 +221,13 @@ def application_arguments(arguments: list[str]) -> tuple[str, ...]:
 
 def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
     """Select the benchmark adapter while preserving the common comparison settings."""
+    if args.language == 'rust':
+        if not args.build:
+            raise ValueError('Rust benchmark requires --build of the unchanged common example')
+        return rust_benchmark.run(policy, args.output, build_directory=args.build,
+                                  publish=not args.no_publish, comparison_id=args.comparison_id)
+    if getattr(args, 'build', None) is not None:
+        raise ValueError('benchmark --build applies only to Rust')
     if args.language == "java":
         return benchmark.run(policy, args.output, publish=not args.no_publish,
                              comparison_id=args.comparison_id)
