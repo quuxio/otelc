@@ -215,6 +215,18 @@ class RustCompilerCommandTests(unittest.TestCase):
         final = json.loads((self.output / 'budget.result.json').read_bytes())
         self.assertEqual(final['exit_code'], -9)
 
+    def test_selected_sysroot_supplies_linux_driver_libraries_without_global_changes(self) -> None:
+        inherited = {'PATH': '/usr/bin', 'LD_LIBRARY_PATH': '/unrelated/libraries'}
+        for host in ('linux', 'darwin'):
+            with self.subTest(host=host), mock.patch.dict(os.environ, inherited, clear=True), \
+                    mock.patch.object(rust_compiler.sys, 'platform', host):
+                result = rust_compiler.environment(Path('/selected/rust/sysroot'))
+                expected = '/selected/rust/sysroot/lib' if host == 'linux' else '/unrelated/libraries'
+                self.assertEqual(result['LD_LIBRARY_PATH'], expected)
+                self.assertEqual(result['PATH'], inherited['PATH'])
+                self.assertEqual(dict(os.environ), inherited)
+                self.assertEqual(rust_compiler.environment(), inherited)
+
     def test_environment_uses_explicit_tools_but_preserves_installation_locations(self) -> None:
         values = {'RUSTC': '/wrong/compiler', 'RUSTFLAGS': 'wrong flags', 'CARGO_BUILD_TARGET': 'wrong-target',
                   'OTELC_RUST_REQUEST': '/wrong/request', 'LLVM_PROFILE_FILE': '/wrong/profile',
@@ -250,7 +262,8 @@ class ActualRustCompilerToolsTests(unittest.TestCase):
         tools = rust_compiler.verify(self.tools)
         rust_compiler.execute([tools['products'][0]['path'], str(root / 'main.rs'), '--edition=2024',
             '--crate-name', 'original', '--sysroot', tools['sysroot'], '-o', str(self.output / 'unexpected-app')],
-            self.output, 'actual-inspect', rust_compiler.environment() | {'OTELC_RUST_REQUEST': str(request)}, cwd=root)
+            self.output, 'actual-inspect', rust_compiler.environment(Path(tools['sysroot']))
+            | {'OTELC_RUST_REQUEST': str(request)}, cwd=root)
         value = json.loads(inventory.read_bytes())
         self.assertEqual(value['mode'], 'inspect')
         self.assertEqual(value['sources'], sources)

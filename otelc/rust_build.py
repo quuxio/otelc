@@ -134,7 +134,7 @@ def build(policy: Policy, root: Path, entry: Path, output: Path, *,
     sdk = native_build.sdk(sdk_directory)
     before = native_gate.identity(entry)
     output.mkdir(mode=0o700)
-    env = rust_compiler.environment()
+    env = rust_compiler.environment(Path(tools['sysroot']))
     rustc, driver = tools['tools'][0]['path'], tools['products'][0]['path']
     flags = [str(entry), '--crate-name', 'otelc_app', '--edition=2024', '--sysroot', tools['sysroot'],
              '-Copt-level=' + str(optimisation), '-g']

@@ -27,6 +27,8 @@ The compiler and bridge use fixed offline, locked Cargo recipes. Cargo dependenc
 
 Each compiler command retains its arguments, working directory, stdout, stderr, process exit and elapsed time. A failed command also includes its exit code and the last 4096 stderr bytes, decoded with replacement and escaped, in the raised error. This preserves useful diagnostics if a temporary test directory is later removed; the complete original stderr remains the authoritative channel while retained. The compiler link recipe searches the selected Rust sysroot's library directory explicitly for its matching LLVM library, in addition to retaining that directory as a runtime search path. The focused `Rust public compiler tools` workflow exercises the exact public tool builder and original-source inspection on Linux and macOS without an SDK build or application execution. Its explicit Bash shell preserves failing test exits through log pipelines. It retains small command/diagnostic records for 14 days, excluding regenerable Cargo build trees. These focused checks do not replace the full runtime, coverage or protected delivery gates.
 
+On GNU/Linux, public compiler invocations also set their child-only `LD_LIBRARY_PATH` to the verified Rust sysroot's `lib` directory. This resolves the compiler driver's indirect LLVM dependency even when ELF runtime search paths do not propagate through shared libraries. No developer shell setting is required, and the parent environment and application runtime environment are unchanged.
+
 `examples/rust/BenchmarkApp.rs` contains ordinary application code. Its selected function performs the same 128-step integer workload as the other language examples:
 
 ```rust
