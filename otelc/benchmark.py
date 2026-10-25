@@ -157,14 +157,26 @@ def switch_state(socket: Path, process: Application, mode: str) -> dict[str, Any
     control.request(socket, "collection " + ("on" if collection else "off"))
     state = control.request(socket, "emission " + ("on" if emission else "off"))
     deadline = time.monotonic() + 5
-    while not emission and state["in_flight_exports"] and time.monotonic() < deadline:
+    while not emission and not emission_stopped(state) and time.monotonic() < deadline:
         time.sleep(.01)
         state = control.request(socket, "status")
-    if not emission and state["in_flight_exports"]:
+    if not emission and not emission_stopped(state):
         raise TimeoutError("old exports did not settle before timing")
     if state["pid"] != process.pid:
         raise ValueError("instrumented process changed during live comparison")
     return state
+
+
+def emission_stopped(state: dict[str, Any]) -> bool:
+    """Require an actual export barrier; a missing counter is not a zero."""
+    if 'in_flight_exports' in state:
+        count = state['in_flight_exports']
+        if type(count) is not int or count < 0:
+            raise ValueError('benchmark export barrier is unavailable')
+        return count == 0
+    if type(state.get('effective_emission_off')) is not bool:
+        raise ValueError('benchmark export barrier is unavailable')
+    return state['effective_emission_off']
 
 
 def measure_batches(process: subprocess.Popen[str], policy: Policy, output: Path,
