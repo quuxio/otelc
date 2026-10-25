@@ -6,9 +6,12 @@ import json
 import os
 from pathlib import Path
 import resource
+import shutil
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from otelc import llvm_backend as backend, native_lifetimes, native_resources
 from otelc.config import Policy
@@ -77,6 +80,46 @@ def no_core():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
+class CResourcePassCoverageRetentionTests(unittest.TestCase):
+    def test_coverage_database_survives_disposable_plugin_cleanup(self) -> None:
+        from ci import native_sonar
+
+        for keep in (False, True):
+            with self.subTest(analysis=keep), tempfile.TemporaryDirectory() as root:
+                root = Path(root).resolve()
+                output = root / 'build'
+                output.mkdir()
+                temporary = tempfile.TemporaryDirectory(dir=output, delete=not keep)
+                self.addCleanup(temporary.cleanup)
+                base = Path(temporary.name)
+                plugin = base / 'plugin'
+                plugin.mkdir()
+                original = b'[{"directory":"/original","file":"ResourcePass.cpp","arguments":["clang++","-c","ResourcePass.cpp"]}]\n'
+                (plugin / 'compile_commands.json').write_bytes(original)
+                (base / 'compiler-1.profraw').write_bytes(b'synthetic profile; no native execution')
+                source = backend.RESOURCE_INPUTS[0]
+                summary = {'count': 10, 'covered': 9, 'percent': 90.0}
+                report = {'data': [{'files': [{'filename': str(source), 'summary': {'lines': summary}}]}]}
+                manifest = {'plugin': {'path': '/fixed/plugin'}}
+                fixture = SimpleNamespace(base=base, keep=keep, temporary=temporary,
+                    plugin=SimpleNamespace(directory=plugin), manifest=manifest,
+                    binaries=Path('/fixed/llvm'), tool=SimpleNamespace(verify=lambda: None))
+                with patch(__name__ + '.ROOT', root), patch.object(backend, 'verify', return_value=manifest), \
+                        patch.object(subprocess, 'run'), patch.object(subprocess, 'check_output',
+                        side_effect=[json.dumps(report).encode(), b'synthetic lcov']):
+                    CResourcePassTests.tearDownClass.__func__(fixture)
+                record = json.loads((output / 'native-resource-pass-coverage.json').read_bytes())
+                retained = Path(record['compilation_database']['path'])
+                self.assertEqual(retained.read_bytes(), original)
+                self.assertEqual(retained.parent, output)
+                native_sonar.checked_artifact(record['compilation_database'], retained)
+                self.assertEqual(base.exists(), keep)
+                retained.write_bytes(original + b'changed')
+                with self.assertRaisesRegex(ValueError, 'input changed'):
+                    native_sonar.checked_artifact(record['compilation_database'], retained)
+                temporary.cleanup()
+
+
 class CResourcePassTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -107,10 +150,12 @@ class CResourcePassTests(unittest.TestCase):
         summary = files[0]['summary']['lines']
         lcov = ROOT / 'build/native-resource-pass.lcov'
         lcov.write_bytes(subprocess.check_output([*command, '-format=lcov'], timeout=60))
+        database = ROOT / 'build/native-resource-pass-compile-commands.json'
+        shutil.copyfile(cls.plugin.directory / 'compile_commands.json', database)
         (ROOT / 'build/native-resource-pass-coverage.json').write_text(json.dumps({
             'source': backend.identity(source), 'plugin': cls.manifest, 'line_coverage': summary,
             'headers': [backend.identity(path) for path in (*backend.RESOURCE_INPUTS[1:], backend.HEADER)],
-            'compilation_database': backend.identity(cls.plugin.directory / 'compile_commands.json'),
+            'compilation_database': backend.identity(database),
             'lcov': backend.identity(lcov)}, indent=2)+'\n')
         print('C resource LLVM coverage:', summary)
         assert summary['percent'] >= 80, summary
