@@ -159,6 +159,86 @@ class RustInputTests(unittest.TestCase):
             self.verify_literal(self.literal_build(), Policy.parse(current))
 
 
+class RustBoundaryTests(unittest.TestCase):
+    """Generated directories must stay outside the physical original inputs."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.root = self.base / 'Application'
+        self.root.mkdir()
+        (self.root / 'app.rs').write_text('fn main() {}\n')
+        self.alias = self.alias_for(self.root)
+        self.build = self.base / 'Retained'
+        self.build.mkdir()
+        self.build_alias = self.alias_for(self.build)
+
+    def alias_for(self, path: Path) -> Path:
+        alias = path.with_name(path.name.swapcase())
+        # On a case-sensitive filesystem exercise the same physical-alias
+        # contract using a symlink. macOS exercises the original case alias.
+        if not alias.exists():
+            alias.symlink_to(path, target_is_directory=True)
+        self.assertTrue(alias.samefile(path))
+        return alias
+
+    def test_application_outputs_refuse_ordinary_and_physical_source_aliases_before_tool_reads(self) -> None:
+        for root in (self.root, self.alias):
+            output = root / 'generated'
+            with self.subTest(root=root), \
+                    mock.patch.object(rust_compiler, 'read', side_effect=AssertionError('tool sentinel')), \
+                    self.assertRaisesRegex(ValueError, 'outside the application root'):
+                rust_build.build(policy(), self.root, Path('app.rs'), output,
+                    tools_directory=self.build, sdk_directory=self.build)
+            self.assertFalse(output.exists())
+
+    def test_runtime_refuses_source_and_build_aliases_before_process_or_plan_creation(self) -> None:
+        built = rust_build.Build(self.build, '{}')
+        for root in (self.root, self.alias, self.build, self.build_alias):
+            runtime = root / 'runtime'
+            with self.subTest(root=root), \
+                    mock.patch.object(rust_build, 'verify', return_value={'root': str(self.root)}), \
+                    mock.patch.object(rust_launch.subprocess, 'Popen', side_effect=AssertionError('process sentinel')), \
+                    self.assertRaisesRegex(ValueError, 'outside original sources and retained build'):
+                rust_launch.start(built, policy(), runtime, plain=True)
+            self.assertFalse(runtime.exists())
+
+    def test_tool_outputs_refuse_ordinary_and_physical_aliases_before_tool_input_reads(self) -> None:
+        rust = self.base / 'native/rust'
+        rust.mkdir(parents=True)
+        alias = self.alias_for(rust)
+        for root in (rust, alias):
+            output = root / 'generated'
+            with self.subTest(root=root), mock.patch.object(rust_compiler, 'ROOT', self.base), \
+                    mock.patch.object(rust_compiler, 'sources', side_effect=AssertionError('input sentinel')), \
+                    self.assertRaisesRegex(ValueError, 'outside its source directory'):
+                rust_compiler.build(output)
+            self.assertFalse(output.exists())
+
+    def test_unrelated_new_output_and_shared_prefix_remain_external(self) -> None:
+        for path in (self.base / 'Application-copy/generated', self.base / 'new/nested/output'):
+            with self.subTest(path=path):
+                self.assertFalse(rust_compiler.physical_within(path, self.root))
+                self.assertFalse(path.exists())
+
+    def test_retained_reader_refuses_source_alias_before_tool_records(self) -> None:
+        data = policy().data
+        value = {'schema_version': 1, 'kind': 'otelc.rust.source-build',
+            'profile': rust_build.PROFILE, 'root': str(self.root), 'entry': str(self.root / 'app.rs'),
+            'policy': data, 'policy_sha256': native_launch.digest(data),
+            'selection_sha256': native_launch.digest(rust_build.selection(data)),
+            'tools': {}, 'sdk': {}, 'inputs': [], 'requests': [], 'selected': [],
+            'optimisation': 2, 'inventories': [], 'products': [], 'source_complete': False}
+        encoded = json.dumps(value)
+        for directory in (self.root, self.alias):
+            with self.subTest(directory=directory), \
+                    mock.patch.object(rust_build, 'checked_file', return_value=({}, encoded.encode())), \
+                    mock.patch.object(rust_compiler, 'read', side_effect=AssertionError('tool sentinel')), \
+                    self.assertRaisesRegex(ValueError, 'original root or external output'):
+                rust_build.verify(rust_build.Build(directory, encoded), policy())
+
+
 class RustPublicExecutionTests(unittest.TestCase):
     """Use genuine products; an explicit retained fixture avoids rebuilding locally."""
     @classmethod

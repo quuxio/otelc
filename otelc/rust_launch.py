@@ -8,7 +8,7 @@ import secrets
 import subprocess
 from typing import Any
 
-from otelc import health, native_launch, rust_build
+from otelc import health, native_launch, rust_build, rust_compiler
 from otelc.config import Policy
 from otelc import python_launch_files as files
 
@@ -22,7 +22,8 @@ def start(built: rust_build.Build, policy: Policy, runtime: Path, *, plain: bool
             or sum(len(os.fsencode(arg)) for arg in arguments) > 1024 * 1024):
         raise ValueError('invalid Rust application arguments or lane')
     runtime = runtime.resolve()
-    if runtime.is_relative_to(Path(metadata['root'])) or runtime.is_relative_to(built.directory):
+    if (rust_compiler.physical_within(runtime, Path(metadata['root']))
+            or rust_compiler.physical_within(runtime, built.directory)):
         raise ValueError('Rust runtime must be outside original sources and retained build')
     runtime.mkdir(mode=0o700)
     environment = {key: value for key, value in os.environ.items()

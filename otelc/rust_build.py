@@ -127,7 +127,7 @@ def build(policy: Policy, root: Path, entry: Path, output: Path, *,
     if (root / 'Cargo.toml').exists():
         raise ValueError('Cargo/build-script integration requires its separate Rust build profile')
     output = output.resolve()
-    if output.is_relative_to(root):
+    if rust_compiler.physical_within(output, root):
         raise ValueError('Rust build output must be outside the application root')
     compiler = rust_compiler.read(tools_directory)
     tools = compiler.manifest()
@@ -226,7 +226,7 @@ def verify(value: Build, policy: Policy) -> dict[str, Any]:
             or selection(compiled.data) != selection(policy.data)):
         raise ValueError('Rust build profile or compiled policy selection changed')
     root = Path(data['root'])
-    if root.resolve(strict=True) != root or value.directory.is_relative_to(root):
+    if root.resolve(strict=True) != root or rust_compiler.physical_within(value.directory, root):
         raise ValueError('Rust original root or external output changed')
     for key, expected_name in (('tools', rust_compiler.MANIFEST), ('sdk', native_build.SDK_MANIFEST)):
         row = data[key]

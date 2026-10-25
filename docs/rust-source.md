@@ -81,7 +81,7 @@ bin/quux-otelc --config examples/functions.toml rust-run \
   --build build/rust-example --runtime /tmp/otelc-rust-example-plain --plain
 ```
 
-Use `--` before literal application arguments. Each runtime directory must be new and outside both the original application root and retained build. Application streams remain unchanged. Ordinary runtime environment settings such as `RUST_BACKTRACE` are retained; inherited telemetry settings do not replace the common policy.
+Use `--` before literal application arguments. Each runtime directory must be new and outside both the original application root and retained build. Output boundaries compare existing ancestor identities as well as resolved path spelling, so case aliases on case-insensitive filesystems cannot place generated files inside original inputs. Application streams remain unchanged. Ordinary runtime environment settings such as `RUST_BACKTRACE` are retained; inherited telemetry settings do not replace the common policy.
 
 ## Telemetry, checks and limits
 

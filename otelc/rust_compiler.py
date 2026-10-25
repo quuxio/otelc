@@ -40,6 +40,23 @@ def environment() -> dict[str, str]:
             or not key.startswith(('RUST', 'CARGO_', 'OTEL', 'LLVM_PROFILE'))}
 
 
+def physical_within(path: Path, root: Path) -> bool:
+    """Check spelling and existing ancestor identities, including case aliases."""
+    path = path.resolve()
+    root = root.resolve(strict=True)
+    if path.is_relative_to(root):
+        return True
+    original = root.stat()
+    for parent in (path, *path.parents):
+        try:
+            current = parent.stat()
+        except FileNotFoundError:
+            continue
+        if (current.st_dev, current.st_ino) == (original.st_dev, original.st_ino):
+            return True
+    return False
+
+
 def execute(arguments: list[str], output: Path, label: str,
             env: dict[str, str], *, cwd: Path = ROOT) -> bytes:
     """Retain commands and diagnostics; stop only our compiler group on low space."""
@@ -90,7 +107,7 @@ def build(output: Path) -> Tools:
     if host is None:
         raise ValueError('Rust compiler requires macOS ARM64 or 64-bit GNU/Linux')
     output = output.resolve()
-    if output.is_relative_to(ROOT / 'native/rust'):
+    if physical_within(output, ROOT / 'native/rust'):
         raise ValueError('Rust tool output must be outside its source directory')
     before = [native_gate.identity(path) for path in sources()]
     output.mkdir(mode=0o700)
