@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = ('native/llvm/OtelcPass.cpp', 'adapters/native/src/metric_control.cpp',
               'adapters/native/src/function_runtime.cpp', 'adapters/native/launcher/src/runtime.cpp',
               'adapters/native/gate/ExecGate.c', 'native/clang/Lifetimes.cpp', 'adapters/native/src/object_runtime.cpp',
-              'native/llvm/ObjectPass.cpp')
+              'native/llvm/ObjectPass.cpp', 'native/clang/Resources.cpp', 'native/llvm/ResourcePass.cpp')
 CONTROL_PRODUCTION = (PRODUCTION[1], PRODUCTION[2], PRODUCTION[6])
 TEST = 'adapters/native/tests/metric_control_test.cpp'
 TESTS = (TEST, 'adapters/native/tests/function_runtime_test.cpp',
@@ -133,6 +133,12 @@ def generate(root: Path = ROOT) -> None:
     gate = json.loads((output / 'native-gate-coverage.json').read_bytes())
     lifetimes = json.loads((output / 'native-lifetimes-coverage.json').read_bytes())
     objects = json.loads((output / 'native-object-pass-coverage.json').read_bytes())
+    resources = json.loads((output / 'native-resources-coverage.json').read_bytes())
+    resource_pass = json.loads((output / 'native-resource-pass-coverage.json').read_bytes())
+    for record, index in ((resources, 8), (resource_pass, 9)):
+        checked_artifact(record['source'], root / PRODUCTION[index])
+        for header in record.get('headers', []):
+            checked_artifact(header, Path(header['path']))
     checked_artifact(objects['source'], root / PRODUCTION[7])
     for header in objects['headers']:
         checked_artifact(header, Path(header['path']))
@@ -154,7 +160,8 @@ def generate(root: Path = ROOT) -> None:
     native_records.update(lcov_records(Path(gate['lcov']['path']).read_text(), {root / PRODUCTION[4]}))
     document = ET.Element('coverage', version='1')
     databases = []
-    for relative, record in zip(PRODUCTION, (llvm, native, native, launch, gate, lifetimes, native, objects), strict=True):
+    for relative, record in zip(PRODUCTION, (llvm, native, native, launch, gate, lifetimes, native, objects,
+                                            resources, resource_pass), strict=True):
         source = root / relative
         lcov = Path(record['lcov']['path'])
         database = Path(record['compilation_database']['path'])
@@ -163,7 +170,7 @@ def generate(root: Path = ROOT) -> None:
         if database not in databases:
             databases.append(database)
         file = ET.SubElement(document, 'file', path=relative)
-        single = relative in (PRODUCTION[0], PRODUCTION[5], PRODUCTION[7])
+        single = relative in (PRODUCTION[0], PRODUCTION[5], PRODUCTION[7], PRODUCTION[8], PRODUCTION[9])
         summary = record['line_coverage'] if single else record['line_coverage'][str(source)]
         text = lcov.read_text() if single else native_records[source]
         for number, covered in sorted(lcov_lines(text, source, summary=summary).items()):

@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This development profile compiles original C or C++ translation units through LLVM 22, using the common schema-3 policy. Developers add no instrumentation code. Tooling generates a separate startup object and links a shared runtime using the pinned official OpenTelemetry C++ metric/tracing SDK and OTLP/HTTP exporters. The public language plan still keeps C and C++ in `remaining`: automatic object/resource lifetimes, task/service propagation, broader build integration, independent qualification and complete language benchmarks are unfinished.
+This development profile compiles original C or C++ translation units through LLVM 22, using the common schema-3 policy. Developers add no instrumentation code. Tooling generates a separate startup object and links a shared runtime using the pinned official OpenTelemetry C++ metric/tracing SDK and OTLP/HTTP exporters. The public language plan still keeps C and C++ in `remaining`: broader lifetime boundaries, task/service propagation, build integration and independent qualification remain work. The separate prepared candidates add [C++ object lifetimes](native-public-lifetimes.md), [C allocation lifetimes](c-resources.md) and [paired native benchmarks](native-benchmarks.md).
 
 ## Build and run
 

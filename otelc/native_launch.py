@@ -40,20 +40,23 @@ def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def validate_policy(policy: Policy, language: str, *, object_lifetimes: bool = False) -> None:
+def validate_policy(policy: Policy, language: str, *, object_lifetimes: bool = False, resource_lifetimes: bool = False) -> None:
     """Refuse pending capabilities instead of silently omitting requested probes."""
     if language not in ('c', 'cpp') or language not in policy.data['languages']:
         raise ValueError('native launch requires an enabled c or cpp language')
-    if policy.data['lifetimes']['enabled'] and (not object_lifetimes or language != 'cpp'):
+    if object_lifetimes and resource_lifetimes:
+        raise ValueError('native object and resource profiles are separate')
+    if policy.data['lifetimes']['enabled'] and not (object_lifetimes and language == 'cpp'
+                                                      or resource_lifetimes and language == 'c'):
         raise ValueError('automatic native lifetimes are not implemented yet')
     if any(policy.data['context'].values()):
         raise ValueError('automatic native task/service propagation is not implemented yet')
 
 
-def selection(policy: dict[str, Any], *, object_lifetimes: bool = False) -> dict[str, Any]:
+def selection(policy: dict[str, Any], *, object_lifetimes: bool = False, resource_lifetimes: bool = False) -> dict[str, Any]:
     """Runtime controls may change; compiled function/type selectors may not."""
     result = {key: policy[key] for key in ('sources', 'functions')}
-    if object_lifetimes:
+    if object_lifetimes or resource_lifetimes:
         result['lifetimes'] = {key: policy['lifetimes'][key] for key in ('enabled', 'include', 'exclude')}
     return result
 
@@ -185,7 +188,7 @@ def verify(value: Build) -> dict[str, Any]:
     for row in [*metadata['inputs'], metadata['sdk_library'], *metadata['products']]:
         if identity(Path(row['path'])) != row:
             raise ValueError('native source, SDK or executable changed after building')
-    if metadata['profile'] in ('llvm22-native-units-v1', 'llvm22-native-object-units-v1'):
+    if metadata['profile'] in ('llvm22-native-units-v1', 'llvm22-native-object-units-v1', 'llvm22-native-resource-units-v1'):
         from otelc import native_units
         native_units.verify(value, metadata)
     return metadata
@@ -216,9 +219,10 @@ def _start(value: Build, runtime: Path, plain: bool, arguments: tuple[str, ...],
     """Share the existing fixed invocation/plan while keeping the gate explicit."""
     metadata = verify(value)
     objects = metadata['profile'] == 'llvm22-native-object-units-v1'
+    resources = metadata['profile'] == 'llvm22-native-resource-units-v1'
     if current is not None:
-        validate_policy(current, metadata['language'], object_lifetimes=objects)
-        if digest(selection(current.data, object_lifetimes=objects)) != metadata['selection_sha256']:
+        validate_policy(current, metadata['language'], object_lifetimes=objects, resource_lifetimes=resources)
+        if digest(selection(current.data, object_lifetimes=objects, resource_lifetimes=resources)) != metadata['selection_sha256']:
             raise ValueError('native policy differs from compiled selection')
         metadata['policy'] = current.data
         metadata['policy_sha256'] = digest(current.data)
@@ -236,6 +240,8 @@ def _start(value: Build, runtime: Path, plain: bool, arguments: tuple[str, ...],
         'traces': policy['traces']['enabled'], 'sample_ratio': policy['traces']['sample_ratio']}
     if objects:
         settings['object_lifetimes'] = {'enabled': True, 'max_live': policy['lifetimes']['max_live']}
+    if resources:
+        settings['resource_lifetimes'] = {'enabled': True, 'max_live': policy['lifetimes']['max_live']}
     plan = {'schema_version': 1, 'language': metadata['language'], 'runtime': str(runtime),
             'policy_sha256': metadata['policy_sha256'], 'selection_sha256': metadata['selection_sha256'],
             'settings': settings, 'token': secrets.token_hex(32)}
@@ -260,7 +266,7 @@ def build_sdk(output: Path, *, coverage: bool = False) -> dict[str, Any]:
     source = ROOT / 'adapters/native'
     sources = [source / 'CMakeLists.txt', source / 'launcher/CMakeLists.txt',
                *sorted(source.rglob('*.cpp')), *sorted(source.rglob('*.h')),
-               ROOT / 'native/llvm/function_abi.h', ROOT / 'native/llvm/object_abi.h']
+               ROOT / 'native/llvm/function_abi.h', ROOT / 'native/llvm/object_abi.h', ROOT / 'native/llvm/resource_abi.h']
     before = [identity(path) for path in sources]
     build_tools = [identity(Path(cmake)), identity(Path(ninja))]
     output.mkdir(mode=0o700)

@@ -133,7 +133,8 @@ class PublicLifetimeTests(unittest.TestCase):
         runtime = self.base / name
         prepared_native.prepare(self.policy, runtime, build_directory=output, plain=plain)
         process = subprocess.Popen(prepared_native.command(runtime), start_new_session=True,
-            env=dict(os.environ, PATH='/no-tools', LLVM_PROFILE_FILE=str(ROOT / 'build/public-sdk-%p.profraw')),
+            env=dict(os.environ, PATH='/no-tools', LLVM_PROFILE_FILE=os.environ.get(
+                'LLVM_PROFILE_FILE', str(ROOT / 'build/public-sdk-%p.profraw'))),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(self.cleanup, process)
         deadline = time.monotonic() + 30

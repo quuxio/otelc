@@ -13,7 +13,7 @@ make setup java-build node-observer node-http
 make stack-up
 ```
 
-Use a fresh comparison ID to group the language reports in Grafana. Apply the same policy to each language. Java remains the default for `make benchmark` and the CLI. Use `make benchmark BENCHMARK_LANGUAGE=python` for a standalone Python run. The [native guide](native-benchmarks.md) adds the matching SDK prerequisite, shared metrics-only policy and C/C++ commands. C resource lifetimes remain unsupported; enabled C lifetime policies are refused.
+Use a fresh comparison ID to group the language reports in Grafana. Apply the same policy to each language. Java remains the default for `make benchmark` and the CLI. Use `make benchmark BENCHMARK_LANGUAGE=python` for a standalone Python run. The [native guide](native-benchmarks.md) adds the matching SDK prerequisite, shared metrics-only policy and C/C++ commands. The separate [C lifetime candidate](c-resources.md) supports ordinary record-pointer allocations and `free` through the shared example policy; broader lifetime boundaries remain work.
 
 ```sh
 comparison=$(date +%Y%m%d-%H%M%S)

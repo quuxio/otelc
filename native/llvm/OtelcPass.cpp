@@ -3,6 +3,9 @@
 #ifdef OTELC_OBJECT_WITH_FUNCTIONS_V1
 #include "object_pass.h"
 #endif
+#ifdef OTELC_RESOURCE_WITH_FUNCTIONS_V1
+#include "resource_pass.h"
+#endif
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/ADT/DenseMap.h"
@@ -205,6 +208,9 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
 #ifdef OTELC_OBJECT_WITH_FUNCTIONS_V1
     otelc::InstrumentObjectBoundaries(M, Manager);
 #endif
+#ifdef OTELC_RESOURCE_WITH_FUNCTIONS_V1
+    otelc::PlanResourceBoundaries(M, Manager);
+#endif
     auto &C = M.getContext();
     auto *Ptr = PointerType::getUnqual(C);
     auto *I64 = Type::getInt64Ty(C);
@@ -348,5 +354,10 @@ extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
     PB.registerPipelineStartEPCallback([](ModulePassManager &PM, OptimizationLevel) {
       PM.addPass(OtelcPass());
     });
+#ifdef OTELC_RESOURCE_WITH_FUNCTIONS_V1
+    PB.registerOptimizerLastEPCallback([](ModulePassManager &PM, OptimizationLevel, ThinOrFullLTOPhase) {
+      PM.addPass(otelc::ResourceBoundaryPass());
+    });
+#endif
   }};
 }

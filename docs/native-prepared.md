@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This explicit profile separates compilation, preparation and owned execution for unedited C/C++ applications. It uses the common schema-3 policy, LLVM 22, the registered function ABI and the official C++ SDK pipeline. The separate [build-3 context candidate](native-build-context.md) adds explicit per-unit compiler contexts, private helper assets and a neutral observation driver. The [C++ lifetime candidate](native-public-lifetimes.md) adds explicit build 4 through the same preparation/release API. Automatic build discovery, task/service propagation, independent oteleq integration and complete language acceptance remain open.
+This explicit profile separates compilation, preparation and owned execution for unedited C/C++ applications. It uses the common schema-3 policy, LLVM 22, the registered function ABI and the official C++ SDK pipeline. The separate [build-3 context candidate](native-build-context.md) adds explicit per-unit compiler contexts, private helper assets and a neutral observation driver. The [C++ lifetime candidate](native-public-lifetimes.md) adds explicit build 4 through the same preparation/release API. The [C allocation lifetime candidate](c-resources.md) adds explicit build 5 with separate inventory/resolution and resource ABI records. Automatic build discovery, task/service propagation, independent oteleq integration and complete language acceptance remain open.
 
 ## Commands
 

@@ -95,12 +95,24 @@ class NativeBenchmarkAccountingTests(unittest.TestCase):
             self.assertEqual(set(json.loads((output / 'metric-finalization.json').read_text())),
                              {'schema_version', 'restored', 'flushed'})
 
-    def test_unsupported_c_lifetimes_refuse_before_creating_output(self):
+    def test_unsupported_native_context_refuses_before_creating_output(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / 'run'
-            with self.assertRaisesRegex(ValueError, 'lifetimes'):
-                adapter.run(policy(), output, language='c', sdk_directory=Path('/no-sdk'))
+            data = copy.deepcopy(policy().data); data['context']['tasks'] = True
+            with self.assertRaisesRegex(ValueError, 'propagation'):
+                adapter.run(Policy.parse(data), output, language='c', sdk_directory=Path('/no-sdk'))
             self.assertFalse(output.exists())
+
+    def test_c_resource_drain_requires_closed_free_boundaries_and_no_censoring(self):
+        valid = drain()
+        valid['language'] = 'c'
+        valid['resource_accounting'] = valid.pop('object_accounting')
+        valid['resource_accounting']['releasing'] = valid['resource_accounting'].pop('destroying')
+        adapter.validate_drain(valid, policy())
+        for key in ('releasing', 'censored', 'lost', 'invalid'):
+            changed = copy.deepcopy(valid); changed['resource_accounting'][key] = '1'
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                adapter.validate_drain(changed, policy())
 
 
 class NativeBenchmarkIntegrationTests(unittest.TestCase):
@@ -172,6 +184,22 @@ class NativeBenchmarkIntegrationTests(unittest.TestCase):
         source = ROOT / 'examples/cpp/BenchmarkApp.cpp'
         self.assertEqual(report['original_source'], native_gate.identity(source))
         self.assertEqual(report['source_sha256'], native_gate.identity(output / 'source/examples/cpp/BenchmarkApp.cpp')['sha256'])
+
+    def test_c_allocation_cost_uses_the_common_policy_and_real_free_boundaries(self):
+        output, report = self.run_benchmark('c')
+        objects = report['sdk_health']['resource_accounting']
+        self.assertEqual((objects['admitted'], objects['completed'], objects['censored']), ('171', '171', '0'))
+        self.assertTrue(self.capture.points('otelc.lifetime.completed'))
+        spans = [span for request in self.capture.traces for resource in request.resource_spans
+                 for scope in resource.scope_spans for span in scope.spans]
+        lifetimes = [span for span in spans if span.name == 'WorkItem lifetime']
+        self.assertEqual(len(lifetimes), 171)
+        for span in lifetimes:
+            attrs = {item.key: item.value.string_value for item in span.attributes}
+            self.assertEqual(attrs['boundary'], 'free_entry')
+            self.assertEqual(len(span.links), 1)
+        self.assertEqual(report['original_source'], native_gate.identity(ROOT / 'examples/c/BenchmarkApp.c'))
+        self.assertEqual(report['source_sha256'], native_gate.identity(output / 'source/examples/c/BenchmarkApp.c')['sha256'])
 
     def test_failed_checksum_still_drains_and_refuses_report_or_publication(self):
         original = benchmark.batch

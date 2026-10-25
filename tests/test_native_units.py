@@ -83,7 +83,10 @@ class NativeUnitRecipeTests(unittest.TestCase):
         self.assertEqual(prepared.protocols()['build'], 2)
         self.assertEqual(prepared.protocols(build_version=3)['unit_recipe'], 1)
         self.assertEqual(prepared.protocols(build_version=4)['object_inventory'], 2)
-        for version in (True, 1, 5):
+        self.assertEqual(prepared.protocols(build_version=5)['resource_inventory'], 1)
+        self.assertEqual(prepared.protocols(build_version=5)['resource_resolution'], 1)
+        self.assertEqual(prepared.protocols(build_version=5)['resource_probe_abi'], 'otelc.resource.v1')
+        for version in (True, 1, 6):
             with self.assertRaises(ValueError): prepared.protocols(build_version=version)
         descriptor = subprocess.run([str(ROOT / 'bin/quux-otelc'), '--config', '/no-policy',
             'native-protocols', '--build-version', '3'], env=dict(os.environ, PATH='/no-tools',

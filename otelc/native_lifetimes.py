@@ -19,9 +19,20 @@ from otelc.python_sdk_io import decode
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'native/clang/Lifetimes.cpp'
 PROFILE = 'clang22-cxx-lifetimes-v1'
+RESOURCE_SOURCE = ROOT / 'native/clang/Resources.cpp'
+RESOURCE_PROFILE = 'clang22-c-allocation-v1'
 CONTEXT_PROFILE = 'clang22-cxx-context-v1'
 MAX_AST = 64 * 1024 * 1024
 MANIFEST = 'native-lifetime-tool.json'
+
+
+def tool_source(profile: str) -> Path:
+    """Only fixed, repository-owned semantic helpers can be compiled."""
+    if profile == PROFILE:
+        return SOURCE
+    if profile == RESOURCE_PROFILE:
+        return RESOURCE_SOURCE
+    raise ValueError('unsupported native semantic tool profile')
 
 
 def _run(command: list[str], root: Path, output: Path, label: str) -> None:
@@ -60,6 +71,7 @@ class Tool:
 
     directory: Path
     encoded: str
+    profile: str = PROFILE
 
     def manifest(self) -> dict[str, Any]:
         """Decode a fresh copy of the caller's expected build receipt."""
@@ -69,7 +81,8 @@ class Tool:
         """Refuse changed helper, compiler, input bytes or build receipt."""
         value = self.manifest()
         if ((self.directory / MANIFEST).read_text() != self.encoded
-                or value['source']['path'] != str(SOURCE)
+                or value['source']['path'] != str(tool_source(self.profile))
+                or value.get('semantic_profile', PROFILE) != self.profile
                 or value['product']['path'] != str(self.directory / 'lifetimes')
                 or not llvm_backend.unchanged(value['toolchain'])
                 or any(native_gate.identity(Path(row['path'])) != row
@@ -88,30 +101,31 @@ def _library(directory: Path, name: str) -> Path:
 
 
 def build_tool(output: Path, *, llvm_config: Path | None = None,
-               coverage: bool = False) -> Tool:
+               coverage: bool = False, profile: str = PROFILE) -> Tool:
     """Build the fixed Clang AST helper; never compile application-supplied tooling."""
+    source_path = tool_source(profile)
     tools = llvm_backend.discover(llvm_config)
     compiler = str(Path(tools['directory']) / 'clang++')
     config = Path(tools['tools']['llvm_config']['path'])
     library_dir = Path(llvm_backend.query(config, '--libdir'))
     libraries = [native_gate.identity(_library(library_dir, name))
                  for name in ('clang-cpp', 'LLVM')]
-    source = native_gate.identity(SOURCE)
+    source = native_gate.identity(source_path)
     output.mkdir(mode=0o700)
     output = output.resolve(strict=True)
     common = [compiler, *tools['cxxflags'], '-std=c++17', '-fexceptions', '-O1', '-g']
     dependency = output / 'tool.d'
-    query = [*common, '-M', '-MT', 'otelc-inputs', '-MF', str(dependency), str(SOURCE)]
+    query = [*common, '-M', '-MT', 'otelc-inputs', '-MF', str(dependency), str(source_path)]
     _run(query, ROOT, output, 'tool-dependencies')
     inputs = _dependencies(dependency, ROOT)
-    command = [*common, str(SOURCE), '-L' + str(library_dir),
+    command = [*common, str(source_path), '-L' + str(library_dir),
                '-Wl,-rpath,' + str(library_dir), '-lclang-cpp', '-lLLVM',
                '-o', str(output / 'lifetimes')]
     if coverage:
         command.extend(['-fprofile-instr-generate', '-fcoverage-mapping'])
     _run(command, ROOT, output, 'tool-build')
     _run(query, ROOT, output, 'tool-dependencies-after')
-    if (inputs != _dependencies(dependency, ROOT) or source != native_gate.identity(SOURCE)
+    if (inputs != _dependencies(dependency, ROOT) or source != native_gate.identity(source_path)
             or not llvm_backend.unchanged(tools)
             or any(native_gate.identity(Path(row['path'])) != row for row in libraries)):
         raise ValueError('native lifetime tool inputs changed during compilation')
@@ -119,11 +133,13 @@ def build_tool(output: Path, *, llvm_config: Path | None = None,
              'toolchain': tools, 'source': source, 'libraries': libraries,
              'inputs': list(inputs.values()), 'product': native_gate.identity(output / 'lifetimes'),
              'command': command, 'coverage': coverage}
+    if profile != PROFILE:
+        value.update(schema_version=2, semantic_profile=profile)
     encoded = json.dumps(value, sort_keys=True, indent=2) + '\n'
     (output / MANIFEST).write_text(encoded)
     (output / 'compile_commands.json').write_text(json.dumps([
-        {'directory': str(ROOT), 'file': str(SOURCE), 'arguments': command}], indent=2) + '\n')
-    return Tool(output, encoded)
+        {'directory': str(ROOT), 'file': str(source_path), 'arguments': command}], indent=2) + '\n')
+    return Tool(output, encoded, profile)
 
 
 def catalogue(document: dict[str, Any], policy: Policy, root: Path) -> dict[str, Any]:

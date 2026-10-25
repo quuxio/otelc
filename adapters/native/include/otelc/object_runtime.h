@@ -11,7 +11,11 @@ namespace otelc::native {
 void ConfigureObjectMetrics(opentelemetry::sdk::metrics::MeterProvider &provider,
     std::uint32_t types = 4096,
     const std::vector<double> &boundaries = {1e-6, 1e-5, 1e-4, .001, .01, .1, 1.});
-struct ObjectLimits { std::uint32_t types = 4096, live = 4096; };
+enum class LifetimeBoundary { destructor_entry, free_entry };
+struct ObjectLimits {
+  std::uint32_t types = 4096, live = 4096;
+  LifetimeBoundary boundary = LifetimeBoundary::destructor_entry;
+};
 struct ObjectStatus {
   std::uint64_t types, admitted, completed, live, destroying, ending, censored;
   std::uint64_t lost, duplicates, invalid;
@@ -33,6 +37,9 @@ class ObjectRuntime {
       const opentelemetry::trace::SpanContext &creation =
           opentelemetry::trace::SpanContext::GetInvalid()) noexcept;
   std::uint64_t Destroying(const void *address, const char *type_usr) noexcept;
+  // A C free can erase its pointer's static type. Claim only an already tracked
+  // allocation, without reading storage or treating an unselected free as loss.
+  std::uint64_t Releasing(const void *address) noexcept;
   bool Destroyed(std::uint64_t token, std::int32_t unwinding) noexcept;
   ObjectStatus Status() const;
   // Refuse new admission, wait for already claimed cleanup and SDK callbacks,
