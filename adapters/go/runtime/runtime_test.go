@@ -267,6 +267,54 @@ func TestRuntimeCloseWithIncompleteClientAndCancelledCommand(t *testing.T) {
 	}
 }
 
+func TestControlCloseCancelsAnInFlightExporter(t *testing.T) {
+	seen, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		select {
+		case seen <- struct{}{}:
+		default:
+		}
+		select {
+		case <-request.Context().Done():
+			select {
+			case cancelled <- struct{}{}:
+			default:
+			}
+		case <-release:
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
+	cfg := configuration(server.URL)
+	cfg.TracesEnabled = false
+	cfg.TimeoutMS = 5000
+	r := startRuntime(t, cfg)
+	invoke(r)
+	client, err := net.DialTimeout("tcp4", r.server.listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := json.NewEncoder(client).Encode(map[string]string{"token": r.server.token, "command": "flush"}); err != nil {
+		t.Fatal(err)
+	}
+	awaitControlSignal(t, seen, "flush never reached the exporter")
+	stopped := make(chan struct{})
+	go func() { r.server.close(); close(stopped) }()
+	awaitControlSignal(t, stopped, "control shutdown did not cancel the active command")
+	awaitControlSignal(t, cancelled, "control cancellation did not reach the HTTP exporter")
+}
+
+func awaitControlSignal(t *testing.T, signal <-chan struct{}, failure string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal(failure)
+	}
+}
+
 func TestControlRefusesMalformedAndUnauthenticatedRequests(t *testing.T) {
 	sink := &receiver{}
 	server := httptest.NewServer(http.HandlerFunc(sink.serve))

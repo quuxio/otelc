@@ -20,7 +20,6 @@ type controlServer struct {
 	runtime  *Runtime
 	listener net.Listener
 	token    string
-	ctx      context.Context
 	cancel   context.CancelFunc
 	wait     sync.WaitGroup
 	mu       sync.Mutex
@@ -39,7 +38,7 @@ func newControl(r *Runtime) (*controlServer, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &controlServer{runtime: r, listener: listener, token: hex.EncodeToString(token[:]), ctx: ctx, cancel: cancel,
+	s := &controlServer{runtime: r, listener: listener, token: hex.EncodeToString(token[:]), cancel: cancel,
 		clients: make(map[net.Conn]bool), command: make(chan struct{}, 1)}
 	s.command <- struct{}{}
 	descriptor := map[string]any{"schema_version": 1, "kind": "otelc.control.tcp", "host": "127.0.0.1",
@@ -50,11 +49,11 @@ func newControl(r *Runtime) (*controlServer, error) {
 		return nil, err
 	}
 	s.wait.Add(1)
-	go s.serve()
+	go s.serve(ctx)
 	return s, nil
 }
 
-func (s *controlServer) serve() {
+func (s *controlServer) serve(ctx context.Context) {
 	defer s.wait.Done()
 	for {
 		client, err := s.listener.Accept()
@@ -70,11 +69,11 @@ func (s *controlServer) serve() {
 		s.clients[client] = true
 		s.wait.Add(1)
 		s.mu.Unlock()
-		go s.handle(client)
+		go s.handle(ctx, client)
 	}
 }
 
-func (s *controlServer) handle(client net.Conn) {
+func (s *controlServer) handle(ctx context.Context, client net.Conn) {
 	defer s.wait.Done()
 	defer func() { client.Close(); s.mu.Lock(); delete(s.clients, client); s.mu.Unlock() }()
 	_ = client.SetDeadline(time.Now().Add(2500 * time.Millisecond))
@@ -90,7 +89,7 @@ func (s *controlServer) handle(client net.Conn) {
 		subtle.ConstantTimeCompare([]byte(request.Token), []byte(s.token)) != 1 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	response, err := s.run(ctx, request.Command)
 	if err != nil {
