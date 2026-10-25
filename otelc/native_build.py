@@ -71,32 +71,22 @@ def build(policy: Policy, language: str, root: Path, sources: list[Path], output
     return value
 
 
-def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native_gate.Product, dict[str, Any]]:
-    """Reconstruct only fixed product paths and recheck all declared bindings."""
-    directory = directory.resolve(strict=True)
-    value, _ = read(directory / MANIFEST)
-    if (set(value) != FIELDS or type(value['schema_version']) is not int or value['schema_version'] not in (2, 3)
-            or value['kind'] != 'otelc.native.source-build' or value['profile'] != PROFILE
-            or value['source_complete'] is not False):
-        raise ValueError('native preparation requires source-build2 or3/native-owned-v1')
-    fixed = {'native': directory / 'native-build.json', 'plugin': directory / 'plugin' / llvm_backend.MANIFEST,
-             'gate': directory / 'gate/gate.json'}
-    for field, path in fixed.items():
-        if native_gate.identity(path) != value[field]:
-            raise ValueError('native build binding changed: ' + field)
-    if type(value['sdk']) is not dict or type(value['sdk'].get('path')) is not str:
+def _bound_sdk(record: Any) -> dict[str, Any]:
+    """Recheck the named SDK record before reading its fixed build recipe."""
+    if type(record) is not dict or type(record.get('path')) is not str:
         raise ValueError('native SDK build binding must identify its fixed record')
-    sdk_path = Path(value['sdk']['path'])
+    sdk_path = Path(record['path'])
     if (not sdk_path.is_absolute() or sdk_path.name != SDK_MANIFEST
-            or sdk_path.resolve(strict=True) != sdk_path or native_gate.identity(sdk_path) != value['sdk']):
+            or sdk_path.resolve(strict=True) != sdk_path or native_gate.identity(sdk_path) != record):
         raise ValueError('native SDK build binding changed')
-    source_sdk = sdk(sdk_path.parent)
-    metadata, raw = read(fixed['native'])
-    plugin, plugin_raw = read(fixed['plugin'])
-    gate, gate_raw = read(fixed['gate'])
+    return sdk(sdk_path.parent)
+
+
+def _verify_profiles(directory: Path, metadata: dict[str, Any], plugin: dict[str, Any],
+                     gate: dict[str, Any], source_sdk: dict[str, Any], *, units: bool) -> None:
+    """Require the fixed native, plugin, gate and SDK product profiles."""
     native_fields = {'schema_version', 'kind', 'profile', 'language', 'root', 'policy', 'policy_sha256',
                      'selection_sha256', 'inputs', 'sdk_library', 'products', 'commands', 'source_complete'}
-    units = value['schema_version'] == 3
     if units:
         native_fields |= {'recipe', 'files', 'artifacts', 'tools', 'dependencies'}
     if (set(metadata) != native_fields or type(metadata.get('schema_version')) is not int
@@ -120,6 +110,26 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
             or gate['executable']['path'] != str(directory / 'gate/otelc-exec-gate')
             or gate['source']['path'] != str(native_gate.SOURCE)):
         raise ValueError('native build does not use the fixed plugin, gate or SDK profile')
+
+
+def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native_gate.Product, dict[str, Any]]:
+    """Reconstruct only fixed product paths and recheck all declared bindings."""
+    directory = directory.resolve(strict=True)
+    value, _ = read(directory / MANIFEST)
+    if (set(value) != FIELDS or type(value['schema_version']) is not int or value['schema_version'] not in (2, 3)
+            or value['kind'] != 'otelc.native.source-build' or value['profile'] != PROFILE
+            or value['source_complete'] is not False):
+        raise ValueError('native preparation requires source-build2 or3/native-owned-v1')
+    fixed = {'native': directory / 'native-build.json', 'plugin': directory / 'plugin' / llvm_backend.MANIFEST,
+             'gate': directory / 'gate/gate.json'}
+    for field, path in fixed.items():
+        if native_gate.identity(path) != value[field]:
+            raise ValueError('native build binding changed: ' + field)
+    source_sdk = _bound_sdk(value['sdk'])
+    metadata, raw = read(fixed['native'])
+    plugin, plugin_raw = read(fixed['plugin'])
+    gate, gate_raw = read(fixed['gate'])
+    _verify_profiles(directory, metadata, plugin, gate, source_sdk, units=value['schema_version'] == 3)
     built = native_launch.Build(directory, raw.decode(), llvm_backend.Plugin(directory / 'plugin', plugin_raw.decode()))
     native_launch.verify(built)
     held_gate = native_gate.Product(gate_raw.decode())
