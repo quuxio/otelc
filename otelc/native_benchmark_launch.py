@@ -10,7 +10,7 @@ import subprocess
 import time
 from typing import Any, Iterator, TextIO
 
-from otelc import benchmark, native_build, native_gate, native_launch, prepared_native as prepared
+from otelc import benchmark, benchmark_cleanup, native_build, native_gate, native_launch, prepared_native as prepared
 from otelc.config import Policy
 
 
@@ -118,6 +118,20 @@ def recheck(process: Application) -> None:
             raise ValueError('native benchmark retained evidence changed')
 
 
+def completed(process: Application, runtime: Path, *, plain: bool) -> None:
+    """Read final execution even after measurement or shutdown failed."""
+    owner = process.owner
+    if plain:
+        prepared.files.write(runtime / 'native-benchmark-execution.json', {
+            'pid': owner.pid, 'returncode': owner.returncode, 'sdk_pid': None})
+    elif process.supervisor_pid is not None:
+        final = prepared.execution(runtime, supervisor_pid=owner.pid,
+            parent_pid=os.getpid(), returncode=owner.returncode)
+        process.sdk_report = final['sdk_health']
+        if final['failures'] or not final['inputs_rechecked']:
+            raise ValueError('native benchmark completion is incomplete')
+
+
 @contextmanager
 def application(policy: Policy, built: native_launch.Build, runtime: Path, *, plain: bool
                 ) -> Iterator[Application]:
@@ -135,6 +149,7 @@ def application(policy: Policy, built: native_launch.Build, runtime: Path, *, pl
         owner = subprocess.Popen(command, cwd=built.manifest()['root'], env=environment(runtime),
             start_new_session=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
         process = Application(owner, owner.pid, None, created)
+        failure = None
         try:
             if plain:
                 if parent(owner.pid) != os.getpid() or os.getpgid(owner.pid) != owner.pid:
@@ -146,17 +161,12 @@ def application(policy: Policy, built: native_launch.Build, runtime: Path, *, pl
                 process.pid = start(owner, runtime)
                 process.supervisor_pid = owner.pid
             yield process
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            try:
-                benchmark.stop(process)
-            finally:
-                if plain:
-                    prepared.files.write(runtime / 'native-benchmark-execution.json', {
-                        'pid': owner.pid, 'returncode': owner.returncode, 'sdk_pid': None})
-                elif process.supervisor_pid is not None:
-                    final = prepared.execution(runtime, supervisor_pid=owner.pid,
-                        parent_pid=os.getpid(), returncode=owner.returncode)
-                    process.sdk_report = final['sdk_health']
-                    if final['failures'] or not final['inputs_rechecked']:
-                        raise ValueError('native benchmark completion is incomplete')
-                native_launch.verify(built)
+            cleanup = benchmark_cleanup.Cleanup(failure)
+            cleanup.run(lambda: benchmark.stop(process), 'Native benchmark stop')
+            cleanup.run(lambda: completed(process, runtime, plain=plain), 'Native benchmark completion')
+            cleanup.run(lambda: native_launch.verify(built), 'Native benchmark build verification')
+            cleanup.finish()
