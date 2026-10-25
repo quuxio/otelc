@@ -109,7 +109,7 @@ Requested native lifetime or task/HTTP instrumentation fails explicitly before b
 make native-launch-check
 ```
 
-The gate retains compact source/tool/product identities, merged native profiles, exact runtime LCOV and its CMake compiler entry under `build/native-launch*`. `OTELC_CPP_ANALYSIS=1` additionally keeps dependency headers and working directories until Sonar scanning finishes. See [native analysis](native-analysis.md).
+The expanded integration suite has a thirty-minute process budget for its real C/C++ compilation and SDK/application cases. Individual compiler, application and export deadlines remain unchanged. A timeout fails the gate; no selected tests or coverage floors are skipped. The gate retains compact source/tool/product identities, merged native profiles, exact runtime LCOV and its CMake compiler entry under `build/native-launch*`. `OTELC_CPP_ANALYSIS=1` additionally keeps dependency headers and working directories until Sonar scanning finishes. See [native analysis](native-analysis.md).
 
 For development against an explicitly selected existing library, build it with `python -m otelc.native_launch --output NEW_DIRECTORY --coverage`, then run:
 
