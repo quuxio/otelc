@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This candidate inserts construction, whole-local ownership move and drop observations into compiler-owned Rust MIR. Application files contain no telemetry imports, annotations, hooks or guards. It builds on the [resolved lifetime inventory](rust-lifetime-discovery.md) and [SDK bridge](rust-drop-bridge.md). Genuine compiler/SDK execution, measured coverage, independent review and protected delivery are required before claiming this component verified. Public Rust lifetime policies remain disabled while broader ownership and language qualification are unfinished.
+This candidate inserts construction, whole-local ownership move and drop observations into compiler-owned Rust MIR. Application files contain no telemetry imports, annotations, hooks or guards. It builds on the [resolved lifetime inventory](rust-lifetime-discovery.md) and [SDK bridge](rust-drop-bridge.md). Genuine compiler/SDK execution, measured coverage, independent review and protected delivery are required before claiming this component verified. The [public lifetime candidate](rust-public-lifetimes.md) connects supported standalone selections to build/launch; broader ownership and language qualification remain unfinished.
 
 ## Common policy and compiler bindings
 
@@ -26,4 +26,4 @@ Changed bindings, missing locals, non-drop types, unresolved generic layouts, by
 
 ## Remaining ownership support
 
-This first insertion component handles selected root-local values with a concrete layout and an actual drop boundary. By-value arguments and returns, factory/call ownership transfer, `mem::drop`/`mem::forget` calls, projected and partial moves/drops, containers, const/async/closure/macro bodies, non-drop storage lifetimes and arbitrary Cargo builds need further compiler support. Unsupported selected operations fail visibly. The component does not establish complete source/dependency closure, public lifetime launch support, independent oteleq admission, lifetime overhead comparisons or Grafana receipt.
+This first insertion component handles selected root-local values with a concrete layout and an actual drop boundary. By-value arguments and returns, factory/call ownership transfer, `mem::drop`/`mem::forget` calls, projected and partial moves/drops, containers, const/async/closure/macro bodies, non-drop storage lifetimes and arbitrary Cargo builds need further compiler support. Unsupported selected operations fail visibly. The separate [public lifetime candidate](rust-public-lifetimes.md) connects supported standalone build and launch. Complete source/dependency closure, independent oteleq admission, actual lifetime overhead comparisons and Grafana receipt remain required.

@@ -37,7 +37,9 @@ def start(built: rust_build.Build, policy: Policy, runtime: Path, *, plain: bool
         **{key: data['metrics'][key] for key in ('collection', 'emission')},
         'boundaries': data['metrics']['histogram_boundaries_seconds'],
         'traces': data['traces']['enabled'], 'sample_ratio': data['traces']['sample_ratio']}
-    plan = {'schema_version': 2, 'language': 'rust', 'runtime': str(runtime),
+    if data['lifetimes']['enabled']:
+        settings['drop_lifetimes'] = {'enabled': True, 'max_live': data['lifetimes']['max_live']}
+    plan = {'schema_version': 3 if data['lifetimes']['enabled'] else 2, 'language': 'rust', 'runtime': str(runtime),
             'policy_sha256': native_launch.digest(data), 'selection_sha256': metadata['selection_sha256'],
             'settings': settings, 'token': secrets.token_hex(32)}
     descriptor = os.open(runtime / 'plan.json', os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -55,8 +57,10 @@ def validate_health(value: dict[str, Any], built: rust_build.Build, policy: Poli
     """Bind the final SDK checkpoint without treating API counters as delivery proof."""
     health.validate(value)
     rust_build.validate_policy(policy)
-    if value['schema_version'] != 1 or 'drop_accounting' in value:
-        raise ValueError('public Rust function-only health profile differs')
+    lifetimes = policy.data['lifetimes']['enabled']
+    if (value['schema_version'] != (5 if lifetimes else 1)
+            or ('drop_accounting' in value) != lifetimes):
+        raise ValueError('public Rust health profile differs from the lifetime policy')
     metadata = built.manifest()
     if (value['pid'] != pid or value['language'] != 'rust' or value['phase'] != 'final'
             or value['sdk_attached'] is not True
@@ -93,7 +97,7 @@ def run(policy: Policy, runtime: Path, *, build_directory: Path,
     if not exit_code and failure is not None:
         exit_code = 1
     files.write(runtime / 'rust-execution.json', {'schema_version': 1,
-        'kind': 'otelc.rust.direct-execution', 'profile': rust_build.PROFILE,
+        'kind': 'otelc.rust.direct-execution', 'profile': rust_build.profile(policy),
         'pid': process.pid, 'process_exit_code': code, 'launcher_exit_code': exit_code,
         'sdk_health': sdk_health, 'validation_failure': failure,
         'scope': 'Direct child only; not a prepared host-release or OS ownership qualification',

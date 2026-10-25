@@ -6,27 +6,41 @@ import json
 from pathlib import Path
 from typing import Any
 
-from otelc import native_build, native_gate, native_launch, rust_compiler
+from otelc import native_build, native_gate, native_launch, rust_compiler, rust_lifetimes
 from otelc.config import Policy
 from otelc.file_inputs import checked_file
 from otelc.python_sdk_io import decode
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = 'rust1981-standalone-sync-v1'
+LIFETIME_PROFILE = 'rust1981-standalone-drop-v2'
 MANIFEST = 'rust-source-build.json'
 
 
 def validate_policy(policy: Policy) -> None:
-    """Keep unsupported lifetime/context requests explicit until their profiles exist."""
+    """Keep unsupported task/service requests explicit until their profiles exist."""
     if 'rust' not in policy.data['languages']:
         raise ValueError('Rust build requires an enabled rust language')
-    if policy.data['lifetimes']['enabled'] or any(policy.data['context'].values()):
-        raise ValueError('Rust automatic lifetimes and task/service context are not implemented yet')
+    if any(policy.data['context'].values()):
+        raise ValueError('Rust task/service context is not implemented yet')
+
+
+def profile(policy: Policy) -> str:
+    """Lifetime-enabled products use a distinct retained build and health profile."""
+    return LIFETIME_PROFILE if policy.data['lifetimes']['enabled'] else PROFILE
+
+
+def modes(policy: Policy) -> tuple[str, ...]:
+    """Discovery and weaving remain separately retained compiler operations."""
+    return ('inspect', 'lifetime-inspect', 'lifetime-weave') if policy.data['lifetimes']['enabled'] else ('inspect', 'weave')
 
 
 def selection(policy: dict[str, Any]) -> dict[str, Any]:
     """Compiled selectors stay fixed while runtime collection/emission can change."""
-    return {key: policy[key] for key in ('sources', 'functions')}
+    result = {key: policy[key] for key in ('sources', 'functions')}
+    if policy['lifetimes']['enabled']:
+        result['lifetimes'] = {key: policy['lifetimes'][key] for key in ('enabled', 'include', 'exclude')}
+    return result
 
 
 def dependency_paths(raw: str, root: Path) -> list[Path]:
@@ -63,16 +77,24 @@ def dependency_paths(raw: str, root: Path) -> list[Path]:
     return paths
 
 
-def inventory(path: Path, root: Path, sources: dict[str, str], mode: str) -> dict[str, Any]:
+def inventory(path: Path, root: Path, sources: dict[str, str], mode: str,
+              bindings: dict | None = None) -> dict[str, Any]:
     """Bind compiler-owned source/name/byte ranges before applying common selectors."""
     _, raw = checked_file(path, nofollow=True, include_content=True, max_bytes=8 * 1024 * 1024)
     value = decode(raw)
     fields = {'schema_version', 'kind', 'mode', 'definitions', 'sources', 'source_complete'}
-    if (set(value) != fields or type(value['schema_version']) is not int or value['schema_version'] != 1
-            or value['kind'] != 'otelc.rust.compiler-inventory' or value['mode'] != mode
+    lifetime = mode == 'lifetime-weave'
+    if lifetime:
+        fields |= {'lifetimes', 'lifetime_bodies', 'instrumentation_complete'}
+    if (set(value) != fields or type(value['schema_version']) is not int or value['schema_version'] != (2 if lifetime else 1)
+            or value['kind'] != ('otelc.rust.lifetime-weave' if lifetime else 'otelc.rust.compiler-inventory') or value['mode'] != mode
             or value['sources'] != sources or value['source_complete'] is not False
             or type(value['definitions']) is not list or len(value['definitions']) > 65536):
         raise ValueError('Rust compiler inventory differs from the requested original inputs')
+    if lifetime and (bindings is None or value['lifetimes'] != bindings['lifetimes']
+                     or value['lifetime_bodies'] != bindings['lifetime_bodies']
+                     or value['instrumentation_complete'] is not False):
+        raise ValueError('Rust woven lifetime bindings differ from discovery')
     identities = []
     for row in value['definitions']:
         if (type(row) is not dict or set(row) != {'identity', 'file', 'compiler_name', 'start', 'end', 'asynchronous', 'expanded'}
@@ -89,6 +111,25 @@ def inventory(path: Path, root: Path, sources: dict[str, str], mode: str) -> dic
     if identities != sorted(set(identities)):
         raise ValueError('Rust compiler definitions must be ordered and unique')
     return value
+
+
+def lifetime_bindings(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dict:
+    """Do not turn an enabled, empty or unsupported selection into function-only success."""
+    selected = rust_lifetimes.read(path, policy, root, sources)
+    if selected['schema_version'] != 2:
+        raise ValueError('public Rust lifetimes require version-two type discovery')
+    result = rust_lifetimes.weave_request(path, policy, root, sources)
+    if not result['lifetimes']:
+        raise ValueError('Rust lifetime policy matched no supported original locals')
+    return result
+
+
+def expected_woven(inspected: dict, mode: str, bindings: dict | None) -> dict:
+    """Only the declared mode and checked lifetime bindings may differ from inspection."""
+    result = inspected | {'mode': mode}
+    if bindings is not None:
+        result.update(bindings, kind='otelc.rust.lifetime-weave', instrumentation_complete=False)
+    return result
 
 
 def selected(policy: Policy, root: Path, value: dict[str, Any]) -> list[str]:
@@ -154,45 +195,49 @@ def build(policy: Policy, root: Path, entry: Path, output: Path, *,
         raise ValueError('Rust original entry changed during input discovery')
     requests = []
 
-    def compile_mode(mode: str, names: list[str]) -> dict[str, Any]:
+    def compile_mode(mode: str, names: list[str], changes: dict | None = None) -> Path:
         request = {'schema_version': 1, 'mode': mode, 'root': str(root), 'entry': str(entry),
-                   'sources': sources, 'selected': names, 'output': str(output / (mode + '-inventory.json'))}
+                   'sources': sources, 'selected': names, 'output': str(output / (mode + '-inventory.json'))} | (changes or {})
         filename = output / (mode + '-request.json')
         filename.write_text(json.dumps(request, sort_keys=True, indent=2) + '\n')
         arguments = [driver, *flags, '-o', str(output / 'instrumented')]
-        if mode == 'weave':
+        if mode in ('weave', 'lifetime-weave'):
             arguments += ['--extern', 'otelc_rust_bridge=' + tools['products'][1]['path'],
                 '-L', 'native=' + str(Path(sdk['library']['path']).parent), '-l', 'dylib=otelc_native_runtime',
                 '-C', 'link-arg=' + str(output / 'bootstrap.o'),
                 '-C', 'link-arg=-Wl,-rpath,' + str(Path(sdk['library']['path']).parent)]
         rust_compiler.execute(arguments, output, mode, env | {'OTELC_RUST_REQUEST': str(filename)}, cwd=root)
         requests.append(native_gate.identity(filename))
-        return inventory(Path(request['output']), root, sources, mode)
+        return Path(request['output'])
 
-    inspected = compile_mode('inspect', [])
+    inspected = inventory(compile_mode('inspect', []), root, sources, 'inspect')
     names = selected(policy, root, inspected)
+    bindings = None
+    if policy.data['lifetimes']['enabled']:
+        bindings = lifetime_bindings(compile_mode('lifetime-inspect', []), policy, root, sources)
     rust_compiler.execute([rustc, *flags, '-o', str(output / 'plain')], output, 'plain', env, cwd=root)
     bootstrap = output / 'bootstrap.cpp'
     bootstrap.write_text(native_launch.BOOTSTRAP)
     rust_compiler.execute([sdk['toolchain']['directory'] + '/clang++', '-std=c++17', '-O2', '-c',
         str(bootstrap), '-I', str(ROOT / 'adapters/native/launcher/include'), '-o', str(output / 'bootstrap.o')],
         output, 'bootstrap', env, cwd=root)
-    woven = compile_mode('weave', names)
-    if {**inspected, 'mode': 'weave'} != woven:
+    mode = modes(policy)[-1]
+    woven = inventory(compile_mode(mode, names, bindings), root, sources, mode, bindings)
+    if expected_woven(inspected, mode, bindings) != woven:
         raise ValueError('Rust inspection and weaving consumed different declarations')
     if inputs != [native_gate.identity(Path(row['path'])) for row in inputs]:
         raise ValueError('Rust original inputs changed during compilation')
     rust_compiler.verify(compiler)
     if native_build.sdk(sdk_directory) != sdk:
         raise ValueError('Rust SDK inputs changed during compilation')
-    value = {'schema_version': 1, 'kind': 'otelc.rust.source-build', 'profile': PROFILE,
+    value = {'schema_version': 2 if bindings is not None else 1, 'kind': 'otelc.rust.source-build', 'profile': profile(policy),
         'root': str(root), 'entry': str(entry), 'policy': policy.data,
         'policy_sha256': native_launch.digest(policy.data),
         'selection_sha256': native_launch.digest(selection(policy.data)),
         'tools': native_gate.identity(compiler.directory / rust_compiler.MANIFEST),
         'sdk': native_gate.identity(Path(sdk_directory).resolve() / native_build.SDK_MANIFEST),
         'inputs': inputs, 'requests': requests, 'selected': names, 'optimisation': optimisation,
-        'inventories': [native_gate.identity(output / (mode + '-inventory.json')) for mode in ('inspect', 'weave')],
+        'inventories': [native_gate.identity(output / (mode + '-inventory.json')) for mode in modes(policy)],
         'products': [native_gate.identity(output / lane) for lane in ('plain', 'instrumented')],
         'source_complete': False}
     encoded = json.dumps(value, sort_keys=True, indent=2) + '\n'
@@ -213,8 +258,9 @@ def verify(value: Build, policy: Policy) -> dict[str, Any]:
     data = value.manifest()
     fields = {'schema_version', 'kind', 'profile', 'root', 'entry', 'policy', 'policy_sha256', 'selection_sha256',
               'tools', 'sdk', 'inputs', 'requests', 'selected', 'optimisation', 'inventories', 'products', 'source_complete'}
-    if (set(data) != fields or type(data['schema_version']) is not int or data['schema_version'] != 1
-            or data['kind'] != 'otelc.rust.source-build' or data['profile'] != PROFILE
+    if (set(data) != fields or type(data['schema_version']) is not int
+            or data['schema_version'] != (2 if policy.data['lifetimes']['enabled'] else 1)
+            or data['kind'] != 'otelc.rust.source-build' or data['profile'] != profile(policy)
             or data['source_complete'] is not False or type(data['root']) is not str
             or type(data['entry']) is not str or type(data['policy']) is not dict
             or type(data['optimisation']) is not int or data['optimisation'] not in (0, 1, 2, 3)):
@@ -245,15 +291,18 @@ def verify(value: Build, policy: Policy) -> dict[str, Any]:
     for row in data['inputs']:
         if native_gate.identity(Path(row['path'])) != row:
             raise ValueError('Rust original input changed')
-    for key, names in (('requests', ('inspect-request.json', 'weave-request.json')),
-                       ('inventories', ('inspect-inventory.json', 'weave-inventory.json')),
+    for key, names in (('requests', tuple(mode + '-request.json' for mode in modes(policy))),
+                       ('inventories', tuple(mode + '-inventory.json' for mode in modes(policy))),
                        ('products', ('plain', 'instrumented'))):
         if data[key] != [native_gate.identity(value.directory / name) for name in names]:
             raise ValueError('Rust fixed build product changed: ' + key)
     sources = {row['path']: row['sha256'] for row in data['inputs'] if Path(row['path']).suffix == '.rs'}
     observed = inventory(value.directory / 'inspect-inventory.json', root, sources, 'inspect')
-    woven = inventory(value.directory / 'weave-inventory.json', root, sources, 'weave')
-    if selected(policy, root, observed) != data['selected'] or {**observed, 'mode': 'weave'} != woven:
+    bindings = lifetime_bindings(value.directory / 'lifetime-inspect-inventory.json', policy, root, sources) \
+        if policy.data['lifetimes']['enabled'] else None
+    mode = modes(policy)[-1]
+    woven = inventory(value.directory / (mode + '-inventory.json'), root, sources, mode, bindings)
+    if selected(policy, root, observed) != data['selected'] or expected_woven(observed, mode, bindings) != woven:
         raise ValueError('Rust retained compiler selection changed')
     return data
 

@@ -41,9 +41,10 @@ def export_failures(exports: dict[str, Any]) -> list[int]:
 
 
 def lifetime_failures(value: dict[str, Any], enabled: bool) -> list[int]:
-    """The declared C/C++ lifetime profile cannot hide pending or censored objects."""
-    key = 'resource_accounting' if value['language'] == 'c' else 'object_accounting'
-    pending = 'releasing' if value['language'] == 'c' else 'destroying'
+    """The declared native lifetime profile cannot hide pending or censored objects."""
+    key, pending = {'c': ('resource_accounting', 'releasing'),
+                    'cpp': ('object_accounting', 'destroying'),
+                    'rust': ('drop_accounting', 'dropping')}[value['language']]
     if (key in value) != enabled:
         raise ValueError('native benchmark lifetime profile differs')
     if not enabled:
@@ -61,9 +62,9 @@ def lifetime_failures(value: dict[str, Any], enabled: bool) -> list[int]:
 def validate_drain(report: dict[str, Any] | None, policy: Policy) -> None:
     """Require closed engines and complete SDK accounting before publishing timings."""
     value = health.validate(report)
-    if value['language'] == 'rust' and (value['schema_version'] != 1
-            or 'drop_accounting' in value or policy.data['lifetimes']['enabled']):
-        raise ValueError('public Rust function-only health profile differs')
+    if value['language'] == 'rust' and (value['schema_version'] != (5 if policy.data['lifetimes']['enabled'] else 1)
+            or ('drop_accounting' in value) != policy.data['lifetimes']['enabled']):
+        raise ValueError('public Rust health profile differs from the lifetime policy')
     if (value['language'] not in ('c', 'cpp', 'rust') or value['phase'] != 'final' or value['sdk_attached'] is not True
             or value['lifecycle'] != {'flush': 'succeeded', 'shutdown': 'succeeded'}):
         raise ValueError('native benchmark SDK shutdown is incomplete')

@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This candidate compares the unchanged [Rust example](../examples/rust/BenchmarkApp.rs) against equivalent Java, Microsoft TypeScript/JavaScript, Python, Go and C/C++ workloads. It requires a retained [original-source Rust build](rust-source.md), Rust 1.98.1 and the matching native SDK. It does not add Cargo, async, lifetime or task/service support. Actual end-to-end execution, independent review, required hosted checks and downstream Grafana evidence remain acceptance requirements.
+This candidate compares the unchanged [Rust example](../examples/rust/BenchmarkApp.rs) against equivalent Java, Microsoft TypeScript/JavaScript, Python, Go and C/C++ workloads. It requires a retained [original-source Rust build](rust-source.md), Rust 1.98.1 and the matching native SDK. The [public drop-lifetime candidate](rust-public-lifetimes.md) additionally accepts the shared lifetime policy; Cargo, async and task/service support remain separate. Actual end-to-end execution, independent review, required hosted checks and downstream Grafana evidence remain acceptance requirements.
 
 ## Build and run
 
@@ -42,7 +42,7 @@ One instrumented PID runs all four collection/emission states. The schedule bala
 
 The driver checks independent checksums, unchanged build/source/product identities and final SDK health bound to the actual Rust PID, policy and selection. Active/lost/invalid function observations, pending/dropped spans, failed exports, incomplete SDK shutdown or unavailable counters refuse a successful report and publication. SDK counters do not establish downstream receipt. Raw responses, samples, controls, stderr and final health remain available after a failure. Cleanup attempts stop/reap, input verification and final SDK validation independently, preserving the first error and attaching later failures as notes. Exported measurements cannot be rolled back if a later exporter shutdown fails.
 
-This direct-child profile does not qualify prepared host release, arbitrary child processes or complete source/dependency provenance. `source_complete=false` remains explicit. Rust ownership/drop and async cancellation remain required project work; they are not inferred from these function benchmarks.
+This direct-child profile does not qualify prepared host release, arbitrary child processes or complete source/dependency provenance. `source_complete=false` remains explicit. The public drop profile additionally checks complete, uncensored Rust lifetime drain before publishing. Broader ownership and async cancellation remain required project work; they are not inferred from these benchmarks.
 
 ## Grafana
 

@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from ci.rust_compiler_cases import APPLICATION, WORK
-from otelc import control, health, native_build, native_gate, native_launch
+from otelc import control, health, native_benchmark, native_build, native_gate, native_launch
 from otelc import rust_build, rust_compiler, rust_launch, rust_benchmark
 from otelc.config import Policy
 from test_java_integration import Capture
@@ -152,8 +152,7 @@ class RustInputTests(unittest.TestCase):
             rust_build.selected(policy(), self.root, value)
 
     def test_unimplemented_policy_requests_refuse_before_build_side_effects(self) -> None:
-        for section, key, value in (('lifetimes', 'enabled', True), ('context', 'tasks', True),
-                                    ('context', 'http', True)):
+        for section, key, value in (('context', 'tasks', True), ('context', 'http', True)):
             data = copy.deepcopy(policy().data)
             data[section][key] = value
             with self.subTest(section=section, key=key), self.assertRaises(ValueError):
@@ -342,6 +341,237 @@ class RustPublicExecutionTests(unittest.TestCase):
     def line(self, child: subprocess.Popen) -> bytes:
         self.assertTrue(select.select([child.stdout], [], [], 15)[0], 'Rust response timed out')
         return child.stdout.readline()
+
+    def lifetime_build(self) -> tuple[rust_build.Build, Policy]:
+        """Reuse actual SDK/tools, never an authored compiled build fixture."""
+        cls = type(self)
+        if not hasattr(cls, 'lifetime_built'):
+            if shutil.disk_usage(self.base).free < rust_compiler.FLOOR:
+                raise ValueError('fresh Rust lifetime applications require 8 GiB free')
+            root = self.base / 'lifetime-application'; root.mkdir()
+            entry = root / 'LifetimeApp.rs'
+            entry.write_bytes((rust_build.ROOT / 'examples/rust/LifetimeApp.rs').read_bytes())
+            data = Policy.load(rust_build.ROOT / 'examples/rust-lifetimes.toml').data
+            data['export'].update(self.policy.data['export'])
+            cls.lifetime_current = Policy.parse(data)
+            original = self.built.manifest()
+            cls.lifetime_built = rust_build.build(cls.lifetime_current, root, Path(entry.name),
+                self.base / 'lifetime-build', tools_directory=Path(original['tools']['path']).parent,
+                sdk_directory=Path(original['sdk']['path']).parent)
+        return cls.lifetime_built, cls.lifetime_current
+
+    def lifetime_panic_output(self, raw: bytes) -> bytes:
+        """Only the compiler's documented per-thread numeric label differs."""
+        normalized, count = re.subn(rb"(?m)^(thread 'main' )\([0-9]+\)( panicked at )",
+                                    rb'\1(<thread-id>)\2', raw)
+        self.assertEqual(count, 2)
+        return normalized
+
+    def exercise_public_lifetimes(self, built: rust_build.Build, current: Policy,
+                                  expected_error: bytes) -> None:
+        runtime = self.runtime.with_name(current.data['resource']['service_name'])
+        child = rust_launch.start(built, current, runtime, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self.children.append(child)
+        self.assertEqual(self.line(child), b'ready\n')
+        endpoint = runtime / 'control.json'; control.wait_ready(endpoint, child.pid)
+
+        def call(value: int, expected: bytes) -> None:
+            child.stdin.write(f'{value}\n'.encode()); child.stdin.flush()
+            self.assertEqual(self.line(child), expected)
+
+        call(1, b'7 3\n')
+        control.request(endpoint, 'collection on'); control.request(endpoint, 'emission off')
+        call(2, b'-73 6\n')
+        exports = control.request(endpoint, 'health')['metric_exports']['batches_started']
+        control.request(endpoint, 'flush')
+        self.assertEqual(control.request(endpoint, 'health')['metric_exports']['batches_started'], exports)
+        control.request(endpoint, 'collection off'); control.request(endpoint, 'emission on')
+        call(3, b'-73 9\n')
+        control.request(endpoint, 'on'); call(1, b'7 12\n')
+        self.assertEqual(control.request(endpoint, 'status')['pid'], child.pid)
+        stdout, stderr = child.communicate(timeout=15)
+        self.assertEqual((child.returncode, stdout), (0, b''))
+        self.assertEqual(self.lifetime_panic_output(stderr), expected_error)
+        final = health.read(runtime / 'health.json')
+        rust_launch.validate_health(final, built, current, child.pid)
+        native_benchmark.validate_drain(final, current)
+        self.assertEqual(final['drop_accounting'], dict(types='2', admitted='12', completed='12',
+            live='0', dropping='0', ending='0', censored='0', lost='0', duplicates='0', invalid='0',
+            closing=True, closed=True))
+        plan = json.loads((runtime / 'plan.json').read_bytes())
+        self.assertEqual(plan['schema_version'], 3)
+        del plan['token']
+        (runtime / 'rust-plan-profile.json').write_text(json.dumps(plan, indent=2) + '\n')
+        self.check_public_lifetime_spans(current.data['resource']['service_name'])
+        calls = [point.as_int for request in self.capture.metrics for resource in request.resource_metrics
+                 if any(item.key == 'service.name' and item.value.string_value == current.data['resource']['service_name']
+                        for item in resource.resource.attributes)
+                 for scope in resource.scope_metrics for metric in scope.metrics
+                 if metric.name == 'otelc.function.calls' for point in metric.sum.data_points]
+        self.assertEqual(max(calls), 3 if current.data['metrics']['collection'] else 2)
+
+    def public_lifetime_spans(self, service: str) -> list:
+        return [span for request in self.capture.traces for resource in request.resource_spans
+                if any(item.key == 'service.name' and item.value.string_value == service
+                       for item in resource.resource.attributes)
+                for scope in resource.scope_spans for span in scope.spans]
+
+    def check_public_lifetime_spans(self, service: str) -> None:
+        spans = self.public_lifetime_spans(service)
+        functions = {span.span_id for span in spans if span.name == 'LifetimeApp.rs::workload'}
+        lifetimes = [span for span in spans if span.name.endswith(' lifetime')]
+        self.assertEqual((len(spans), len(functions), len(lifetimes)), (16, 4, 12))
+        exceptional = []
+        for span in lifetimes:
+            self.assertFalse(span.parent_span_id)
+            self.assertEqual(len(span.links), 1)
+            self.assertIn(span.links[0].span_id, functions)
+            labels = {item.key: item.value for item in span.attributes}
+            self.assertEqual(labels['boundary'].string_value, 'drop_entry')
+            exceptional.append(labels['otelc.drop.exception_exit'].bool_value)
+        self.assertEqual(sorted(exceptional), [False] * 11 + [True])
+
+    def test_public_lifetime_build_replay_all_live_states_and_unwind_preserve_originals(self) -> None:
+        built, current = self.lifetime_build()
+        metadata = built.manifest()
+        self.assertEqual((metadata['schema_version'], metadata['profile']), (2, rust_build.LIFETIME_PROFILE))
+        source = Path(metadata['entry']); original = native_gate.identity(source)
+        stock = rust_launch.start(built, current, self.runtime, plain=True, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        self.children.append(stock)
+        stdout, stderr = stock.communicate(input=b'1\n2\n3\n1\n', timeout=15)
+        self.assertEqual((stock.returncode, stdout), (0, b'ready\n7 3\n-73 6\n-73 9\n7 12\n'))
+        expected_error = self.lifetime_panic_output(stderr)
+        for collection, emission in ((False, False), (False, True), (True, False), (True, True)):
+            data = copy.deepcopy(current.data)
+            data['resource']['service_name'] = f'public-lifetimes-{int(collection)}{int(emission)}'
+            data['metrics'].update(collection=collection, emission=emission)
+            selected = Policy.parse(data)
+            with mock.patch.object(rust_compiler, 'execute', side_effect=AssertionError('replay must not compile')):
+                retained = rust_build.read(built.directory, selected)
+                self.exercise_public_lifetimes(retained, selected, expected_error)
+        self.assertEqual(native_gate.identity(source), original)
+        self.assertEqual(source.read_bytes(), (rust_build.ROOT / 'examples/rust/LifetimeApp.rs').read_bytes())
+
+    def test_public_lifetime_selection_and_unsupported_foreign_types_refuse(self) -> None:
+        built, current = self.lifetime_build()
+        for key, changed in (('enabled', False), ('include', ['*Zero']), ('exclude', ['*Item*'])):
+            data = copy.deepcopy(current.data); data['lifetimes'][key] = changed
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                rust_build.read(built.directory, Policy.parse(data))
+        root = self.base / 'lifetime-foreign'; root.mkdir()
+        source = root / 'app.rs'
+        source.write_text('fn workload(){let file=std::fs::File::open("never-executed").unwrap();'
+                          'std::hint::black_box(&file);}fn main(){workload();}')
+        original = native_gate.identity(source)
+        data = copy.deepcopy(current.data); data['lifetimes']['include'] = ['*File*']
+        selected = Policy.parse(data); metadata = built.manifest()
+        output = self.base / 'lifetime-foreign-build'
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            rust_build.build(selected, root, Path('app.rs'), output,
+                tools_directory=Path(metadata['tools']['path']).parent,
+                sdk_directory=Path(metadata['sdk']['path']).parent)
+        self.assertFalse((output / 'instrumented').exists())
+        self.assertFalse((output / rust_build.MANIFEST).exists())
+        self.assertEqual(native_gate.identity(source), original)
+
+    def test_public_lifetime_cli_uses_the_same_external_policy_in_both_lanes(self) -> None:
+        built, current = self.lifetime_build()
+        config = self.base / 'public-rust-lifetimes.toml'
+        config.write_text((rust_build.ROOT / 'examples/rust-lifetimes.toml').read_text() +
+            '\n[export]\nendpoint = ' + json.dumps(current.data['export']['endpoint']) + '\n')
+        selected = Policy.load(config)
+        for plain in (True, False):
+            runtime = self.runtime.with_name(self.runtime.name + ('-plain' if plain else '-sdk'))
+            command = [str(rust_build.ROOT / 'bin/quux-otelc'), '--config', str(config),
+                'rust-run', '--build', str(built.directory), '--runtime', str(runtime)]
+            if plain:
+                command.append('--plain')
+            child = subprocess.Popen(command, cwd=rust_build.ROOT,
+                env=os.environ | {'OTELC_PYTHON': sys.executable}, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.children.append(child)
+            stdout, stderr = child.communicate(input=b'1\n', timeout=20)
+            self.assertEqual((child.returncode, stdout, stderr), (0, b'ready\n7 3\n', b''))
+            execution = json.loads((runtime / 'rust-execution.json').read_bytes())
+            self.assertEqual(execution['profile'], rust_build.LIFETIME_PROFILE)
+            self.assertIsNone(execution['validation_failure'])
+            if not plain:
+                rust_launch.validate_health(execution['sdk_health'], built, selected, execution['pid'])
+                self.assertEqual(execution['sdk_health']['drop_accounting']['completed'], '3')
+
+    def test_public_selected_by_value_ownership_refuses_before_publishing_a_build(self) -> None:
+        built, current = self.lifetime_build()
+        metadata = built.manifest()
+        root = self.base / 'lifetime-argument'; root.mkdir()
+        source = root / 'app.rs'
+        source.write_text('struct Item;impl Drop for Item{fn drop(&mut self){}}'
+            'fn consume(item:Item){std::hint::black_box(&item);}fn main(){consume(Item);}')
+        original = native_gate.identity(source)
+        output = self.base / 'lifetime-argument-build'
+        with self.assertRaises(ValueError):
+            rust_build.build(current, root, Path('app.rs'), output,
+                tools_directory=Path(metadata['tools']['path']).parent,
+                sdk_directory=Path(metadata['sdk']['path']).parent)
+        self.assertFalse((output / 'instrumented').exists())
+        self.assertFalse((output / rust_build.MANIFEST).exists())
+        self.assertEqual(native_gate.identity(source), original)
+
+    def test_public_lifetime_capacity_and_trace_policy_reach_the_running_sdk(self) -> None:
+        built, current = self.lifetime_build()
+        for limit, traces in ((1, True), (4096, False)):
+            data = copy.deepcopy(current.data)
+            data['lifetimes']['max_live'] = limit
+            data['traces']['enabled'] = traces
+            data['resource']['service_name'] = f'rust-drop-limit-{limit}'
+            selected = Policy.parse(data)
+            runtime = self.runtime.with_name(data['resource']['service_name'])
+            retained = rust_build.read(built.directory, selected)
+            child = rust_launch.start(retained, selected, runtime, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            self.children.append(child)
+            stdout, stderr = child.communicate(input=b'1\n', timeout=15)
+            self.assertEqual((child.returncode, stdout, stderr), (0, b'ready\n7 3\n', b''))
+            final = health.read(runtime / 'health.json')
+            rust_launch.validate_health(final, retained, selected, child.pid)
+            expected = ('1', '2') if limit == 1 else ('3', '0')
+            self.assertEqual((final['drop_accounting']['admitted'], final['drop_accounting']['lost']), expected)
+            self.assertEqual(final['drop_accounting']['completed'], expected[0])
+            self.assertEqual(final['function_accounting']['ended'], '1')
+            self.assertEqual(len(self.public_lifetime_spans(data['resource']['service_name'])), 2 if traces else 0)
+            if limit == 1:
+                with self.assertRaisesRegex(ValueError, 'observation loss'):
+                    native_benchmark.validate_drain(final, selected)
+            else:
+                native_benchmark.validate_drain(final, selected)
+                self.assertEqual(final['span_accounting']['sampled_started'], '0')
+                self.assertEqual(final['trace_exports']['units_started'], '0')
+
+    def test_shared_lifetime_benchmark_policy_retains_real_drop_drain(self) -> None:
+        original = self.built.manifest()
+        root = self.base / 'lifetime-benchmark-application'
+        source = root / rust_benchmark.EXAMPLE; source.parent.mkdir(parents=True)
+        source.write_bytes((rust_benchmark.ROOT / rust_benchmark.EXAMPLE).read_bytes())
+        data = Policy.load(rust_build.ROOT / 'examples/otelc.toml').data
+        data['export'].update(self.policy.data['export'])
+        data['benchmark'].update(iterations=3, samples=2, warmup=1)
+        data['traces'].update(sample_ratio=1.0)
+        data['resource']['service_name'] = 'rust-drop-benchmark'
+        current = Policy.parse(data)
+        built = rust_build.build(current, root, rust_benchmark.EXAMPLE, self.base / 'lifetime-benchmark-build',
+            tools_directory=Path(original['tools']['path']).parent,
+            sdk_directory=Path(original['sdk']['path']).parent)
+        output = self.base / 'rust-drop-benchmark'
+        report = rust_benchmark.run(current, output, build_directory=built.directory,
+            comparison_id='actual-rust-drop-smoke', publish=False)
+        self.assertEqual(report['launch_profile'], rust_build.LIFETIME_PROFILE)
+        self.assertEqual(report['expected_checksum'], rust_benchmark.benchmark.checksum(3))
+        self.assertEqual(set(report['samples_ns_per_operation']), {'plain', *rust_benchmark.benchmark.STATES})
+        self.assertEqual({row['pid'] for row in report['transitions']}, {report['pids']['instrumented']})
+        self.assertEqual(report['sdk_health']['drop_accounting']['admitted'], '28')
+        self.assertEqual(report['sdk_health']['drop_accounting']['completed'], '28')
+        rust_build.verify(built, current)
 
     def test_literal_arguments_and_runtime_environment_preserve_original_output(self) -> None:
         arguments = ('--option=two words', 'λ', '')

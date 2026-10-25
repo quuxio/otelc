@@ -148,7 +148,7 @@ def run(policy: Policy, output: Path, *, build_directory: Path,
         ('--edition=2024', '-Copt-level=' + str(metadata['optimisation']), '-g'), original['sha256'])
     report = benchmark_process.summary(policy, output, records, identity,
         {lane: process.pid for lane, process in processes.items()}, None, comparison_id)
-    report.update(launch_profile=rust_build.PROFILE, source_complete=False,
+    report.update(launch_profile=rust_build.profile(policy), source_complete=False,
         sdk_process_model='embedded; application CPU/RSS includes SDK; counted once',
         config_sha256=native_launch.digest(policy.data), build=metadata,
         build_identity=native_gate.identity(built.directory / rust_build.MANIFEST),
