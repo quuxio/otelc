@@ -22,6 +22,40 @@ def counters(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, int]:
     return {key: int(row[key]) for key in keys}
 
 
+def function_failures(value: dict[str, Any]) -> list[int]:
+    """Every admitted function must end with available, loss-free accounting."""
+    functions = counters(value['function_accounting'],
+        ('started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors'))
+    if value['function_accounting']['closed'] is not True or functions['started'] != functions['ended']:
+        raise ValueError('native benchmark function accounting is incomplete')
+    return [functions[key] for key in ('active', 'lost', 'invalid', 'metadata_errors')]
+
+
+def export_failures(exports: dict[str, Any]) -> list[int]:
+    """SDK batch and unit completion must both explain every export attempt."""
+    observed = counters(exports, ('batches_started', 'batches_succeeded', 'batches_failed',
+                                'batches_pending', 'units_started', 'units_succeeded', 'units_failed'))
+    if observed['batches_started'] != observed['batches_succeeded'] or observed['units_started'] != observed['units_succeeded']:
+        raise ValueError('native benchmark exports are incomplete')
+    return [observed[key] for key in ('batches_failed', 'batches_pending', 'units_failed')]
+
+
+def lifetime_failures(value: dict[str, Any], enabled: bool) -> list[int]:
+    """The declared C++ lifetime profile cannot hide pending or censored objects."""
+    if ('object_accounting' in value) != enabled:
+        raise ValueError('native benchmark lifetime profile differs')
+    if not enabled:
+        return []
+    objects = value.get('object_accounting')
+    if type(objects) is not dict or objects['closed'] is not True or objects['closing'] is not True:
+        raise ValueError('native benchmark lifetime accounting is unavailable')
+    observed = counters(objects, ('admitted', 'completed', 'live', 'destroying', 'ending',
+                                  'censored', 'lost', 'duplicates', 'invalid'))
+    if observed['admitted'] != observed['completed']:
+        raise ValueError('native benchmark has incomplete object lifetimes')
+    return [observed[key] for key in ('live', 'destroying', 'ending', 'censored', 'lost', 'duplicates', 'invalid')]
+
+
 def validate_drain(report: dict[str, Any] | None, policy: Policy) -> None:
     """Require closed engines and complete SDK accounting before publishing timings."""
     value = health.validate(report)
@@ -29,37 +63,44 @@ def validate_drain(report: dict[str, Any] | None, policy: Policy) -> None:
             or value['lifecycle'] != {'flush': 'succeeded', 'shutdown': 'succeeded'}):
         raise ValueError('native benchmark SDK shutdown is incomplete')
     failures = [counters(value['metric_flush'], ('failed_attempts',))['failed_attempts']]
-    functions = counters(value['function_accounting'],
-        ('started', 'ended', 'active', 'lost', 'invalid', 'metadata_errors'))
-    if value['function_accounting']['closed'] is not True or functions['started'] != functions['ended']:
-        raise ValueError('native benchmark function accounting is incomplete')
-    failures.extend(functions[key] for key in ('active', 'lost', 'invalid', 'metadata_errors'))
+    failures.extend(function_failures(value))
     spans = counters(value['span_accounting'],
         ('sampled_started', 'sampled_ended', 'sampled_active', 'queue_pending', 'queue_dropped'))
     if value['span_accounting']['queue_evidence'] != 'derived_after_shutdown' or spans['sampled_started'] != spans['sampled_ended']:
         raise ValueError('native benchmark span accounting is incomplete')
     failures.extend(spans[key] for key in ('sampled_active', 'queue_pending', 'queue_dropped'))
     for kind in ('trace_exports', 'metric_exports'):
-        exports = counters(value[kind], ('batches_started', 'batches_succeeded', 'batches_failed',
-                                        'batches_pending', 'units_started', 'units_succeeded', 'units_failed'))
-        if exports['batches_started'] != exports['batches_succeeded'] or exports['units_started'] != exports['units_succeeded']:
-            raise ValueError('native benchmark exports are incomplete')
-        failures.extend(exports[key] for key in ('batches_failed', 'batches_pending', 'units_failed'))
+        failures.extend(export_failures(value[kind]))
     if spans['sampled_ended'] != int(value['trace_exports']['units_succeeded']):
         raise ValueError('native benchmark sampled spans differ from SDK exports')
-    if ('object_accounting' in value) != policy.data['lifetimes']['enabled']:
-        raise ValueError('native benchmark lifetime profile differs')
-    if policy.data['lifetimes']['enabled']:
-        objects = value.get('object_accounting')
-        if type(objects) is not dict or objects['closed'] is not True or objects['closing'] is not True:
-            raise ValueError('native benchmark lifetime accounting is unavailable')
-        counts = counters(objects, ('admitted', 'completed', 'live', 'destroying', 'ending',
-                                    'censored', 'lost', 'duplicates', 'invalid'))
-        if counts['admitted'] != counts['completed']:
-            raise ValueError('native benchmark has incomplete object lifetimes')
-        failures.extend(counts[key] for key in ('live', 'destroying', 'ending', 'censored', 'lost', 'duplicates', 'invalid'))
+    failures.extend(lifetime_failures(value, policy.data['lifetimes']['enabled']))
     if any(failures):
         raise ValueError('native benchmark has observation loss or failed exports')
+
+
+def workload(policy: Policy, process: launch.Application, output: Path, endpoint: Path | None,
+             records: benchmark.Measurements, expected: int) -> None:
+    """Measure startup/warmup separately before sampling and final metric restore."""
+    runtime = output / ('plain' if endpoint is None else 'instrumented')
+    if endpoint is not None:
+        control.wait_ready(endpoint, process.pid)
+        control.request(endpoint, 'off')
+    response = benchmark.batch(process, 1)
+    process.first_response = {'elapsed_ns': time.monotonic_ns() - process.created_at_monotonic_ns,
+        'calls': 1, 'response': response,
+        'scope': 'process creation through first workload response; includes ownership/readiness, controls, IPC and body'}
+    launch.prepared.files.write(runtime / 'native-benchmark-first-response.json', process.first_response)
+    if response['checksum'] != benchmark.checksum(1):
+        raise ValueError('native benchmark startup checksum differs')
+    for _ in range(policy.data['benchmark']['warmup']):
+        if benchmark.batch(process, policy.data['benchmark']['iterations'])['checksum'] != expected:
+            raise ValueError('native benchmark warmup checksum differs')
+    if endpoint is not None:
+        control.request(endpoint, 'flush')
+    benchmark_process.measure_batches(process, policy, output, endpoint, None, expected, records,
+                                      supervisor_pid=process.supervisor_pid)
+    if endpoint is not None:
+        benchmark_process.finalize_metrics(process, endpoint, None, output)
 
 
 def measure(policy: Policy, built: native_launch.Build, output: Path, *, plain: bool,
@@ -71,25 +112,7 @@ def measure(policy: Policy, built: native_launch.Build, output: Path, *, plain: 
     failure = None
     try:
         with launch.application(policy, built, runtime, plain=plain) as process:
-            if endpoint is not None:
-                control.wait_ready(endpoint, process.pid)
-                control.request(endpoint, 'off')
-            response = benchmark.batch(process, 1)
-            process.first_response = {'elapsed_ns': time.monotonic_ns() - process.created_at_monotonic_ns,
-                'calls': 1, 'response': response,
-                'scope': 'process creation through first workload response; includes ownership/readiness, controls, IPC and body'}
-            launch.prepared.files.write(runtime / 'native-benchmark-first-response.json', process.first_response)
-            if response['checksum'] != benchmark.checksum(1):
-                raise ValueError('native benchmark startup checksum differs')
-            for _ in range(policy.data['benchmark']['warmup']):
-                if benchmark.batch(process, policy.data['benchmark']['iterations'])['checksum'] != expected:
-                    raise ValueError('native benchmark warmup checksum differs')
-            if endpoint is not None:
-                control.request(endpoint, 'flush')
-            benchmark_process.measure_batches(process, policy, output, endpoint, None, expected, records,
-                                              supervisor_pid=process.supervisor_pid)
-            if endpoint is not None:
-                benchmark_process.finalize_metrics(process, endpoint, None, output)
+            workload(policy, process, output, endpoint, records, expected)
     except BaseException as error:
         failure = error
         raise
