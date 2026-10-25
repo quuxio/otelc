@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
@@ -162,14 +163,10 @@ func assertLifetimeObserverFailure(t *testing.T, h *harness, started int) {
 		t.Fatalf("observer failure left a span open: ended=%d started=%d", len(spans), started)
 	}
 	for _, span := range spans {
-		boundary := ""
-		for _, value := range span.Attributes {
-			if value.Key == "boundary" {
-				boundary = value.Value.AsString()
-			}
-		}
-		if boundary != "observer_failure" {
-			t.Fatalf("observer failure invented a completed lifetime: %q", boundary)
+		attributes := attribute.NewSet(span.Attributes...)
+		boundary, _ := attributes.Value("boundary")
+		if boundary.AsString() != "observer_failure" {
+			t.Fatalf("observer failure invented a completed lifetime: %q", boundary.AsString())
 		}
 	}
 	for _, name := range []string{"otelc.lifetime.admitted", "otelc.lifetime.completed"} {
