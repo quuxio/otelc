@@ -61,7 +61,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. Failed runs retain available evidence and report the first error, followed by any cleanup failures. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript, Python, C and C++ runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 
@@ -111,6 +111,8 @@ The separate [private-handle compiler component](docs/java-handle-witness.md) bi
 ```sh
 make check
 ```
+
+CI runs for pull requests against any base branch, including stacked language work. Linux, macOS and Sonar check out the same exact PR head; a manually dispatched branch run remains separate from PR-specific analysis. The protected main checks and component coverage floors still apply before merge.
 
 The full check also requires LLVM 22, CMake, Ninja, Protobuf with its compiler, and libcurl development headers/libraries. CI installs these dependencies. It builds and exercises the native HTTP runtime, rejects skipped launcher tests and enforces the component coverage floors; see [native launch checks](docs/native-launch.md#focused-checks).
 

@@ -8,7 +8,7 @@ import shutil
 import time
 from typing import Any
 
-from otelc import benchmark, benchmark_process, control, health, native_build, native_launch
+from otelc import benchmark, benchmark_cleanup, benchmark_process, control, health, native_build, native_launch
 from otelc import native_benchmark_launch as launch, native_gate
 from otelc.config import Policy
 
@@ -121,7 +121,9 @@ def measure(policy: Policy, built: native_launch.Build, output: Path, *, plain: 
             if process.sdk_report is None and failure is not None:
                 failure.add_note('Final native SDK report is unavailable; drain was not validated')
             else:
-                validate_drain(process.sdk_report, policy)
+                cleanup = benchmark_cleanup.Cleanup(failure)
+                cleanup.run(lambda: validate_drain(process.sdk_report, policy), 'Native benchmark final validation')
+                cleanup.finish()
     launch.retain(process, runtime, plain=plain)
     return process
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, TextIO
 
-from otelc import benchmark, prepared_python as prepared
+from otelc import benchmark, benchmark_cleanup, prepared_python as prepared
 from otelc import python_launch_files as files
 from otelc import python_input_journal as inputs
 from otelc import python_sdk_protocol as wire
@@ -181,31 +181,17 @@ def recheck(application: Application) -> None:
             raise ValueError('prepared Python benchmark retained evidence changed')
 
 
-def _shutdown(owner: subprocess.Popen[str], process: Application | None,
-              failure: BaseException | None) -> bool:
-    """Reap the owned group and close pipes while retaining a body failure."""
-    clean = True
-    try:
-        try:
-            if process is not None:
-                benchmark.stop(process)
-        finally:
-            prepared.stop_group(owner)
-    except BaseException as error:
-        if failure is None:
-            raise
-        clean = False
-        failure.add_note('Prepared benchmark cleanup also failed: ' + type(error).__name__)
-    finally:
-        # Attempt both closes in the existing order, preserving the exception
-        # already in flight and any additional close failure in its chain.
-        try:
-            if owner.stdin is not None:
-                owner.stdin.close()
-        finally:
-            if owner.stdout is not None:
-                owner.stdout.close()
-    return clean
+def _shutdown(owner: subprocess.Popen[str], process: Application | None) -> None:
+    """Attempt application/group shutdown and both pipe closes in order."""
+    cleanup = benchmark_cleanup.Cleanup()
+    if process is not None:
+        cleanup.run(lambda: benchmark.stop(process), 'Prepared benchmark application stop')
+    cleanup.run(lambda: prepared.stop_group(owner), 'Prepared benchmark owner stop')
+    if owner.stdin is not None:
+        cleanup.run(owner.stdin.close, 'Prepared benchmark stdin close')
+    if owner.stdout is not None:
+        cleanup.run(owner.stdout.close, 'Prepared benchmark stdout close')
+    cleanup.finish()
 
 
 @contextmanager
@@ -230,13 +216,11 @@ def application(policy: Policy, runtime: Path, *, plain: bool) -> Iterator[Appli
             failure = error
             raise
         finally:
-            clean = False
-            try:
-                clean = _shutdown(owner, process, failure)
-            finally:
-                if process is not None:
-                    try:
-                        completed(process, runtime, policy, plain=plain)
-                    finally:
-                        if not clean:
-                            process.evidence.clear()
+            cleanup = benchmark_cleanup.Cleanup(failure)
+            clean = cleanup.run(lambda: _shutdown(owner, process), 'Prepared benchmark cleanup')
+            if process is not None:
+                verified = cleanup.run(lambda: completed(process, runtime, policy, plain=plain),
+                                       'Prepared benchmark completion')
+                if not clean or not verified:
+                    process.evidence.clear()
+            cleanup.finish()
