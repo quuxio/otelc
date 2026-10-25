@@ -1,5 +1,6 @@
 #include "otelc/object_runtime.h"
 #include "otelc/function_runtime.h"
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <map>
@@ -18,6 +19,10 @@ namespace metrics = opentelemetry::metrics;
 namespace {
 using Clock = std::chrono::steady_clock;
 thread_local bool inside_object_runtime = false;
+struct SavedErrno {
+  const int value = errno;
+  ~SavedErrno() noexcept { errno = value; }
+};
 struct Guard {
   Guard() { inside_object_runtime = true; }
   ~Guard() { inside_object_runtime = false; }
@@ -166,6 +171,7 @@ ObjectRuntime::~ObjectRuntime() { Close(); }
 
 bool ObjectRuntime::Admit(const void *address, const char *type_usr, const char *type_name,
                          const trace::SpanContext &creation) noexcept {
+  const SavedErrno saved;
   if (inside_object_runtime) { ++impl_->lost; return false; }
   Guard guard;
   auto epoch = std::chrono::system_clock::now();
@@ -204,6 +210,7 @@ bool ObjectRuntime::Admit(const void *address, const char *type_usr, const char 
 }
 
 std::uint64_t ObjectRuntime::Destroying(const void *address, const char *type_usr) noexcept {
+  const SavedErrno saved;
   if (inside_object_runtime) { ++impl_->lost; return 0; }
   Guard guard;
   try {
@@ -220,6 +227,7 @@ std::uint64_t ObjectRuntime::Destroying(const void *address, const char *type_us
 }
 
 std::uint64_t ObjectRuntime::Releasing(const void *address) noexcept {
+  const SavedErrno saved;
   if (inside_object_runtime) { ++impl_->lost; return 0; }
   Guard guard;
   if (impl_->limits.boundary != LifetimeBoundary::free_entry) { ++impl_->invalid; return 0; }
@@ -235,6 +243,7 @@ std::uint64_t ObjectRuntime::Releasing(const void *address) noexcept {
 }
 
 bool ObjectRuntime::Destroyed(std::uint64_t token, std::int32_t unwinding) noexcept {
+  const SavedErrno saved;
   if (!token) return true;
   if (inside_object_runtime) { ++impl_->invalid; return false; }
   Guard guard;
@@ -265,6 +274,7 @@ ObjectStatus ObjectRuntime::Status() const {
 }
 
 bool ObjectRuntime::Close() noexcept {
+  const SavedErrno saved;
   if (inside_object_runtime) return false;
   Guard guard;
   std::unique_lock<std::mutex> lock(impl_->mutex);
