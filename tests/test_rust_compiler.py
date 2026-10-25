@@ -113,6 +113,35 @@ class RustToolRecordTests(unittest.TestCase):
                 rust_compiler.build(self.root / 'wrong-version')
             self.assertEqual(calls.call_count, 2)
 
+    def test_public_builder_links_compiler_libraries_from_its_exact_sysroot(self) -> None:
+        sysroot = self.root / 'sysroot'
+        output = self.root / 'fresh-build'
+        environments = {}
+
+        def execute(arguments, directory, label, env):
+            environments[label] = env.copy()
+            if label == 'rustc-path':
+                return str(sysroot / 'bin/rustc').encode()
+            if label == 'rustc-version':
+                return self.data['version'].encode()
+            if label == 'rustc-sysroot':
+                return str(sysroot).encode()
+            product = directory / ('compiler/debug/otelc-rust-compiler' if label == 'compiler-build'
+                                   else 'bridge/release/libotelc_rust_bridge.rlib')
+            product.parent.mkdir(parents=True)
+            product.write_bytes(b'literal product, not an executed compiler')
+            return b''
+
+        with mock.patch.object(rust_compiler, 'execute', side_effect=execute), \
+                mock.patch.object(rust_compiler.shutil, 'which', return_value='/fixed/rustup'):
+            tools = rust_compiler.build(output)
+        self.assertEqual(tools.directory, output)
+        flags = environments['compiler-build']['RUSTFLAGS']
+        self.assertIn(f'-L native={sysroot}/lib', flags)
+        self.assertIn(f'-C link-arg=-Wl,-rpath,{sysroot}/lib', flags)
+        self.assertEqual(environments['compiler-build']['RUSTC'], str(sysroot / 'bin/rustc'))
+        self.assertEqual(environments['bridge-build']['RUSTFLAGS'], '')
+
     def test_cli_tool_build_does_not_require_application_policy(self) -> None:
         from otelc import __main__ as cli
         result = self.write()
@@ -131,17 +160,38 @@ class RustCompilerCommandTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.output = Path(temporary.name).resolve()
+        # These command tests run ordinary Python children, never compilers.
+        space = mock.patch.object(rust_compiler.shutil, 'disk_usage',
+                                  return_value=SimpleNamespace(free=rust_compiler.FLOOR * 2))
+        space.start()
+        self.addCleanup(space.stop)
 
     def test_actual_success_failure_and_literal_arguments_have_retained_channels(self) -> None:
         argument = 'literal;$HOME `echo no`'
         raw = rust_compiler.execute([sys.executable, '-c', 'import sys;print(sys.argv[1])', argument],
                                     self.output, 'success', rust_compiler.environment())
         self.assertEqual(raw, argument.encode() + b'\n')
-        with self.assertRaisesRegex(ValueError, 'compile.stderr'):
+        with self.assertRaisesRegex(ValueError, 'compile.stderr') as failure:
             rust_compiler.execute([sys.executable, '-c', 'import sys;sys.stderr.write("original failure");sys.exit(7)'],
                                   self.output, 'compile', rust_compiler.environment())
         self.assertEqual((self.output / 'compile.stderr').read_text(), 'original failure')
         self.assertEqual(json.loads((self.output / 'compile.result.json').read_bytes())['exit_code'], 7)
+        self.assertIn('exit 7', str(failure.exception))
+        self.assertIn('original failure', str(failure.exception))
+
+    def test_failure_summary_retains_only_a_bounded_escaped_stderr_tail(self) -> None:
+        script = 'import os;os.write(2,b"prefix"+b"x"*8192+b"\\xff\\nlast diagnostic\\x1b");raise SystemExit(3)'
+        with self.assertRaises(ValueError) as failure:
+            rust_compiler.execute([sys.executable, '-c', script], self.output,
+                                  'large', rust_compiler.environment())
+        message = str(failure.exception)
+        self.assertIn('exit 3', message)
+        self.assertIn('last diagnostic\\x1b', message)
+        self.assertNotIn('prefix', message)
+        self.assertNotIn('\x1b', message)
+        self.assertNotIn('\n', message)
+        self.assertLess(len(message), 4600)
+        self.assertGreater((self.output / 'large.stderr').stat().st_size, 8192)
 
     def test_storage_floor_before_or_during_execution_refuses_and_reaps_owned_process(self) -> None:
         high, low = SimpleNamespace(free=rust_compiler.FLOOR * 2), SimpleNamespace(free=0)

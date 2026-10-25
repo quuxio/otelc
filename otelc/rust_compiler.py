@@ -86,7 +86,12 @@ def execute(arguments: list[str], output: Path, label: str,
                 'pid': process.pid, 'exit_code': process.returncode,
                 'seconds': time.monotonic() - started}) + '\n')
     if process.returncode:
-        raise ValueError('Rust compilation failed; inspect ' + str(output / (label + '.stderr')))
+        diagnostics = output / (label + '.stderr')
+        with diagnostics.open('rb') as stream:
+            stream.seek(max(0, diagnostics.stat().st_size - 4096))
+            tail = stream.read(4096).decode('utf-8', errors='replace')
+        raise ValueError(f'Rust compilation failed (exit {process.returncode}); '
+                         f'inspect {diagnostics}; stderr tail: {tail!r}')
     return (output / (label + '.stdout')).read_bytes()
 
 
@@ -129,7 +134,8 @@ def build(output: Path) -> Tools:
         raise ValueError('Rust compiler tools do not match their private sysroot')
     tools = [native_gate.identity(path) for path in (rustc, cargo, *libraries)]
     env.update(RUSTC=str(rustc), RUSTC_BOOTSTRAP='otelc_rust_compiler', CARGO_INCREMENTAL='0',
-               RUSTFLAGS=f'-C prefer-dynamic -C rpath -C link-arg=-Wl,-rpath,{sysroot}/lib')
+               RUSTFLAGS=f'-C prefer-dynamic -L native={sysroot}/lib '
+                         f'-C rpath -C link-arg=-Wl,-rpath,{sysroot}/lib')
     execute([str(cargo), 'build', '--offline', '--locked', '--manifest-path',
              str(ROOT / 'native/rust/compiler/Cargo.toml'), '--target-dir', str(output / 'compiler')],
             output, 'compiler-build', env)
