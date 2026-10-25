@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -37,6 +38,10 @@ using Micros = std::chrono::microseconds;
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 namespace native = otelc::native;
+struct SavedErrno {
+  const int value = errno;
+  ~SavedErrno() noexcept { errno = value; }
+};
 namespace metrics = opentelemetry::sdk::metrics;
 namespace traces = opentelemetry::sdk::trace;
 namespace otlp = opentelemetry::exporter::otlp;
@@ -472,6 +477,7 @@ Json ReadPlan(int fd) {
 }  // namespace
 
 extern "C" void otelc_function_register_v1(const otelc_function_descriptor_v1 *items, std::uint64_t count) noexcept {
+  const SavedErrno saved;
   auto &global = Global();
   try {
     std::scoped_lock lock(global.mutex);
@@ -489,13 +495,16 @@ extern "C" void otelc_function_register_v1(const otelc_function_descriptor_v1 *i
   } catch (...) { ++global.errors; }
 }
 extern "C" std::uint64_t otelc_function_enter_v1(const void *address) noexcept {
+  const SavedErrno saved;
   if (auto *runtime = Installed()) return runtime->functions->Enter(address);
   auto &state = Global(); std::scoped_lock lock(state.mutex); ++state.errors; return 0;
 }
 extern "C" void otelc_function_leave_v1(std::uint64_t token, std::int32_t unwinding) noexcept {
+  const SavedErrno saved;
   if (auto *runtime = Installed()) runtime->functions->Leave(token, unwinding);
 }
 extern "C" void otelc_object_created_v1(const void *address, const char *type, const char *name) noexcept {
+  const SavedErrno saved;
   if (auto *runtime = Installed(); runtime && runtime->objects) {
     runtime->objects->Admit(address, type, name, runtime->functions->CurrentContext());
   } else {
@@ -503,12 +512,14 @@ extern "C" void otelc_object_created_v1(const void *address, const char *type, c
   }
 }
 extern "C" std::uint64_t otelc_object_destroying_v1(const void *address, const char *type) noexcept {
+  const SavedErrno saved;
   if (auto *runtime = Installed(); runtime && runtime->objects)
     return runtime->objects->Destroying(address, type);
   ++Global().errors;
   return 0;
 }
 extern "C" void otelc_object_destroyed_v1(std::uint64_t token, std::int32_t unwinding) noexcept {
+  const SavedErrno saved;
   if (auto *runtime = Installed(); runtime && runtime->objects)
     runtime->objects->Destroyed(token, unwinding);
   else
