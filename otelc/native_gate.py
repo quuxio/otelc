@@ -99,18 +99,7 @@ class Waiting:
         if identity(Path(target['path'])) != target:
             raise ValueError('native target changed before release')
         if self._ready is None:
-            raw = b''
-            while b'\n' not in raw and len(raw) <= 1024:
-                remaining = self.deadline - time.monotonic()
-                if remaining <= 0 or not select.select([self.events], [], [], remaining)[0]:
-                    raise ValueError('native gate readiness timed out')
-                piece = os.read(self.events, 1025 - len(raw))
-                if not piece:
-                    raise ValueError('native gate ended before readiness')
-                raw += piece
-            if len(raw) > 1024 or not raw.endswith(b'\n'):
-                raise ValueError('native gate readiness exceeds its framing bound')
-            self._ready = decode(raw)
+            self._ready = self._read_ready()
         value = self._ready
         expected = {'schema_version': 1, 'kind': 'otelc.native.exec-ready',
                     'pid': self.process.pid, 'parent_pid': os.getpid(),
@@ -120,6 +109,21 @@ class Waiting:
                 or os.getsid(self.process.pid) != self.process.pid):
             raise ValueError('native gate does not identify the owned waiting process')
         return dict(value)
+
+    def _read_ready(self) -> dict[str, Any]:
+        """Read one bounded readiness frame within the original release budget."""
+        raw = b''
+        while b'\n' not in raw and len(raw) <= 1024:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0 or not select.select([self.events], [], [], remaining)[0]:
+                raise ValueError('native gate readiness timed out')
+            piece = os.read(self.events, 1025 - len(raw))
+            if not piece:
+                raise ValueError('native gate ended before readiness')
+            raw += piece
+        if len(raw) > 1024 or not raw.endswith(b'\n'):
+            raise ValueError('native gate readiness exceeds its framing bound')
+        return decode(raw)
 
     def release(self) -> None:
         """Recheck the held child and inputs immediately before one explicit ack."""

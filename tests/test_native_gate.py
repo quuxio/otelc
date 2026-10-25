@@ -67,8 +67,9 @@ __attribute__((constructor)) static void initialise(void){const char*p=getenv("L
         self.assertEqual(value['parent_pid'], os.getpid())
         self.assertFalse((self.base / 'normal.ctor').exists())
         self.assertFalse(select.select([waiting.process.stdout], [], [], 0)[0])
+        unverified = self.waiting('unverified')
         with self.assertRaisesRegex(ValueError, 'before release'):
-            self.waiting('unverified').release()
+            unverified.release()
         waiting.release()
         output, errors = waiting.process.communicate(b'12\n', timeout=5)
         self.assertEqual((waiting.process.returncode, errors), (0, b''))

@@ -12,6 +12,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef OTELC_GATE_COVERAGE
+extern int __llvm_profile_write_file(void);
+#endif
+
 static long number(const char *text, long minimum, long maximum) {
   char *end = NULL;
   errno = 0;
@@ -49,7 +53,8 @@ static int release_received(int fd, long timeout) {
     if (count < 0 && errno == EINTR) continue;
     if (count != 1 || command != 'G') return 125;
     now = milliseconds();
-    return now < 0 ? 125 : now >= deadline ? 124 : 0;
+    if (now < 0) return 125;
+    return now >= deadline ? 124 : 0;
   }
 }
 
@@ -62,7 +67,9 @@ static int environment_from(int fd, struct environment *result) {
   struct stat info;
   if (fstat(fd, &info) || !S_ISREG(info.st_mode) || info.st_uid != getuid() ||
       (info.st_mode & 0777) != 0600 || info.st_size < 0 || info.st_size > 4 * 1024 * 1024) return 0;
-  size_t size = (size_t)info.st_size, offset = 0, count = 0;
+  size_t size = (size_t)info.st_size;
+  size_t offset = 0;
+  size_t count = 0;
   char *raw = calloc(size + 1, 1);
   if (!raw) return 0;
   while (offset < size) {
@@ -73,8 +80,10 @@ static int environment_from(int fd, struct environment *result) {
   }
   if (size && raw[size - 1]) { free(raw); return 0; }
   for (offset = 0; offset < size; offset += strlen(raw + offset) + 1) {
-    char *equal = strchr(raw + offset, '=');
-    if (!equal || equal == raw + offset || ++count > 65536) { free(raw); return 0; }
+    const char *equal = strchr(raw + offset, '=');
+    if (!equal || equal == raw + offset) { free(raw); return 0; }
+    ++count;
+    if (count > 65536) { free(raw); return 0; }
   }
   char **values = calloc(count + 1, sizeof(char *));
   if (!values) { free(raw); return 0; }
@@ -107,7 +116,6 @@ int main(int argc, char **argv) {
   if (!valid_environment) return 125;
   /* exec preserves the verified PID/group and all application standard streams. */
 #ifdef OTELC_GATE_COVERAGE
-  extern int __llvm_profile_write_file(void);
   __llvm_profile_write_file();
 #endif
   execve(argv[5], argv + 5, supplied.values);
