@@ -7,7 +7,7 @@ use rustc_middle::{
 };
 use rustc_span::{Spanned, def_id::DefId};
 
-fn call<'tcx>(
+pub(crate) fn call<'tcx>(
     tcx: TyCtxt<'tcx>,
     def: DefId,
     args: Vec<Operand<'tcx>>,

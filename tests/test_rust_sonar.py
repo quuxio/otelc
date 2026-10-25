@@ -24,6 +24,7 @@ class RustAnalysisTests(unittest.TestCase):
                      'native/rust/bridge/src/keys_tests.rs',
                      'ci/rust_compiler_cases.py', 'ci/check_rust_compiler.py', 'ci/rust_sonar.py',
                      'otelc/health.py', 'tests/test_rust_drop_health.py', 'ci/rust_lifetime_cases.py',
+                     'ci/rust_drop_cases.py',
                      'otelc/rust_lifetimes.py', 'tests/test_rust_lifetimes.py'):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +50,7 @@ class RustAnalysisTests(unittest.TestCase):
         self.write()
         rust_sonar.verify(self.root, self.output)
         text = (self.output / 'rust-coverage.lcov').read_text()
-        self.assertEqual(text.count('SF:'), 6)
+        self.assertEqual(text.count('SF:'), len(rust_sonar.RUST_SOURCES))
         self.assertNotIn(str(self.root), text)
         self.assertEqual((self.output / 'rust-clippy.json').read_bytes(), self.clippy)
 

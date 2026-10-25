@@ -11,6 +11,7 @@ extern crate rustc_middle;
 extern crate rustc_parse;
 extern crate rustc_span;
 
+mod drops;
 mod hooks;
 mod instrument;
 mod lifetimes;
@@ -142,8 +143,11 @@ impl Callbacks for Probe {
                 lifetimes::install(&mut providers.queries);
             });
         }
-        if request().mode == "weave" {
+        if request().weaving() {
             config.override_queries = Some(|_, providers| {
+                if request().mode == "lifetime-weave" {
+                    drops::install(&mut providers.queries);
+                }
                 ORIGINAL
                     .set(providers.queries.optimized_mir)
                     .expect("one Rust MIR provider per process");
@@ -166,7 +170,7 @@ impl Callbacks for Probe {
             if entry != request().entry {
                 bail!("compiler crate root differs from the original entry");
             }
-            if request().mode != "weave" {
+            if !request().weaving() {
                 return Ok(None);
             }
             let mut parser = rustc_parse::new_parser_from_source_str(
@@ -230,9 +234,20 @@ impl Callbacks for Probe {
             {
                 bail!("selected Rust identity exceeds the native name bound");
             }
-            let bytes = serde_json::to_vec(&serde_json::json!({"schema_version":1,
+            if request().mode == "lifetime-weave" {
+                drops::force(tcx)?;
+            }
+            let mut inventory = serde_json::json!({"schema_version":1,
                 "kind":"otelc.rust.compiler-inventory","mode":request().mode,"definitions":rows,
-                "sources":request().sources,"source_complete":false}))?;
+                "sources":request().sources,"source_complete":false});
+            if request().mode == "lifetime-weave" {
+                inventory["schema_version"] = serde_json::json!(2);
+                inventory["kind"] = serde_json::json!("otelc.rust.lifetime-weave");
+                inventory["lifetimes"] = serde_json::to_value(&request().lifetimes)?;
+                inventory["lifetime_bodies"] = serde_json::to_value(&request().lifetime_bodies)?;
+                inventory["instrumentation_complete"] = serde_json::json!(false);
+            }
+            let bytes = serde_json::to_vec(&inventory)?;
             if bytes.len() > 8 * 1024 * 1024 {
                 bail!("Rust inventory exceeds 8 MiB");
             }
@@ -248,7 +263,7 @@ impl Callbacks for Probe {
                 tcx.dcx().err(format!("otelc Rust compiler: {error:#}"));
                 Compilation::Stop
             }
-            Ok(()) if request().mode != "weave" => Compilation::Stop,
+            Ok(()) if !request().weaving() => Compilation::Stop,
             Ok(()) => Compilation::Continue,
         }
     }

@@ -13,6 +13,7 @@ import unittest
 from otelc import control, health, native_build, native_launch
 from otelc.config import Policy
 from test_java_integration import Capture
+from ci.rust_drop_cases import RustAutomaticDropCases
 
 ROOT = Path(__file__).resolve().parents[1]
 APPLICATION = '''use std::io::{self,BufRead};
@@ -118,7 +119,7 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-class RustCompilerCases(unittest.TestCase):
+class RustCompilerCases(RustAutomaticDropCases, unittest.TestCase):
     """Run only with explicit matching products; never silently skip this suite."""
 
     @classmethod
@@ -210,8 +211,9 @@ class RustCompilerCases(unittest.TestCase):
                    'sources': self.sources, 'selected': list(selected), 'output': str(inventory)}
         request.update(request_changes or {})
         arguments = [str(self.driver), str(entry), '--crate-name', 'component', '--edition=2024',
-                     '--sysroot', self.sysroot, '-Copt-level=' + str(optimisation), '-g', '-o', str(product)]
-        if mode == 'weave':
+                     '--sysroot', self.sysroot, '-Copt-level=' + str(optimisation),
+                     '-C', 'instrument-coverage', '-g', '-o', str(product)]
+        if mode in ('weave', 'lifetime-weave'):
             library = bridge or self.bridge
             arguments += ['--extern', 'otelc_rust_bridge=' + str(library),
                 '-L', 'dependency=' + str(library.parent / 'deps'),
@@ -287,7 +289,7 @@ class RustCompilerCases(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             stock = self.base / f'stock-{optimisation}'
             result = self.command([str(self.rustc), str(entry), '--edition=2024',
-                '-Copt-level=' + str(optimisation), '-o', str(stock)])
+                '-Copt-level=' + str(optimisation), '-C', 'instrument-coverage', '-o', str(stock)])
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             reference = subprocess.run([str(stock)], input=b'3\n2\n-1\n4\n-1\n', capture_output=True,
                 env=dict(os.environ, RUST_BACKTRACE='0'), timeout=15)

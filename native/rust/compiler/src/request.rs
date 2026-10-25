@@ -19,6 +19,8 @@ pub(crate) struct Request {
     pub output: PathBuf,
     pub sources: BTreeMap<PathBuf, String>,
     pub selected: BTreeSet<String>,
+    pub lifetimes: Option<BTreeMap<String, BTreeMap<u32, String>>>,
+    pub lifetime_bodies: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -40,6 +42,50 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
 }
 
 impl Request {
+    pub fn weaving(&self) -> bool {
+        matches!(self.mode.as_str(), "weave" | "lifetime-weave")
+    }
+
+    fn profile(&self) -> bool {
+        if self.schema_version == 1 {
+            return matches!(self.mode.as_str(), "inspect" | "weave" | "lifetime-inspect")
+                && self.lifetimes.is_none()
+                && self.lifetime_bodies.is_none();
+        }
+        let Some(bodies) = &self.lifetimes else {
+            return false;
+        };
+        let Some(fingerprints) = &self.lifetime_bodies else {
+            return false;
+        };
+        self.schema_version == 2
+            && self.mode == "lifetime-weave"
+            && !bodies.is_empty()
+            && bodies.len() <= 4096
+            && bodies.values().map(BTreeMap::len).sum::<usize>() <= 65536
+            && bodies.keys().eq(fingerprints.keys())
+            && fingerprints.values().all(|value| {
+                value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            && bodies.iter().all(|(name, locals)| {
+                !name.is_empty()
+                    && name.len() <= 4096
+                    && !name.contains('\0')
+                    && !locals.is_empty()
+                    && locals.len() <= 4096
+                    && locals.iter().all(|(local, name)| {
+                        *local > 0
+                            && *local < 65536
+                            && !name.is_empty()
+                            && name.len() <= 4096
+                            && !name.contains('\0')
+                    })
+            })
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let mut bytes = Vec::new();
         fs::File::open(path)?
@@ -49,11 +95,7 @@ impl Request {
             bail!("Rust compiler request exceeds 8 MiB");
         }
         let value: Self = serde_json::from_slice(&bytes).context("read Rust compiler request")?;
-        if value.schema_version != 1
-            || !matches!(
-                value.mode.as_str(),
-                "inspect" | "weave" | "lifetime-inspect"
-            )
+        if !value.profile()
             || value.root.canonicalize()? != value.root
             || !value.root.is_dir()
             || value.entry.canonicalize()? != value.entry
@@ -73,7 +115,7 @@ impl Request {
                     .output
                     .parent()
                     .context("missing Rust output directory")?
-            || (value.mode != "weave" && !value.selected.is_empty())
+            || (!value.weaving() && !value.selected.is_empty())
         {
             bail!("invalid Rust compiler component request");
         }

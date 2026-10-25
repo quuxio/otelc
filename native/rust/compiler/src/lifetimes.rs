@@ -309,3 +309,15 @@ pub(crate) fn publish(tcx: TyCtxt<'_>) -> Result<()> {
         .write_all(&bytes)?;
     Ok(())
 }
+
+pub(crate) fn body_digest<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    id: LocalDefId,
+    body: &Body<'tcx>,
+) -> Result<String> {
+    let row = definition(tcx, id)?.context("Rust lifetime body has no original definition")?;
+    // Value objects use sorted keys, including nested source/type objects. The
+    // consumer hashes this same complete inventory body as compact UTF-8 JSON.
+    let value = serde_json::to_value(capture(tcx, id, body, row)?)?;
+    Ok(crate::request::digest(&serde_json::to_vec(&value)?))
+}
