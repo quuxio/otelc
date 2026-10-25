@@ -331,17 +331,18 @@ func TestLifecycleFailureAndOutcomes(t *testing.T) {
 }
 
 func TestCollectionSwitchDoesNotWaitForAnUnrelatedMetricExport(t *testing.T) {
+	sink := &receiver{}
 	seen := make(chan struct{})
 	release := make(chan struct{})
 	var first sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		_, _ = io.Copy(io.Discard, request.Body)
 		first.Do(func() { close(seen) })
 		select {
 		case <-release:
 		case <-request.Context().Done():
+			return
 		}
-		w.Header().Set("Content-Type", "application/x-protobuf")
+		sink.serve(w, request)
 	}))
 	t.Cleanup(server.Close)
 	cfg := configuration(server.URL)
@@ -353,11 +354,32 @@ func TestCollectionSwitchDoesNotWaitForAnUnrelatedMetricExport(t *testing.T) {
 	go func() { finished <- r.Flush(context.Background()) }()
 	<-seen
 	response := command(t, r, "collection off")
+	if count, _, _ := sink.snapshot(); count != 0 {
+		t.Fatal("held export reached the receiver before release")
+	}
 	close(release)
 	if err := <-finished; err != nil {
 		t.Fatal(err)
 	}
 	if response["error"] != nil || response["collection"] != false || response["emission"] != true {
 		t.Fatal("collection-only change waited for an unrelated emission barrier")
+	}
+	if count, _, calls := sink.snapshot(); count != 1 || calls != 1 {
+		t.Fatal("already admitted export did not finish after collection-off")
+	}
+	invoke(r)
+	if err := r.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if count, _, calls := sink.snapshot(); count != 1 || calls != 1 {
+		t.Fatal("collection-off admitted another snapshot or measurement")
+	}
+	command(t, r, "collection on")
+	invoke(r)
+	if err := r.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if count, _, calls := sink.snapshot(); count != 2 || calls != 2 {
+		t.Fatal("collection did not resume on the same pipeline")
 	}
 }
