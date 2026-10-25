@@ -282,6 +282,28 @@ class NativeUnitExecutionTests(unittest.TestCase):
                 # Original facts stay invalid even if the bytes are restored.
                 with self.assertRaises(ValueError): native_launch.verify(built)
 
+    def test_changed_application_system_header_is_refused_after_real_compilation(self) -> None:
+        root = self.base / 'app'; root.mkdir()
+        include = root / 'include'; include.mkdir()
+        header = include / 'value.h'; header.write_text('#define ANSWER 3\n')
+        source = root / 'main.c'; source.write_text('#include <value.h>\nint main(void){return ANSWER;}\n')
+        recipe = {'schema_version': 1, 'kind': native_units.RECIPE_KIND, 'assets': [],
+            'units': [{'id': 'main', 'role': 'application', 'source': str(source), 'language': 'c',
+                'directory': str(root), 'flags': ['-std=c11', '-O1', '-isystem', str(include)],
+                'overlay': None, 'rename_main': False}],
+            'link': {'language': 'c', 'directory': str(root), 'flags': []}}
+        output = self.base / 'built'
+        native_build.build(self.policy, 'c', root, [], output, sdk_directory=self.sdk, recipe=recipe)
+        built, _, _ = native_build.verify(output, self.policy)
+        header.write_text('#define ANSWER 9\n')
+        with self.assertRaises(ValueError):
+            native_build.verify(output, self.policy)
+        for lane in ('plain', 'instrumented'):
+            self.assertIn(str(header), {row['path'] for row in built.manifest()['dependencies'][lane + '-main']})
+        header.write_text('#define ANSWER 3\n')
+        with self.assertRaises(ValueError):
+            native_launch.verify(built)
+
     def test_incomplete_or_relabelled_build_records_cannot_hide_inputs_or_commands(self) -> None:
         _, _, _, built, _ = self.build('cpp')
         original = built.manifest()
