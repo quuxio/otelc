@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
-from otelc import control, java
+from otelc import benchmark_cleanup, control, java
 from otelc.config import Policy
 
 STATES = {"both_off": (False, False), "collection_only": (True, False),
@@ -74,20 +74,33 @@ def batch(process: Application, count: int) -> dict[str, Any]:
 
 def stop(process: Application) -> None:
     """Bound shutdown and surface an unexpected application exit."""
+    failure = None
     try:
         if process.poll() is None and process.stdin:
             process.stdin.write("quit\n")
             process.stdin.flush()
         if process.wait(timeout=10) != 0:
             raise ValueError("benchmark application exited unsuccessfully")
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=5)
+        cleanup = benchmark_cleanup.Cleanup(failure)
+        cleanup.run(lambda: reap(process), 'Benchmark forced stop')
         if process.stdin:
-            process.stdin.close()
+            cleanup.run(process.stdin.close, 'Benchmark stdin close')
         if process.stdout:
-            process.stdout.close()
+            cleanup.run(process.stdout.close, 'Benchmark stdout close')
+        cleanup.finish()
+
+
+def reap(process: Application) -> None:
+    """Kill and reap an application that did not exit during cooperative stop."""
+    if process.poll() is None:
+        cleanup = benchmark_cleanup.Cleanup()
+        cleanup.run(process.kill, 'Benchmark kill')
+        cleanup.run(lambda: process.wait(timeout=5), 'Benchmark reap')
+        cleanup.finish()
 
 
 def export_result(report: dict[str, Any], endpoint: str) -> None:
@@ -100,6 +113,7 @@ def export_result(report: dict[str, Any], endpoint: str) -> None:
     exporter = OTLPMetricExporter(endpoint=endpoint.rstrip("/") + "/v1/metrics", timeout=3)
     reader = InMemoryMetricReader()
     provider = MeterProvider(resource=Resource.create({"service.name": "otelc-benchmark-driver"}), metric_readers=[reader])
+    failure = None
     try:
         meter = provider.get_meter("io.quux.otelc.benchmark")
         comparison_id = report.get("comparison_id", report["run_id"])
@@ -117,9 +131,14 @@ def export_result(report: dict[str, Any], endpoint: str) -> None:
         metrics = reader.get_metrics_data()
         if metrics is None or exporter.export(metrics) is not MetricExportResult.SUCCESS:
             raise ValueError("Collector did not accept benchmark metrics")
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        provider.shutdown(timeout_millis=5000)
-        exporter.shutdown(timeout_millis=5000)
+        cleanup = benchmark_cleanup.Cleanup(failure)
+        cleanup.run(lambda: provider.shutdown(timeout_millis=5000), 'Benchmark driver provider shutdown')
+        cleanup.run(lambda: exporter.shutdown(timeout_millis=5000), 'Benchmark driver exporter shutdown')
+        cleanup.finish()
 
 
 def export_launch_timing(meter: Any, report: dict[str, Any], comparison_id: str) -> None:
@@ -217,6 +236,7 @@ def measure_process(policy: Policy, output: Path, runtime: Path, *, plain: bool,
     with (output / ("plain.stderr" if plain else "instrumented.stderr")).open("w") as errors:
         process = subprocess.Popen(java.command(policy, runtime, plain=plain), stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=errors, text=True)
+        failure = None
         try:
             socket = runtime / "control.sock"
             if not plain:
@@ -230,8 +250,13 @@ def measure_process(policy: Policy, output: Path, runtime: Path, *, plain: bool,
             if not plain:
                 check_health(socket, policy, output)
             return process.pid
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            stop(process)
+            cleanup = benchmark_cleanup.Cleanup(failure)
+            cleanup.run(lambda: stop(process), 'Java benchmark cleanup')
+            cleanup.finish()
 
 
 def run(policy: Policy, output: Path, *, publish: bool = True,
