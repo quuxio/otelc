@@ -271,6 +271,10 @@ func TestControlCloseCancelsAnInFlightExporter(t *testing.T) {
 	seen, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if _, err := io.Copy(io.Discard, request.Body); err != nil {
+			t.Error(err)
+			return
+		}
 		select {
 		case seen <- struct{}{}:
 		default:
