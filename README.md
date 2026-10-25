@@ -44,7 +44,7 @@ The [C allocation lifetime candidate](docs/c-resources.md) binds selected record
 
 The internal [Rust compiler component](native/rust/compiler/README.md) connects compiler-owned synchronous MIR probes in unedited sources to the same official SDK pipeline. Its focused gate covers modules, optimised loops, original panics, live metric controls and decoded spans. Public Rust launch/preparation, automatic lifetimes, async/context integration, equivalent benchmarks and independent qualification remain work.
 
-The [Rust drop engine candidate](docs/rust-drop-engine.md) adds an internal ownership-transfer and drop boundary to the shared native SDK engine. Compiler-inserted Rust lifetime probes and their public build/launch integration remain required; this component does not enable Rust lifetime policies.
+The [Rust drop engine candidate](docs/rust-drop-engine.md) adds an internal ownership-transfer and drop boundary to the shared native SDK engine. Its [private Rust bridge and SDK candidate](docs/rust-drop-bridge.md) connects explicit hooks, bootstrap and versioned drop health. Compiler-inserted Rust lifetime probes and their public build/launch integration remain required; these components do not enable Rust lifetime policies.
 
 ## Java example and Grafana
 

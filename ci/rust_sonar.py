@@ -22,7 +22,7 @@ def source_paths(root: Path) -> list[Path]:
     return [*rust, *sorted((root / 'native/rust').rglob('Cargo.toml')),
             *sorted((root / 'native/rust').rglob('Cargo.lock')),
             *(root / name for name in ('ci/rust_compiler_cases.py', 'ci/check_rust_compiler.py',
-                                      'ci/rust_sonar.py', 'otelc/health.py'))]
+                                      'ci/rust_sonar.py', 'otelc/health.py', 'tests/test_rust_drop_health.py'))]
 
 
 def clippy_report(raw: bytes) -> None:

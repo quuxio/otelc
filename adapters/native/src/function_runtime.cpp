@@ -26,6 +26,9 @@ constexpr std::uint32_t MaxFunctions = 4096;
 constexpr std::uint32_t MaxActive = 512;
 constexpr std::size_t MaxName = 4096;
 struct SavedErrno {
+  SavedErrno() = default;
+  SavedErrno(const SavedErrno &) = delete;
+  SavedErrno &operator=(const SavedErrno &) = delete;
   const int value = errno;
   ~SavedErrno() noexcept { errno = value; }
 };

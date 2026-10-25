@@ -16,7 +16,8 @@ def main() -> int:
     sys.path.insert(0, str(ROOT / 'tests'))
     suite = unittest.defaultTestLoader.loadTestsFromNames(
         ['test_native_launch', 'test_native_launch_tooling', 'test_native_object_launch_runtime',
-         'test_native_public_resources', 'test_native_resource_build'])
+         'test_native_public_resources', 'test_native_resource_build',
+         'test_native_drop_launch_runtime', 'test_rust_drop_health'])
     selected = suite.countTestCases()
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     value = {'selected': selected, 'tests_run': result.testsRun,
