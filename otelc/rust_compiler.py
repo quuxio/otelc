@@ -134,7 +134,8 @@ def build(output: Path) -> Tools:
         raise ValueError('Rust compiler tools do not match their private sysroot')
     tools = [native_gate.identity(path) for path in (rustc, cargo, *libraries)]
     env.update(RUSTC=str(rustc), RUSTC_BOOTSTRAP='otelc_rust_compiler', CARGO_INCREMENTAL='0',
-               RUSTFLAGS=f'-C prefer-dynamic -C rpath -C link-arg=-Wl,-rpath,{sysroot}/lib')
+               RUSTFLAGS=f'-C prefer-dynamic -L native={sysroot}/lib '
+                         f'-C rpath -C link-arg=-Wl,-rpath,{sysroot}/lib')
     execute([str(cargo), 'build', '--offline', '--locked', '--manifest-path',
              str(ROOT / 'native/rust/compiler/Cargo.toml'), '--target-dir', str(output / 'compiler')],
             output, 'compiler-build', env)

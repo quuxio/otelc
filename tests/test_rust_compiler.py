@@ -113,6 +113,35 @@ class RustToolRecordTests(unittest.TestCase):
                 rust_compiler.build(self.root / 'wrong-version')
             self.assertEqual(calls.call_count, 2)
 
+    def test_public_builder_links_compiler_libraries_from_its_exact_sysroot(self) -> None:
+        sysroot = self.root / 'sysroot'
+        output = self.root / 'fresh-build'
+        environments = {}
+
+        def execute(arguments, directory, label, env):
+            environments[label] = env.copy()
+            if label == 'rustc-path':
+                return str(sysroot / 'bin/rustc').encode()
+            if label == 'rustc-version':
+                return self.data['version'].encode()
+            if label == 'rustc-sysroot':
+                return str(sysroot).encode()
+            product = directory / ('compiler/debug/otelc-rust-compiler' if label == 'compiler-build'
+                                   else 'bridge/release/libotelc_rust_bridge.rlib')
+            product.parent.mkdir(parents=True)
+            product.write_bytes(b'literal product, not an executed compiler')
+            return b''
+
+        with mock.patch.object(rust_compiler, 'execute', side_effect=execute), \
+                mock.patch.object(rust_compiler.shutil, 'which', return_value='/fixed/rustup'):
+            tools = rust_compiler.build(output)
+        self.assertEqual(tools.directory, output)
+        flags = environments['compiler-build']['RUSTFLAGS']
+        self.assertIn(f'-L native={sysroot}/lib', flags)
+        self.assertIn(f'-C link-arg=-Wl,-rpath,{sysroot}/lib', flags)
+        self.assertEqual(environments['compiler-build']['RUSTC'], str(sysroot / 'bin/rustc'))
+        self.assertEqual(environments['bridge-build']['RUSTFLAGS'], '')
+
     def test_cli_tool_build_does_not_require_application_policy(self) -> None:
         from otelc import __main__ as cli
         result = self.write()
