@@ -22,7 +22,8 @@ class RustAnalysisTests(unittest.TestCase):
         self.output.mkdir()
         for name in (*rust_sonar.RUST_SOURCES, 'native/rust/compiler/src/request_tests.rs',
                      'ci/rust_compiler_cases.py', 'ci/check_rust_compiler.py', 'ci/rust_sonar.py',
-                     'otelc/health.py', 'tests/test_rust_drop_health.py'):
+                     'otelc/health.py', 'tests/test_rust_drop_health.py', 'ci/rust_lifetime_cases.py',
+                     'otelc/rust_lifetimes.py', 'tests/test_rust_lifetimes.py'):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('// original source\n' * 10)
@@ -47,7 +48,7 @@ class RustAnalysisTests(unittest.TestCase):
         self.write()
         rust_sonar.verify(self.root, self.output)
         text = (self.output / 'rust-coverage.lcov').read_text()
-        self.assertEqual(text.count('SF:'), 5)
+        self.assertEqual(text.count('SF:'), 6)
         self.assertNotIn(str(self.root), text)
         self.assertEqual((self.output / 'rust-clippy.json').read_bytes(), self.clippy)
 
@@ -128,3 +129,14 @@ class RustMakeGateTests(unittest.TestCase):
         self.assertIn('build/rust-case.coverage', text)
         self.assertNotIn('native-launch-python.coverage', text)
         self.assertIn('test rust-compiler-check', (ROOT / 'Makefile').read_text())
+
+    def test_lifetime_recipe_keeps_both_new_python_floors_and_no_sdk_build(self) -> None:
+        text = self.dry('rust-lifetime-check')
+        self.assertIn('-m ci.rust_lifetime_cases', text)
+        for name in ('ci/rust_lifetime_cases.py', 'otelc/rust_lifetimes.py'):
+            self.assertIn("--include='*/" + name + "' --fail-under=80", text)
+        self.assertNotIn('build_sdk', text)
+        workflow = (ROOT / '.github/workflows/rust-lifetimes.yml').read_text()
+        self.assertIn('summaries(', workflow)
+        self.assertIn('native/rust/compiler/src/lifetimes.rs', workflow)
+        self.assertNotIn('make setup check', workflow)

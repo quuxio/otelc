@@ -21,7 +21,7 @@ pub(crate) struct Request {
     pub selected: BTreeSet<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct Definition {
     pub identity: String,
     pub file: PathBuf,
@@ -50,7 +50,10 @@ impl Request {
         }
         let value: Self = serde_json::from_slice(&bytes).context("read Rust compiler request")?;
         if value.schema_version != 1
-            || !matches!(value.mode.as_str(), "inspect" | "weave")
+            || !matches!(
+                value.mode.as_str(),
+                "inspect" | "weave" | "lifetime-inspect"
+            )
             || value.root.canonicalize()? != value.root
             || !value.root.is_dir()
             || value.entry.canonicalize()? != value.entry
@@ -70,7 +73,7 @@ impl Request {
                     .output
                     .parent()
                     .context("missing Rust output directory")?
-            || (value.mode == "inspect" && !value.selected.is_empty())
+            || (value.mode != "weave" && !value.selected.is_empty())
         {
             bail!("invalid Rust compiler component request");
         }
