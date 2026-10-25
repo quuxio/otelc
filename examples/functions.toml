@@ -1,0 +1,19 @@
+# One function-only policy for all equivalent language examples.
+schema_version = 3
+languages = ["java", "typescript", "javascript", "python", "go", "c", "cpp", "rust"]
+
+[resource]
+service_name = "otelc-function-examples"
+
+[sources]
+include = ["**"]
+
+[functions]
+include = ["*workload*"]
+
+[traces]
+enabled = true
+sample_ratio = 1.0
+
+[lifetimes]
+enabled = false
