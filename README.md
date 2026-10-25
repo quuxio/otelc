@@ -42,6 +42,8 @@ The [native paired benchmark candidate](docs/native-benchmarks.md) compares equi
 
 The [C allocation lifetime candidate](docs/c-resources.md) binds selected record-pointer `malloc`/`calloc` sites with Clang and observes matching calls after LLVM optimisation. Public build 5 connects those probes to allocation-to-`free` SDK spans/metrics, live controls, resource health and the common-policy C benchmark. Stack scopes, custom/interposed allocators, `realloc`, independent qualification and complete C language acceptance remain work.
 
+The internal [Rust compiler component](native/rust/compiler/README.md) connects compiler-owned synchronous MIR probes in unedited sources to the same official SDK pipeline. Its focused gate covers modules, optimised loops, original panics, live metric controls and decoded spans. Public Rust launch/preparation, automatic lifetimes, async/context integration, equivalent benchmarks and independent qualification remain work.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.

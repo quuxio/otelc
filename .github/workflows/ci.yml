@@ -36,6 +36,10 @@ jobs:
           java-version: '21'
       - name: Install native observer tools
         run: bash ci/install_llvm22.sh
+      - name: Install pinned Rust compiler tools
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev,clippy,rustfmt
+          rustup run 1.98.1 cargo fetch --locked --manifest-path native/rust/compiler/Cargo.toml
       - run: make setup check PYTHON=.venv/bin/python
       - run: docker compose config --quiet
   macos:
@@ -64,6 +68,10 @@ jobs:
           java-version: '21'
       - name: Install native observer tools
         run: brew install llvm@22 cmake ninja protobuf curl
+      - name: Install pinned Rust compiler tools
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev,clippy,rustfmt
+          rustup run 1.98.1 cargo fetch --locked --manifest-path native/rust/compiler/Cargo.toml
       - run: make setup check PYTHON=.venv/bin/python
   sonar:
     name: SonarQube
@@ -96,17 +104,23 @@ jobs:
           java-version: '21'
       - name: Install native observer tools
         run: bash ci/install_llvm22.sh
+      - name: Install pinned Rust compiler tools
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev,clippy,rustfmt
+          rustup run 1.98.1 cargo fetch --locked --manifest-path native/rust/compiler/Cargo.toml
       - run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
           npm ci --ignore-scripts --no-audit
-          make java-check node-check go-check test sonar-policy
+          make java-check node-check go-check test rust-compiler-check sonar-policy
           mvn -q -f adapters/java/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.11.0:copy-dependencies -DincludeScope=test -DoutputDirectory=target/dependency
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       - name: Identify commit
         id: commit
         run: printf 'sha=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Recheck Rust analysis inputs
+        run: .venv/bin/python -m ci.rust_sonar
       - uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

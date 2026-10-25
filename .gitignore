@@ -5,6 +5,7 @@ node_modules/
 __pycache__/
 *.pyc
 .coverage
+*.profraw
 .scannerwork/
 .env
 .DS_Store

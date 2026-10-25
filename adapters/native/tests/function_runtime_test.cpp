@@ -4,6 +4,7 @@
 #include <array>
 #include <algorithm>
 #include <cstdio>
+#include <cerrno>
 #include <functional>
 #include <future>
 #include <map>
@@ -101,7 +102,9 @@ struct SpanSink : traces::SpanExporter {
   std::mutex mutex;
   std::vector<std::unique_ptr<traces::SpanData>> spans;
   std::function<void()> callback;
+  std::function<void()> create_callback;
   std::unique_ptr<traces::Recordable> MakeRecordable() noexcept override {
+    if (create_callback) create_callback();
     return std::make_unique<traces::SpanData>();
   }
   opentelemetry::sdk::common::ExportResult Export(
@@ -304,6 +307,83 @@ void TracingOffAndExporterReentry() {
   assert(engine->Status().lost == 1 && engine->Status().invalid == 1 && engine->Close());
 }
 
+void NamedFunctionsOwnNamesAndShareTheRegistrationBudget() {
+  World world; auto engine = world.Engine({2, 4});
+  const otelc_function_descriptor_v1 native[] = {{&outer_address, "native"}};
+  assert(engine->Register(native, 1));
+  std::string name = "src/app.rs::workload";
+  auto token = engine->EnterNamed(name);
+  assert(token && engine->Status().registered == 2);
+  name.assign("changed after entry");
+  assert(engine->Leave(token, 0));
+  assert(world.span_sink->spans[0]->GetName() == "src/app.rs::workload");
+  token = engine->EnterNamed("src/app.rs::workload");
+  assert(token && engine->Leave(token, 1) && engine->Status().registered == 2);
+  assert(!engine->EnterNamed("another"));
+  const otelc_function_descriptor_v1 extra[] = {{&extra_address, "another native"}};
+  assert(!engine->Register(extra, 1));
+  token = engine->Enter(&outer_address); assert(token && engine->Leave(token, 0));
+  auto values = world.Collect();
+  assert(values.at("otelc.function.calls") == 3 && values.at("otelc.function.errors") == 1);
+  assert(engine->Status().lost == 1 && engine->Status().invalid == 1 && engine->Close());
+  assert(!engine->EnterNamed("src/app.rs::workload"));
+  assert(!engine->EnterNamed("after close") && engine->Status().registered == 2);
+}
+
+void NamedFunctionsValidateNamesAndRetainLiveStates() {
+  for (bool collection : {false, true}) for (bool emission : {false, true}) {
+    World world(collection, emission); auto engine = world.Engine();
+    auto first = engine->EnterNamed("src/app.rs::\xcf\x80");
+    assert(first && engine->Leave(first, 0));
+    auto values = world.Collect();
+    assert(collection ? values.at("otelc.function.calls") == 1 : values.empty());
+    assert(world.metric_sink->exports == unsigned(collection && emission));
+    assert(world.controller.SetCollection(true) && world.state->SetEmission(false));
+    auto second = engine->EnterNamed("src/app.rs::\xcf\x80");
+    assert(second && engine->Leave(second, 0)); world.Collect();
+    assert(world.metric_sink->exports == unsigned(collection && emission));
+    assert(world.state->SetEmission(true)); world.Collect();
+    assert(world.metric_sink->values.at("otelc.function.calls") == unsigned(collection ? 2 : 1));
+    assert(world.span_sink->spans.size() == 2 && engine->Status().registered == 1 && engine->Close());
+  }
+  World world; auto engine = world.Engine({1, 1});
+  assert(!engine->EnterNamed({}) && !engine->EnterNamed(std::string("a\0b", 3)));
+  assert(!engine->EnterNamed(std::string(4097, 'x')) && !engine->Status().registered);
+  auto token = engine->EnterNamed(std::string(4096, 'x'));
+  assert(token && engine->Leave(token, 0));
+  assert(world.span_sink->spans[0]->GetName().size() == 4096);
+  assert(engine->Status().invalid == 3 && engine->Close());
+  World metrics_only; auto no_traces = metrics_only.Engine({}, false);
+  token = no_traces->EnterNamed("src/app.rs::metrics_only");
+  assert(token && no_traces->Leave(token, 0));
+  assert(metrics_only.span_sink->spans.empty());
+  assert(metrics_only.Collect().at("otelc.function.calls") == 1 && no_traces->Close());
+}
+
+void NamedRegistrationIsConcurrentAndRefusesExporterReentry() {
+  World world; auto engine = world.Engine({1, 8});
+  std::vector<std::thread> workers;
+  for (unsigned worker = 0; worker < 4; ++worker) workers.emplace_back([&] {
+    for (unsigned call = 0; call < 8; ++call) {
+      auto token = engine->EnterNamed("src/app.rs::shared");
+      assert(token && engine->Leave(token, 0));
+    }
+  });
+  for (auto &worker : workers) worker.join();
+  assert(engine->Status().registered == 1 && engine->Status().ended == 32);
+  assert(!engine->Status().invalid && !engine->Status().lost);
+  auto token = engine->EnterNamed("src/app.rs::shared");
+  world.span_sink->callback = [&] { assert(!engine->EnterNamed("exporter callback")); };
+  assert(token && engine->Leave(token, 0)); world.span_sink->callback = {};
+  assert(engine->Status().registered == 1 && engine->Status().lost == 1);
+  assert(world.span_sink->spans.size() == 33 && engine->Close());
+  World closing_world; auto closing = closing_world.Engine({2, 2});
+  token = closing->EnterNamed("outstanding"); assert(token && !closing->Close());
+  assert(!closing->EnterNamed("outstanding") && !closing->EnterNamed("not registered"));
+  assert(closing->Status().registered == 1 && closing->Status().lost == 2);
+  assert(closing->Leave(token, 0) && closing->Close());
+}
+
 void InvalidInputs() {
   World world;
   const double nan = std::numeric_limits<double>::quiet_NaN();
@@ -337,6 +417,30 @@ void InvalidInputs() {
   refused = false;
   try { auto engine = world.Engine(); } catch (const std::invalid_argument &) { refused = true; }
   assert(refused);
+}
+
+void EntryAndCompletionPreserveApplicationErrno() {
+  for (bool named : {false, true}) for (int unwinding : {0, 1}) {
+    bool created = false, exported = false;
+    World world;
+    auto engine = world.Engine(); Register(*engine);
+    world.span_sink->create_callback = [&] { created = true; errno = ERANGE; };
+    world.span_sink->callback = [&] {
+      exported = true;
+      errno = EOVERFLOW;
+      // Refused recursive probes must preserve the callback's own error too.
+      assert(engine->EnterNamed("exporter-reentry") == 0 && errno == EOVERFLOW);
+    };
+    errno = EINTR;
+    auto token = named ? engine->EnterNamed("errno.rs::workload") : engine->Enter(&outer_address);
+    assert(token && created && errno == EINTR);
+    errno = EDOM;
+    assert(engine->Leave(token, unwinding) && exported && errno == EDOM);
+    errno = ECHILD;
+    assert(!engine->Leave(token, unwinding) && errno == ECHILD);
+    assert(!engine->EnterNamed("") && errno == ECHILD);
+    assert(!engine->Status().active && engine->Close());
+  }
 }
 
 void ConfiguredHistogramUsesTheExactSecondsPolicy() {
@@ -441,7 +545,11 @@ int main() {
   AllLiveStatesAndEntryExitWindows();
   ThreadOwnershipCapacityAndIncompleteClose();
   RegistrationIsBoundedAtomicAndOwnsNames();
+  NamedFunctionsOwnNamesAndShareTheRegistrationBudget();
+  NamedFunctionsValidateNamesAndRetainLiveStates();
+  NamedRegistrationIsConcurrentAndRefusesExporterReentry();
   TracingOffAndExporterReentry();
+  EntryAndCompletionPreserveApplicationErrno();
   InvalidInputs();
   CompilerInsertedCallsUseTheSDK();
   ConfiguredHistogramUsesTheExactSecondsPolicy();
