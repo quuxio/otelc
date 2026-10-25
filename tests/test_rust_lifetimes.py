@@ -56,6 +56,112 @@ class RustLifetimeSelectionTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.document if value is None else value))
         return lifetimes.read(self.path, policy or self.policy, self.root, self.sources)
 
+    def version_two(self) -> dict:
+        value = copy.deepcopy(self.document)
+        value['schema_version'] = 2
+        value['bodies'][0]['unavailable_locals'] = [{'local': 5, 'role': 'local',
+            'compiler_type': 'std::fs::File', 'rendered_type': 'File',
+            'kind': 'foreign_adt', 'needs_drop': True}]
+        return value
+
+    def test_unavailable_selected_types_remain_visible_and_cannot_be_woven(self) -> None:
+        value = self.version_two()
+        selected = self.read(value)
+        self.assertEqual(selected['schema_version'], 2)
+        self.assertEqual(selected['bodies'][0]['unavailable_locals'], value['bodies'][0]['unavailable_locals'])
+        self.assertFalse(selected['source_complete'])
+        for resolve in (lifetimes.weave_bindings, lifetimes.weave_request):
+            with self.subTest(resolve=resolve.__name__), self.assertRaisesRegex(ValueError, 'unavailable.*File'):
+                resolve(self.path, self.policy, self.root, self.sources)
+        data = copy.deepcopy(self.policy.data)
+        data['lifetimes']['exclude'] = ['*File*']
+        other = self.read(value, Policy.parse(data))
+        self.assertEqual(other['bodies'][0]['unavailable_locals'], [])
+        self.assertTrue(lifetimes.weave_request(self.path, Policy.parse(data), self.root, self.sources)['lifetimes'])
+
+    def test_unavailable_only_selection_is_not_silently_empty(self) -> None:
+        data = copy.deepcopy(self.policy.data)
+        data['lifetimes']['include'] = ['*File*']
+        policy = Policy.parse(data)
+        selected = self.read(self.version_two(), policy)
+        self.assertEqual(len(selected['bodies']), 1)
+        self.assertEqual(selected['bodies'][0]['locals'], [])
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            lifetimes.weave_request(self.path, policy, self.root, self.sources)
+        data['lifetimes']['enabled'] = False
+        self.assertEqual(self.read(self.version_two(), Policy.parse(data))['bodies'], [])
+
+    def test_excluding_either_unavailable_spelling_wins_for_the_whole_type(self) -> None:
+        value = self.version_two()
+        for excluded in ('File', 'std::fs::File', '*File*'):
+            data = copy.deepcopy(self.policy.data)
+            data['lifetimes']['exclude'] = [excluded]
+            policy = Policy.parse(data)
+            with self.subTest(excluded=excluded):
+                selected = self.read(value, policy)
+                self.assertEqual(selected['bodies'][0]['unavailable_locals'], [])
+                self.assertTrue(lifetimes.weave_bindings(self.path, policy, self.root, self.sources))
+                self.assertTrue(lifetimes.weave_request(self.path, policy, self.root, self.sources)['lifetimes'])
+
+    def test_unavailable_exact_inclusions_cannot_override_the_other_spelling_exclusion(self) -> None:
+        for included, excluded in (('File', None), ('std::fs::File', None),
+                                   ('File', 'std::fs::File'), ('std::fs::File', 'File')):
+            data = copy.deepcopy(self.policy.data)
+            data['lifetimes'].update(include=[included], exclude=[] if excluded is None else [excluded])
+            policy = Policy.parse(data)
+            with self.subTest(included=included, excluded=excluded):
+                selected = self.read(self.version_two(), policy)
+                if excluded is None:
+                    self.assertEqual(len(selected['bodies'][0]['unavailable_locals']), 1)
+                    with self.assertRaisesRegex(ValueError, 'unavailable.*File'):
+                        lifetimes.weave_request(self.path, policy, self.root, self.sources)
+                else:
+                    self.assertEqual(selected['bodies'], [])
+                    self.assertEqual(lifetimes.weave_bindings(self.path, policy, self.root, self.sources), {})
+
+    def test_full_body_fingerprint_includes_excluded_unavailable_types(self) -> None:
+        for excluded in ('File', 'std::fs::File', '*File*'):
+            value = self.version_two()
+            data = copy.deepcopy(self.policy.data)
+            data['lifetimes']['exclude'] = [excluded]
+            policy = Policy.parse(data)
+            with self.subTest(excluded=excluded):
+                self.read(value, policy)
+                first = lifetimes.weave_request(self.path, policy, self.root, self.sources)
+                value['bodies'][0]['unavailable_locals'][0]['needs_drop'] = False
+                self.read(value, policy)
+                second = lifetimes.weave_request(self.path, policy, self.root, self.sources)
+                self.assertEqual(first['lifetimes'], second['lifetimes'])
+                self.assertNotEqual(first['lifetime_bodies'], second['lifetime_bodies'])
+
+    def test_unavailable_return_argument_and_local_roles_remain_distinct(self) -> None:
+        value = self.version_two()
+        template = value['bodies'][0]['unavailable_locals'][0]
+        value['bodies'][0].update(locals=[], sites=[], unavailable_locals=[
+            template | {'local': index, 'role': role}
+            for index, role in ((0, 'return'), (1, 'argument'), (5, 'local'))])
+        selected = self.read(value)
+        self.assertEqual([row['role'] for row in selected['bodies'][0]['unavailable_locals']],
+                         ['return', 'argument', 'local'])
+
+    def test_unavailable_metadata_is_closed_typed_unique_even_when_excluded(self) -> None:
+        data = copy.deepcopy(self.policy.data)
+        data['lifetimes']['exclude'] = ['*']
+        for key, bad in (('local', True), ('local', 6), ('local', 2), ('role', 'argument'),
+                         ('compiler_type', ''), ('compiler_type', 1), ('rendered_type', ''),
+                         ('kind', 'unknown'), ('needs_drop', 1), ('extra', 'field')):
+            value = self.version_two()
+            value['bodies'][0]['unavailable_locals'][0][key] = bad
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.read(value, Policy.parse(data))
+        for rows in (None, {}, [None], self.version_two()['bodies'][0]['unavailable_locals'] * 2):
+            value = self.version_two(); value['bodies'][0]['unavailable_locals'] = rows
+            with self.subTest(rows=rows), self.assertRaises(ValueError): self.read(value)
+        value = self.version_two(); del value['bodies'][0]['unavailable_locals']
+        self.refuses(value)
+        value = self.version_two(); value['schema_version'] = 1
+        self.refuses(value)
+
     def refuses(self, document: dict) -> None:
         self.path.write_text(json.dumps(document))
         with self.assertRaises(ValueError):

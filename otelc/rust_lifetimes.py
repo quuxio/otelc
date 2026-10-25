@@ -10,13 +10,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from otelc.config import Policy
+from otelc.config import Policy, Selection
 from otelc.file_inputs import checked_file
 from otelc.python_sdk_io import decode
 
 SOURCE_FIELDS = {'identity', 'file', 'compiler_name', 'start', 'end', 'asynchronous', 'expanded'}
 VALUE_FIELDS = {'local', 'role', 'source', 'compiler_type', 'rendered_type', 'kind',
                 'needs_drop', 'size', 'alignment', 'layout_error'}
+UNAVAILABLE_FIELDS = {'local', 'role', 'compiler_type', 'rendered_type', 'kind', 'needs_drop'}
 SITE_FIELDS = {'kind', 'block', 'statement', 'local', 'other', 'projected', 'cleanup', 'unwind'}
 SITE_KINDS = {'construction', 'assignment', 'move', 'copy', 'aggregate_input',
               'drop', 'call_return', 'call_argument'}
@@ -92,9 +93,22 @@ def site(row: Any, body: dict, locals_: set[int]) -> None:
         number(row['other'], body['local_count'], 'site destination')
 
 
-def body(row: Any, root: Path, inputs: dict[str, bytes]) -> dict:
+def unavailable_value(row: Any, body: dict) -> int:
+    """Keep unsupported root values visible without inventing declaration origins."""
+    row = closed(row, UNAVAILABLE_FIELDS, 'unavailable value')
+    local = number(row['local'], body['local_count'], 'unavailable local')
+    role = 'return' if local == 0 else 'argument' if local <= body['argument_count'] else 'local'
+    if (row['role'] != role or type(row['needs_drop']) is not bool
+            or type(row['kind']) is not str or row['kind'] not in ('foreign_adt', 'array', 'tuple', 'opaque')
+            or any(type(row[key]) is not str or not row[key] for key in ('compiler_type', 'rendered_type'))):
+        raise ValueError('invalid Rust lifetime unavailable type/role')
+    return local
+
+
+def body(row: Any, root: Path, inputs: dict[str, bytes], version: int) -> dict:
     """Reject malformed unselected bodies before applying operator exclusions."""
-    row = closed(row, {'function', 'phase', 'local_count', 'block_count', 'argument_count', 'locals', 'sites'}, 'body')
+    fields = {'function', 'phase', 'local_count', 'block_count', 'argument_count', 'locals', 'sites'}
+    row = closed(row, fields | ({'unavailable_locals'} if version == 2 else set()), 'body')
     source(row['function'], root, inputs)
     if (row['phase'] != 'Runtime(PostCleanup)' or type(row['locals']) is not list or len(row['locals']) > 65536
             or type(row['sites']) is not list or len(row['sites']) > 262144):
@@ -106,6 +120,13 @@ def body(row: Any, root: Path, inputs: dict[str, bytes]) -> dict:
     locals_ = [value(item, row, root, inputs)['local'] for item in row['locals']]
     if len(locals_) != len(set(locals_)) or row['function']['asynchronous'] or row['function']['expanded']:
         raise ValueError('invalid Rust lifetime duplicate local or unsupported body')
+    if version == 2:
+        unsupported = row['unavailable_locals']
+        if type(unsupported) is not list or len(unsupported) > 65536:
+            raise ValueError('invalid Rust lifetime unavailable locals')
+        indices = [unavailable_value(item, row) for item in unsupported]
+        if len(indices) != len(set(indices)) or set(indices).intersection(locals_):
+            raise ValueError('invalid Rust lifetime overlapping unavailable locals')
     for item in row['sites']:
         site(item, row, set(locals_))
     return row
@@ -132,7 +153,7 @@ def inventory(path: Path, root: Path, sources: dict[str, str], inputs: dict[str,
     _, raw = checked_file(path, nofollow=True, include_content=True, max_bytes=8 * 1024 * 1024)
     document = closed(decode(raw), {'schema_version', 'kind', 'sources', 'target', 'pointer_width', 'bodies',
                                    'skipped', 'source_complete', 'instrumentation_complete'}, 'inventory')
-    if (type(document['schema_version']) is not int or document['schema_version'] != 1
+    if (type(document['schema_version']) is not int or document['schema_version'] not in (1, 2)
             or document['kind'] != 'otelc.rust.lifetime-inventory' or document['sources'] != sources
             or type(document['pointer_width']) is not int or document['pointer_width'] != 64
             or type(document['target']) is not str or not document['target']
@@ -142,7 +163,7 @@ def inventory(path: Path, root: Path, sources: dict[str, str], inputs: dict[str,
         raise ValueError('Rust lifetime inventory does not match the original discovery profile')
     identities = set()
     for row in document['bodies']:
-        body(row, root, inputs)
+        body(row, root, inputs, document['schema_version'])
         identity = row['function']['identity']
         if identity in identities:
             raise ValueError('duplicate Rust lifetime body')
@@ -165,16 +186,21 @@ def _read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> tu
     document = inventory(path, root, sources, inputs)
     selected = []
     source_selector, type_selector = policy.selection('sources'), policy.selection('lifetimes')
+    type_exclusions = Selection(type_selector.exclude, (), paths=type_selector.paths)
     for row in document['bodies']:
         include = policy.data['lifetimes']['enabled'] and source_selector.accepts(source(row['function'], root, inputs))
         locals_ = [item for item in row['locals'] if include
                    and source_selector.accepts(source(item['source'], root, inputs))
                    and type_selector.accepts(item['rendered_type'])]
-        if locals_:
+        unsupported = [item for item in row.get('unavailable_locals', []) if include
+                       and not any(type_exclusions.accepts(item[key]) for key in ('compiler_type', 'rendered_type'))
+                       and any(type_selector.accepts(item[key]) for key in ('compiler_type', 'rendered_type'))]
+        if locals_ or unsupported:
             indexes = {item['local'] for item in locals_}
-            selected.append(row | {'locals': locals_, 'sites': [item for item in row['sites'] if item['local'] in indexes]})
+            selected.append(row | {'locals': locals_, 'sites': [item for item in row['sites'] if item['local'] in indexes]}
+                            | ({'unavailable_locals': unsupported} if document['schema_version'] == 2 else {}))
     selection = {key: policy.data[key] for key in ('sources', 'lifetimes')}
-    return document, {'schema_version': 1, 'kind': 'otelc.rust.lifetime-selection', 'bodies': selected,
+    return document, {'schema_version': document['schema_version'], 'kind': 'otelc.rust.lifetime-selection', 'bodies': selected,
         'selection_sha256': hashlib.sha256(json.dumps(selection, sort_keys=True).encode()).hexdigest(),
         'target': document['target'], 'pointer_width': document['pointer_width'],
         'source_complete': False, 'instrumentation_complete': False, 'skipped': document['skipped']}
@@ -186,6 +212,10 @@ def read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> dic
 
 
 def _locals(selected: dict) -> dict[str, dict[str, str]]:
+    for body in selected['bodies']:
+        if body.get('unavailable_locals'):
+            names = ', '.join(item['rendered_type'] for item in body['unavailable_locals'])
+            raise ValueError('selected Rust lifetime type is unavailable: ' + names)
     return {body['function']['identity']: {str(row['local']): row['compiler_type']
             for row in body['locals']} for body in selected['bodies']}
 
