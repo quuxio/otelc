@@ -19,6 +19,7 @@ from otelc.python_sdk_io import decode
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'native/clang/Lifetimes.cpp'
 PROFILE = 'clang22-cxx-lifetimes-v1'
+CONTEXT_PROFILE = 'clang22-cxx-context-v1'
 MAX_AST = 64 * 1024 * 1024
 MANIFEST = 'native-lifetime-tool.json'
 
@@ -155,9 +156,25 @@ def catalogue(document: dict[str, Any], policy: Policy, root: Path) -> dict[str,
     return result
 
 
+def compile_context(value: Any, root: Path, sources: list[Path]) -> dict[str, Any]:
+    """Reuse the public unit recipe's literal flags and private-input boundaries."""
+    from otelc import native_units
+
+    if (type(value) is not dict or set(value) != {'directory', 'flags', 'overlay', 'assets'}
+            or len(sources) != 1):
+        raise ValueError('native lifetime context requires one unit and closed context fields')
+    recipe = native_units.validate({'schema_version': 1, 'kind': native_units.RECIPE_KIND,
+        'assets': value['assets'], 'units': [{'id': 'inventory', 'role': 'application',
+            'source': str(sources[0]), 'language': 'cpp', 'directory': value['directory'],
+            'flags': value['flags'], 'overlay': value['overlay'], 'rename_main': False}],
+        'link': {'language': 'cpp', 'directory': str(root), 'flags': []}}, root)
+    unit = recipe['units'][0]
+    return {key: unit[key] for key in ('directory', 'flags', 'overlay')} | {'assets': recipe['assets']}
+
+
 def inspect(policy: Policy, root: Path, sources: list[Path], output: Path,
             *, tool: Tool | None = None, llvm_config: Path | None = None,
-            target: str | None = None) -> dict[str, Any]:
+            target: str | None = None, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Inventory original C++ source without executing or rewriting the application."""
     if 'cpp' not in policy.data['languages'] or not policy.data['lifetimes']['enabled']:
         raise ValueError('native lifetime inspection requires enabled C++ lifetimes')
@@ -167,6 +184,9 @@ def inspect(policy: Policy, root: Path, sources: list[Path], output: Path,
             or any(not path.is_relative_to(root) or path.suffix not in ('.cpp', '.cc', '.cxx', '.C')
                    for path in selected) or output.resolve().is_relative_to(root)):
         raise ValueError('native lifetime inspection needs distinct C++ inputs and an external new output')
+    context = compile_context(context, root, selected) if context is not None else None
+    cwd = Path(context['directory']) if context is not None else root
+    private = [native_gate.identity(Path(name)) for name in context['assets']] if context is not None else []
     output.mkdir(mode=0o700)
     output = output.resolve(strict=True)
     tool = tool or build_tool(output / 'tool', llvm_config=llvm_config)
@@ -181,14 +201,19 @@ def inspect(policy: Policy, root: Path, sources: list[Path], output: Path,
     for index, source in enumerate(selected):
         prefix = str(index)
         common = [compiler, '--target=' + target, '-std=c++17', '-g', '-fexceptions', '-pthread', '-I', str(root)]
+        if context is not None:
+            common = [compiler, '--target=' + target, *context['flags'], '-g']
+            if context['overlay'] is not None:
+                common += ['-ivfsoverlay', context['overlay']]
         dep = output / (prefix + '.d')
         query = [*common, '-M', '-MT', 'otelc-inputs', '-MF', str(dep), str(source)]
-        _run(query, root, output, prefix + '-dependencies')
-        held = _dependencies(dep, root)
-        command = [str(tool.directory / 'lifetimes'), str(root), str(source), *common]
-        _run(command, root, output, prefix + '-semantics')
-        _run(query, root, output, prefix + '-dependencies-after')
-        if held != _dependencies(dep, root):
+        _run(query, cwd, output, prefix + '-dependencies')
+        held = _dependencies(dep, cwd)
+        directory = ['--compile-directory', str(cwd)] if context is not None else []
+        command = [str(tool.directory / 'lifetimes'), str(root), str(source), *directory, *common]
+        _run(command, cwd, output, prefix + '-semantics')
+        _run(query, cwd, output, prefix + '-dependencies-after')
+        if held != _dependencies(dep, cwd):
             raise ValueError('native lifetime compiler inputs changed during inspection')
         commands.extend([query, command])
         path = output / (prefix + '-semantics.json')
@@ -201,12 +226,17 @@ def inspect(policy: Policy, root: Path, sources: list[Path], output: Path,
                         'semantic_sha256': hashlib.sha256(raw).hexdigest(), 'semantic_bytes': len(raw)})
         inputs.update(held)
     if (before != [native_gate.identity(path) for path in selected]
-            or any(native_gate.identity(Path(name)) != value for name, value in inputs.items())):
+            or any(native_gate.identity(Path(name)) != value for name, value in inputs.items())
+            or private != ([native_gate.identity(Path(name)) for name in context['assets']]
+                           if context is not None else [])):
         raise ValueError('native lifetime inputs changed before inventory publication')
     tool.verify()
-    result = {'schema_version': 1, 'kind': 'otelc.native.lifetime-inventory', 'profile': PROFILE,
+    result = {'schema_version': 2 if context is not None else 1,
+              'kind': 'otelc.native.lifetime-inventory', 'profile': CONTEXT_PROFILE if context is not None else PROFILE,
               'root': str(root), 'target': target, 'tool': receipt,
               'policy_sha256': native_launch.digest(policy.data), 'inputs': list(inputs.values()),
               'commands': commands, 'translation_units': records, 'source_complete': False}
+    if context is not None:
+        result.update(compile_context=context, context_inputs=private)
     (output / 'native-lifetimes.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
     return result

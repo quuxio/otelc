@@ -111,6 +111,77 @@ class NativeLifetimeInventoryTests(unittest.TestCase):
     def inspect(self, name: str, policy: Policy | None = None, **options) -> dict:
         return lifetimes.inspect(policy or self.policy, self.root, [Path('main.cpp')], self.base / name, tool=self.tool, **options)
 
+    def test_actual_per_unit_directory_defines_standard_and_optimisation_are_used(self) -> None:
+        directory = self.root / 'unit'; directory.mkdir()
+        includes = self.root / 'include'; includes.mkdir()
+        header = includes / 'context.hpp'
+        header.write_text('namespace build_context {template<int I> struct ContextItem {'
+                          'ContextItem(){} ~ContextItem(){} int value=I;};}\n')
+        source = directory / 'context.cpp'
+        source.write_text('#include "context.hpp"\n'
+            '#if !defined(SCALE) || !defined(__OPTIMIZE__)\n#error missing actual compile flags\n#endif\n'
+            'template<class T> concept Addable = requires(T v){v+1;};\n'
+            'int run(){static_assert(Addable<int>);build_context::ContextItem<SCALE> item;return item.value;}\n')
+        original = source.read_bytes(), header.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Clang lifetime query failed'):
+            lifetimes.inspect(self.policy, self.root, [source], self.base / 'wrong-default', tool=self.tool)
+        context = {'directory': str(directory), 'flags': ['-std=c++20', '-O1', '-D', 'SCALE=5', '-I', '../include'],
+                   'overlay': None, 'assets': []}
+        value = lifetimes.inspect(self.policy, self.root, [source], self.base / 'actual-context',
+                                  tool=self.tool, context=context)
+        self.assertEqual((value['schema_version'], value['profile']), (2, lifetimes.CONTEXT_PROFILE))
+        self.assertEqual(value['compile_context'], context)
+        self.assertEqual(value['root'], str(self.root))
+        self.assertEqual({row['name'] for row in value['translation_units'][0]['types']},
+                         {'build_context::ContextItem<5>'})
+        self.assertEqual(len(value['translation_units'][0]['constructions']), 1)
+        semantics = value['commands'][1]
+        self.assertEqual(semantics[3:5], ['--compile-directory', str(directory)])
+        self.assertIn('-O1', semantics)
+        compiler = value['tool']['toolchain']['directory'] + '/clang++'
+        result = subprocess.run([compiler, *context['flags'], '-g', '-fsyntax-only', str(source)],
+                                cwd=directory, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context['flags'].append('-O0')
+        self.assertNotIn('-O0', value['compile_context']['flags'])
+        self.assertEqual((source.read_bytes(), header.read_bytes()), original)
+
+    def test_private_overlay_inventory_keeps_original_and_private_inputs_distinct(self) -> None:
+        self.source.write_text('struct PlainItem{PlainItem(){}~PlainItem(){}};int main(){PlainItem item;}\n')
+        original = self.source.read_bytes()
+        private = self.base / 'overlay.cpp'
+        private.write_text('struct OverlayItem{OverlayItem(){}~OverlayItem(){}};int main(){OverlayItem item;}\n')
+        overlay = self.base / 'overlay.json'
+        overlay.write_text(json.dumps({'version': 0, 'use-external-names': False, 'roots': [
+            {'type': 'file', 'name': str(self.source), 'external-contents': str(private)}]}) + '\n')
+        context = {'directory': str(self.root), 'flags': ['-std=c++17', '-O2'],
+                   'overlay': str(overlay), 'assets': [str(private), str(overlay)]}
+        value = self.inspect('private-context', context=context)
+        self.assertEqual({row['name'] for row in value['translation_units'][0]['types']}, {'OverlayItem'})
+        self.assertEqual(value['translation_units'][0]['source'], str(self.source))
+        self.assertEqual({row['path'] for row in value['context_inputs']}, {str(private), str(overlay)})
+        self.assertEqual(self.source.read_bytes(), original)
+        missing = copy.deepcopy(context); missing['assets'] = [str(overlay)]
+        with self.assertRaisesRegex(ValueError, 'VFS input'):
+            self.inspect('unbound-private-context', context=missing)
+        self.assertFalse((self.base / 'unbound-private-context').exists())
+
+    def test_context_refuses_extra_fields_tooling_flags_escaped_cwd_and_multiple_units(self) -> None:
+        context = {'directory': str(self.root), 'flags': ['-std=c++17'], 'overlay': None, 'assets': []}
+        for kind in ('extra', 'plugin', 'directory', 'multiple'):
+            value = copy.deepcopy(context)
+            sources = [self.source]
+            if kind == 'extra': value['unknown'] = True
+            elif kind == 'plugin': value['flags'].append('-fpass-plugin=/operator-input')
+            elif kind == 'directory': value['directory'] = str(self.base)
+            else:
+                other = self.root / 'other.cpp'; other.write_bytes(self.source.read_bytes())
+                sources.append(other)
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                lifetimes.inspect(self.policy, self.root, sources, self.base / ('invalid-' + kind),
+                                  tool=self.tool, context=value)
+            self.assertFalse((self.base / ('invalid-' + kind)).exists())
+
     def test_real_ast_distinguishes_delegation_bases_copy_move_arrays_aliases_and_aggregate(self) -> None:
         original = self.header.read_bytes(), self.source.read_bytes()
         value = self.inspect('inventory')

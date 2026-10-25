@@ -16,6 +16,7 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -245,10 +246,29 @@ class Database : public tooling::CompilationDatabase {
 
 int main(int Count, char **Arguments) {
   if (Count < 4) return 2;
-  std::vector<std::string> Command(Arguments + 3, Arguments + Count);
+  int First = 3;
+  std::string Directory = Arguments[1];
+  if (llvm::StringRef(Arguments[3]) == "--compile-directory") {
+    if (Count < 6) return 2;
+    Directory = Arguments[4];
+    First = 5;
+  }
+  std::vector<std::string> Command(Arguments + First, Arguments + Count);
   Command.push_back(Arguments[2]);
-  Database Compilation({Arguments[1], Arguments[2], Command, ""});
-  tooling::ClangTool Tool(Compilation, {Arguments[2]});
+  Database Compilation({Directory, Arguments[2], Command, ""});
+  auto Filesystem = llvm::vfs::getRealFileSystem();
+  // ClangTool supplies its own FileManager. Give it the same private overlay as
+  // the compiler; retaining -ivfsoverlay in argv alone does not replace BaseFS.
+  for (int Index = First + 1; Index < Count; ++Index) {
+    if (llvm::StringRef(Arguments[Index]) != "-ivfsoverlay") continue;
+    if (++Index == Count) return 2;
+    auto Buffer = llvm::MemoryBuffer::getFile(Arguments[Index]);
+    if (!Buffer) return 2;
+    auto Overlay = llvm::vfs::getVFSFromYAML(std::move(*Buffer), nullptr, Arguments[Index], nullptr, Filesystem);
+    if (!Overlay) return 2;
+    Filesystem = llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem>(Overlay.release());
+  }
+  tooling::ClangTool Tool(Compilation, {Arguments[2]}, std::make_shared<PCHContainerOperations>(), Filesystem);
   Factory Inventory(Arguments[1]);
   return Tool.run(&Inventory);
 }
