@@ -36,6 +36,8 @@ The [native prepared-launch candidate](docs/native-prepared.md) exposes versione
 
 The explicit [native build-3 context](docs/native-build-context.md) adds per-unit compiler flags/directories, private VFS inputs, main-symbol rename and an uninstrumented observation driver. It reuses the common policy and owned launch controls. Automatic build discovery and generated-provider qualification remain work.
 
+The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official Clang AST/type/USR APIs to inventory construction and variable materialisation without source edits. It is a building block; automatic native lifetime spans remain work.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
