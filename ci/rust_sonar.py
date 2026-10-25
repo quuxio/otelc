@@ -16,7 +16,8 @@ RUST_SOURCES = ('native/rust/compiler/src/main.rs', 'native/rust/compiler/src/re
 def source_paths(root: Path) -> list[Path]:
     """Keep new production modules from silently falling outside the gate."""
     rust = sorted((root / 'native/rust').rglob('*.rs'))
-    tests = {root / 'native/rust/compiler/src/request_tests.rs'}
+    tests = {root / 'native/rust/compiler/src/request_tests.rs',
+             root / 'native/rust/bridge/src/keys_tests.rs'}
     if set(rust) - tests != {root / name for name in RUST_SOURCES}:
         raise ValueError('Rust coverage source catalogue changed')
     return [*rust, *sorted((root / 'native/rust').rglob('Cargo.toml')),

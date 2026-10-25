@@ -21,6 +21,7 @@ class RustAnalysisTests(unittest.TestCase):
         self.output = self.root / 'build'
         self.output.mkdir()
         for name in (*rust_sonar.RUST_SOURCES, 'native/rust/compiler/src/request_tests.rs',
+                     'native/rust/bridge/src/keys_tests.rs',
                      'ci/rust_compiler_cases.py', 'ci/check_rust_compiler.py', 'ci/rust_sonar.py',
                      'otelc/health.py', 'tests/test_rust_drop_health.py', 'ci/rust_lifetime_cases.py',
                      'otelc/rust_lifetimes.py', 'tests/test_rust_lifetimes.py'):

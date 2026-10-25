@@ -76,6 +76,21 @@ def check() -> None:
     run([*cargo, 'build', '--offline', '--locked', '--release', '--manifest-path',
          'native/rust/bridge/Cargo.toml', '--target-dir', str(work / 'bridge')], work, 'bridge-build',
         environment | {'RUSTFLAGS': '-C instrument-coverage'})
+    key_environment = environment | {'RUSTFLAGS': f'-C instrument-coverage -L native={sdk} '
+        f'-l dylib=otelc_native_runtime -C link-arg=-Wl,-rpath,{sdk}'}
+    key_build = run([*cargo, 'test', '--offline', '--locked', '--no-run', '--message-format=json',
+        '--manifest-path', 'native/rust/bridge/Cargo.toml', '--target-dir', str(work / 'bridge')],
+        work, 'bridge-unit-build', key_environment)
+    key_units = [Path(row['executable']).resolve(strict=True)
+                 for row in map(json.loads, key_build.splitlines())
+                 if row.get('reason') == 'compiler-artifact'
+                 and row.get('target', {}).get('name') == 'otelc_rust_bridge'
+                 and row.get('profile', {}).get('test') is True and row.get('executable')]
+    if len(key_units) != 1 or not key_units[0].is_relative_to(work / 'bridge'):
+        raise ValueError('Rust bridge key tests require one test executable from this build')
+    key_unit = run([str(key_units[0])], work, 'bridge-unit', key_environment)
+    if re.search(rb'test result: ok\. 3 passed; 0 failed; 0 ignored;', key_unit) is None:
+        raise ValueError('Rust observation-key tests were missing or skipped')
     bridge_clippy = run([clippy, 'clippy', '--offline', '--locked', '--all-targets', '--message-format=json',
         '--manifest-path', 'native/rust/bridge/Cargo.toml', '--target-dir', str(work / 'bridge'),
         '--', '-D', 'warnings'], work, 'bridge-clippy', environment | {'RUSTFLAGS': '-C instrument-coverage'})
@@ -93,7 +108,7 @@ def check() -> None:
     for name in ('ci/rust_compiler_cases.py', 'ci/rust_lifetime_cases.py', 'otelc/rust_lifetimes.py', 'otelc/health.py'):
         run([sys.executable, '-m', 'coverage', 'report', '--data-file=' + str(data),
              '--include=*/' + name, '--fail-under=80'], work, Path(name).stem + '-coverage', environment)
-    profiles = sorted(cases.glob('*.profraw'))
+    profiles = sorted([*cases.glob('*.profraw'), *work.glob('unit-*.profraw')])
     if not profiles:
         raise ValueError('Rust compiler execution produced no coverage profiles')
     merged = work / 'compiler.profdata'
@@ -107,12 +122,16 @@ def check() -> None:
     applications = list((cases / 'test_original_modules_optimised_loops_panics_and_all_live_metric_states').glob('*-application'))
     drop_case = cases / 'test_private_drop_bridge_moves_panics_forgets_and_refuses_bad_metadata'
     drop_applications = list(drop_case.glob('*-application'))
+    keys_case = cases / 'test_private_drop_keys_distinguish_zero_size_moves_and_forgotten_values'
+    keys_applications = list(keys_case.glob('*-application'))
     health = list(cases.rglob('health.json'))
-    if (len(applications) != 2 or len(drop_applications) != 1 or len(health) != 12
-            or len(list(drop_case.rglob('health.json'))) != 4):
-        raise ValueError('Rust checks require both original builds/eight launches and one private drop build/four launches')
+    if (len(applications) != 2 or len(drop_applications) != 1 or len(keys_applications) != 1
+            or len(health) != 16 or len(list(drop_case.rglob('health.json'))) != 4
+            or len(list(keys_case.rglob('health.json'))) != 4):
+        raise ValueError('Rust checks require eight original launches and four launches per private drop/key harness')
     bridge_source = ROOT / 'native/rust/bridge/src/lib.rs'
-    bridge_objects = [str(sorted(applications)[0]), '-object=' + str(drop_applications[0])]
+    bridge_objects = [str(sorted(applications)[0]), '-object=' + str(drop_applications[0]),
+                      '-object=' + str(keys_applications[0]), '-object=' + str(key_units[0])]
     bridge_raw = run([str(binaries / 'llvm-cov'), 'export', *bridge_objects,
         '-instr-profile=' + str(merged), str(bridge_source)], work, 'bridge-coverage', environment)
     bridge_coverage = summaries(json.loads(bridge_raw), {bridge_source})
@@ -128,8 +147,9 @@ def check() -> None:
               'compiler_line_coverage': coverage, 'bridge_line_coverage': bridge_coverage,
               'application_processes': len(health),
               'original_application_processes': 8, 'private_drop_harness_processes': 4,
+              'private_key_harness_processes': 4, 'observation_key_unit_tests': 3,
               'telemetry_evidence': 'Receiver-decoded protobuf reserialization, not original HTTP wire bytes',
-              'scope': 'Internal synchronous compiler and explicit drop bridge/SDK harness; not automatic Rust lifetime admission'}
+              'scope': 'Internal synchronous compiler and explicit drop/key bridge/SDK harnesses; not automatic Rust lifetime admission'}
     (work / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     rust_sonar.write(ROOT, before, compiler_lcov + bridge_lcov, coverage | bridge_coverage,
                      compiler_clippy + bridge_clippy, ROOT / 'build')
