@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Java and the JavaScript/Microsoft TypeScript and Python candidates use the same `integer128-v1` workload and one common policy. Every accepted batch must match the independent checksum. Plain and instrumented application sources remain unchanged. Five measured modes are retained: `plain`, `both_off`, `collection_only`, `emission_only` and `both_on`. All four instrumented modes use the same application PID and build. Tracing and lifetime observation retain their configured settings while metrics change live.
+Java and the JavaScript/Microsoft TypeScript, Python and [C/C++ candidates](native-benchmarks.md) use the same `integer128-v1` workload and one common policy. Every accepted batch must match the independent checksum. Plain and instrumented application sources remain unchanged. Five measured modes are retained: `plain`, `both_off`, `collection_only`, `emission_only` and `both_on`. All four instrumented modes use the same application PID and build. Tracing and lifetime observation retain their configured settings while metrics change live.
 
 ## Run equivalent language comparisons
 
@@ -13,7 +13,7 @@ make setup java-build node-observer node-http
 make stack-up
 ```
 
-Use a fresh comparison ID to group the language reports in Grafana. Apply the same policy to each language. Java remains the default for `make benchmark` and the CLI. Use `make benchmark BENCHMARK_LANGUAGE=python` for a standalone Python run.
+Use a fresh comparison ID to group the language reports in Grafana. Apply the same policy to each language. Java remains the default for `make benchmark` and the CLI. Use `make benchmark BENCHMARK_LANGUAGE=python` for a standalone Python run. The [native guide](native-benchmarks.md) adds the matching SDK prerequisite, shared metrics-only policy and C/C++ commands. C resource lifetimes remain unsupported; enabled C lifetime policies are refused.
 
 ```sh
 comparison=$(date +%Y%m%d-%H%M%S)
@@ -57,7 +57,7 @@ Lifetime and trace configuration remain in every raw report. To measure lifecycl
 
 ## View the comparison in Grafana
 
-Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate resource panels show Java/Node/Python CPU/operation and RSS by role, including the Python supervisor. Compare Java's instrumented JVM with the other languages' application and SDK roles together when assessing total instrumentation cost. The dashboard uses exported driver measurements rather than sampled function-duration histograms.
+Open [language performance comparison](http://localhost:3001/d/otelc-comparison) and select the comparison ID. The dashboard shows mean ns/operation, overhead relative to each language's plain baseline, throughput, sample counts and toolchain identity. Separate resource panels show Java/Node/Python/C/C++ CPU/operation and RSS by role, including Python and native instrumented supervisors. Native plain is a direct executable and the C++ SDK is embedded in the instrumented application. Compare Java's instrumented JVM with the other languages' application and SDK roles together when assessing total instrumentation cost. The dashboard uses exported driver measurements rather than sampled function-duration histograms.
 
 Use [function metrics and lifetimes](http://localhost:3001/d/otelc-lifetimes) for application telemetry and [task/service traces](http://localhost:3001/d/otelc-traces) for trace trees. The local stack uses OTLP/HTTP port 4320, Prometheus 9091, Tempo 3201 and Grafana 3001. Export success alone is insufficient: check the Collector, Prometheus samples and, when traces are enabled, decoded Tempo spans. Missing language series mean that no qualified results were published for that selection; they are never filled with synthetic values.
 

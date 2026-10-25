@@ -19,7 +19,7 @@ from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java, witness
 from otelc import prepared_python as python_adapter
-from otelc import python_benchmark, python_recipe
+from otelc import python_benchmark, python_recipe, native_benchmark
 from otelc import native_launch
 from otelc import native_build, prepared_native
 from otelc.config import LANGUAGES, Policy
@@ -53,7 +53,9 @@ def main() -> int:
     compare = commands.add_parser("benchmark")
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument("--no-publish", action="store_true")
-    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python"), default="java")
+    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python", "c", "cpp"), default="java")
+    compare.add_argument('--sdk-build', type=Path, default=Path('build/native-launch-sdk'),
+                         help='matching native SDK build for C/C++ benchmarks')
     compare.add_argument("--backend", choices=("native", "api"), default="native")
     compare.add_argument("--comparison-id", help="group equivalent language runs in Grafana")
     example = commands.add_parser("example")
@@ -198,5 +200,8 @@ def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
     if args.language == 'python':
         return python_benchmark.run(policy, args.output, publish=not args.no_publish,
                                     comparison_id=args.comparison_id)
+    if args.language in ('c', 'cpp'):
+        return native_benchmark.run(policy, args.output, language=args.language, sdk_directory=args.sdk_build,
+                                    publish=not args.no_publish, comparison_id=args.comparison_id)
     return node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
                               publish=not args.no_publish, comparison_id=args.comparison_id)

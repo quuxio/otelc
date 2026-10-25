@@ -38,6 +38,8 @@ The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official C
 
 The explicit [native build-3 context](docs/native-build-context.md) adds per-unit compiler flags/directories, private VFS inputs, main-symbol rename and an uninstrumented observation driver. It reuses the common policy and owned launch controls. Automatic build discovery and generated-provider qualification remain work.
 
+The [native paired benchmark candidate](docs/native-benchmarks.md) compares equivalent C/C++ applications against direct stock baselines and all four live metric states. It retains actual CPU/RSS, owned shutdown and SDK loss/export checks, using the shared report and Grafana format. C++ lifetime cost can be compared under a separate common policy; C resource lifetimes and independent benchmark qualification remain work.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
