@@ -84,10 +84,22 @@ jobs:
             build/rust-runtime/tools-case/tools/*.stderr
             build/rust-runtime/public-case/*.json
             build/rust-runtime/public-case/application/*.rs
+            build/rust-runtime/public-case/lifetime-application/*.rs
+            build/rust-runtime/public-case/lifetime-foreign/*.rs
+            build/rust-runtime/public-case/lifetime-argument/*.rs
+            build/rust-runtime/public-case/lifetime-build/*.json
+            build/rust-runtime/public-case/lifetime-build/*.stderr
+            build/rust-runtime/public-case/lifetime-foreign-build/*.json
+            build/rust-runtime/public-case/lifetime-foreign-build/*.stderr
+            build/rust-runtime/public-case/lifetime-argument-build/*.json
+            build/rust-runtime/public-case/lifetime-argument-build/*.stderr
+            build/rust-runtime/public-case/lifetime-benchmark-build/*.json
+            build/rust-runtime/public-case/lifetime-benchmark-build/*.stderr
             build/rust-runtime/public-case/tools/*.json
             build/rust-runtime/public-case/tools/*.stderr
             build/rust-runtime/public-case/**/rust-execution.json
             build/rust-runtime/public-case/**/health.json
+            build/rust-runtime/public-case/**/rust-plan-profile.json
             build/rust-runtime/public-case/**/report.json
             build/rust-runtime/public-case/**/raw.jsonl
             build/rust-runtime/public-case/**/metric-finalization.json

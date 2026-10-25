@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This internal candidate discovers original Rust object types and ownership sites for the [drop bridge](rust-drop-bridge.md). It is the compiler-discovery stage of automatic object/resource lifetime spans. It emits no runtime probes and does not enable public Rust lifetime policies. Developers add no annotations, imports, guards or source edits.
+This internal candidate discovers original Rust object types and ownership sites for the [drop bridge](rust-drop-bridge.md). It is the compiler-discovery stage of automatic object/resource lifetime spans. It emits no runtime probes itself; the [public lifetime candidate](rust-public-lifetimes.md) uses this discovery before weaving and launch. Developers add no annotations, imports, guards or source edits.
 
 ## Compiler boundary
 
@@ -37,7 +37,7 @@ exclude = ["*Internal*"]
 max_live = 4096
 ```
 
-This configuration selects discovery metadata in the internal API. It is not yet an accepted public Rust build/run lifetime policy. The result retains `source_complete=false` and `instrumentation_complete=false`. Reading a report validates its format and original source bindings, not independent proof of which compiler produced it. The build/qualification owner must retain the actual compiler, command and product identities separately. Named resource release methods are not analysed by this drop-discovery profile.
+This configuration selects discovery metadata in the internal API. The [public lifetime candidate](rust-public-lifetimes.md) accepts supported selections through the same policy and explicitly refuses selected unavailable types. The result retains `source_complete=false` and `instrumentation_complete=false`. Reading a report validates its format and original source bindings, not independent proof of which compiler produced it. The build/qualification owner must retain the actual compiler, command and product identities separately. Named resource release methods are not analysed by this drop-discovery profile.
 
 ## Checks
 
@@ -49,4 +49,4 @@ The added version-two case discovers ordinary `File`, owned arrays/tuples and an
 
 The workflow retains focused source/request/output records, logs, coverage profiles and their compiler executable map for 14 days. Cargo caches, dependency trees and SDK builds are excluded from that artifact. Unresolved failures need their relevant records retained before expiry; a focused workflow is not a frozen shipping provider qualification.
 
-The separate [automatic MIR component](rust-lifetime-weave.md) inserts supported root-local construction/move/drop hooks and uses address-independent keys. Whole-build/dependency and field/container coverage, ownership transfer through calls/returns, pinning, async cancellation, public lifetime build/launch, actual lifetime overhead and independent oteleq application qualification remain required. Explicit unavailable metadata does not implement those unsupported shapes or establish language admission.
+The separate [automatic MIR component](rust-lifetime-weave.md) inserts supported root-local construction/move/drop hooks and uses address-independent keys. Whole-build/dependency and field/container coverage, ownership transfer through calls/returns, pinning, async cancellation, prepared launch, actual lifetime overhead and independent oteleq application qualification remain required. Supported standalone public build/launch is connected by the separate [lifetime candidate](rust-public-lifetimes.md). Explicit unavailable metadata does not implement those unsupported shapes or establish language admission.
