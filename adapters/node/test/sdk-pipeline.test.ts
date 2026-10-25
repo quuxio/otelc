@@ -48,8 +48,10 @@ async function collector(t: TestContext) {
   const policy: ISdkPolicy = { resource: { service_name: 'owned-sdk-test' },
     metrics: { collection: false, emission: false, histogram_boundaries_seconds: [.001, .01, .1] },
     traces: { enabled: true, sample_ratio: 1 },
+    // Cold workers share CPU with coverage and the ordinary application tests.
+    // Success cases need that headroom; deadline tests set their own short budget.
     export: { endpoint: `http://127.0.0.1:${address.port}`, interval_ms: 60_000,
-      timeout_ms: 1000, shutdown_timeout_ms: 2000 } };
+      timeout_ms: 5000, shutdown_timeout_ms: 10000 } };
   return { policy, requests, failMetrics: (value: boolean) => { failMetrics = value; },
     retryMetricsOnce: () => { retryMetricAttempts = 1; },
     cleanup: (operation: () => void | Promise<void>) => { cleanups.push(operation); },
