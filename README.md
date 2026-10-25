@@ -44,6 +44,8 @@ The [C allocation lifetime candidate](docs/c-resources.md) binds selected record
 
 The internal [Rust compiler component](native/rust/compiler/README.md) connects compiler-owned synchronous MIR probes in unedited sources to the same official SDK pipeline. Its focused gate covers modules, optimised loops, original panics, live metric controls and decoded spans. Public Rust launch/preparation, automatic lifetimes, async/context integration, equivalent benchmarks and independent qualification remain work.
 
+The [Rust drop engine candidate](docs/rust-drop-engine.md) adds an internal ownership-transfer and drop boundary to the shared native SDK engine. Compiler-inserted Rust lifetime probes and their public build/launch integration remain required; this component does not enable Rust lifetime policies.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
