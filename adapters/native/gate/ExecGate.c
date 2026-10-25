@@ -53,29 +53,36 @@ static int release_received(int fd, long timeout) {
   }
 }
 
-static char **environment_from(int fd) {
+struct environment {
+  char *raw;
+  char **values;
+};
+
+static int environment_from(int fd, struct environment *result) {
   struct stat info;
   if (fstat(fd, &info) || !S_ISREG(info.st_mode) || info.st_uid != getuid() ||
-      (info.st_mode & 0777) != 0600 || info.st_size < 0 || info.st_size > 4 * 1024 * 1024) return NULL;
+      (info.st_mode & 0777) != 0600 || info.st_size < 0 || info.st_size > 4 * 1024 * 1024) return 0;
   size_t size = (size_t)info.st_size, offset = 0, count = 0;
   char *raw = calloc(size + 1, 1);
-  if (!raw) return NULL;
+  if (!raw) return 0;
   while (offset < size) {
     ssize_t got = read(fd, raw + offset, size - offset);
     if (got < 0 && errno == EINTR) continue;
-    if (got <= 0) { free(raw); return NULL; }
+    if (got <= 0) { free(raw); return 0; }
     offset += (size_t)got;
   }
-  if (size && raw[size - 1]) { free(raw); return NULL; }
+  if (size && raw[size - 1]) { free(raw); return 0; }
   for (offset = 0; offset < size; offset += strlen(raw + offset) + 1) {
     char *equal = strchr(raw + offset, '=');
-    if (!equal || equal == raw + offset || ++count > 65536) { free(raw); return NULL; }
+    if (!equal || equal == raw + offset || ++count > 65536) { free(raw); return 0; }
   }
   char **values = calloc(count + 1, sizeof(char *));
-  if (!values) { free(raw); return NULL; }
+  if (!values) { free(raw); return 0; }
   count = 0;
   for (offset = 0; offset < size; offset += strlen(raw + offset) + 1) values[count++] = raw + offset;
-  return values;
+  result->raw = raw;
+  result->values = values;
+  return 1;
 }
 
 int main(int argc, char **argv) {
@@ -94,15 +101,20 @@ int main(int argc, char **argv) {
   int status = release_received((int)release, timeout);
   close((int)release);
   if (status) return status;
-  char **values = environment_from((int)environment);
+  struct environment supplied = {0};
+  int valid_environment = environment_from((int)environment, &supplied);
   close((int)environment);
-  if (!values) return 125;
+  if (!valid_environment) return 125;
   /* exec preserves the verified PID/group and all application standard streams. */
 #ifdef OTELC_GATE_COVERAGE
   extern int __llvm_profile_write_file(void);
   __llvm_profile_write_file();
 #endif
-  execve(argv[5], argv + 5, values);
+  execve(argv[5], argv + 5, supplied.values);
+  int failure = errno;
+  free(supplied.values);
+  free(supplied.raw);
+  errno = failure;
   perror("otelc native exec gate");
   return 127;
 }

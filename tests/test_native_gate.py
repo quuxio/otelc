@@ -140,6 +140,34 @@ __attribute__((constructor)) static void initialise(void){const char*p=getenv("L
                     self.assertRaises(ValueError):
                 native_gate.start(self.product, (str(self.application),), cwd=self.base, environment=environment)
 
+    def test_empty_environment_preserves_literal_arguments_and_application_identity(self) -> None:
+        waiting = native_gate.start(self.product, (str(self.application), 'literal $value; *'),
+            cwd=self.base, environment={}, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.addCleanup(self.cleanup, waiting)
+        waiting.ready()
+        waiting.release()
+        output, error = waiting.process.communicate(b'', timeout=5)
+        self.assertEqual(waiting.process.returncode, 0)
+        self.assertEqual(error, b'')
+        self.assertEqual(output, f'{waiting.process.pid} {waiting.process.pid} literal $value; *\n'.encode())
+
+    def test_failed_exec_with_empty_or_nonempty_environment_retains_errno_and_exit(self) -> None:
+        target = self.base / 'nonexecutable'
+        target.write_bytes(b'not an executable image')
+        target.chmod(0o600)
+        for environment in ({}, {'LITERAL': '$value; *'}):
+            with self.subTest(empty=not environment):
+                waiting = native_gate.start(self.product, (str(target),), cwd=self.base,
+                    environment=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.addCleanup(self.cleanup, waiting)
+                waiting.ready()
+                waiting.release()
+                output, error = waiting.process.communicate(timeout=5)
+                self.assertEqual(waiting.process.returncode, 127)
+                self.assertEqual(output, b'')
+                self.assertEqual(error, b'otelc native exec gate: Permission denied\n')
+
     def test_z_actual_gate_source_has_at_least_eighty_percent_native_coverage(self) -> None:
         self.product.verify()
         metadata = self.product.metadata()
