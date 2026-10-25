@@ -55,6 +55,15 @@ func (s *metricSink) Export(ctx context.Context, data *metricdata.ResourceMetric
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.captureMetrics(data); err != nil {
+		return err
+	}
+	if s.fail {
+		return rejected
+	}
+	return nil
+}
+func (s *metricSink) captureMetrics(data *metricdata.ResourceMetrics) error {
 	for _, scope := range data.ScopeMetrics {
 		for _, metric := range scope.Metrics {
 			if sum, ok := metric.Data.(metricdata.Sum[int64]); ok {
@@ -67,11 +76,9 @@ func (s *metricSink) Export(ctx context.Context, data *metricdata.ResourceMetric
 			}
 		}
 	}
-	if s.fail {
-		return rejected
-	}
 	return nil
 }
+
 func (*metricSink) ForceFlush(context.Context) error { return nil }
 func (s *metricSink) Shutdown(context.Context) error {
 	s.closed.Add(1)
@@ -124,55 +131,60 @@ func TestMetricsRetainMeasurementsAcrossEveryInitialStateAndRetryFailure(t *test
 	for _, collection := range []bool{false, true} {
 		for _, emission := range []bool{false, true} {
 			t.Run(fmt.Sprint(collection, "/", emission), func(t *testing.T) {
-				controls := metriccontrol.New(collection, emission)
-				sink := &metricSink{fail: true}
-				p, err := NewMetrics(controls, sink, resource.Empty(), 0, time.Second)
-				check(t, err)
-				counter, err := p.Provider.Meter(Scope).Int64Counter("calls")
-				check(t, err)
-				counter.Add(ctx, 5)
-				err = p.Flush(ctx)
-				if (emission && collection) != errors.Is(err, rejected) {
-					t.Fatal("export error was suppressed", err)
-				}
-				controls.SetCollection(true)
-				check(t, controls.SetEmission(ctx, false))
-				counter.Add(ctx, 7)
-				check(t, p.Flush(ctx))
-				held := p.Health().Attempts
-				check(t, controls.SetEmission(ctx, true))
-				sink.fail = false
-				check(t, p.Flush(ctx))
-				controls.SetCollection(false)
-				counter.Add(ctx, 100)
-				beforeOff := p.Health().Attempts
-				check(t, p.Flush(ctx))
-				if p.Health().Attempts != beforeOff {
-					t.Fatal("disabled collection exported old snapshots")
-				}
-				controls.SetCollection(true)
-				check(t, p.Flush(ctx))
-				want := int64(7)
-				if collection {
-					want += 5
-				}
-				if len(sink.values) < 2 || sink.values[len(sink.values)-1] != want || sink.values[len(sink.values)-2] != want {
-					t.Fatal("lost paused measurements or admitted disabled measurement", sink.values)
-				}
-				if h := p.Health(); h.Attempts != held+2 || h.Succeeded != 2 || h.Failed != held {
-					t.Fatal(h)
-				}
-				// Other scopes cannot enter this owned provider.
-				foreign, err := p.Provider.Meter("application").Int64Counter("foreign")
-				check(t, err)
-				foreign.Add(ctx, 99)
-				check(t, p.Shutdown(ctx))
-				check(t, p.Shutdown(ctx))
-				if sink.closed.Load() != 1 || !p.Health().Closed || !errors.Is(p.Flush(ctx), sdkmetric.ErrExporterShutdown) {
-					t.Fatal("shutdown contract", p.Health())
-				}
+				exerciseMetricRetention(t, ctx, collection, emission)
 			})
 		}
+	}
+}
+
+func exerciseMetricRetention(t *testing.T, ctx context.Context, collection, emission bool) {
+	t.Helper()
+	controls := metriccontrol.New(collection, emission)
+	sink := &metricSink{fail: true}
+	p, err := NewMetrics(controls, sink, resource.Empty(), 0, time.Second)
+	check(t, err)
+	counter, err := p.Provider.Meter(Scope).Int64Counter("calls")
+	check(t, err)
+	counter.Add(ctx, 5)
+	err = p.Flush(ctx)
+	if (emission && collection) != errors.Is(err, rejected) {
+		t.Fatal("export error was suppressed", err)
+	}
+	controls.SetCollection(true)
+	check(t, controls.SetEmission(ctx, false))
+	counter.Add(ctx, 7)
+	check(t, p.Flush(ctx))
+	held := p.Health().Attempts
+	check(t, controls.SetEmission(ctx, true))
+	sink.fail = false
+	check(t, p.Flush(ctx))
+	controls.SetCollection(false)
+	counter.Add(ctx, 100)
+	beforeOff := p.Health().Attempts
+	check(t, p.Flush(ctx))
+	if p.Health().Attempts != beforeOff {
+		t.Fatal("disabled collection exported old snapshots")
+	}
+	controls.SetCollection(true)
+	check(t, p.Flush(ctx))
+	want := int64(7)
+	if collection {
+		want += 5
+	}
+	if len(sink.values) < 2 || sink.values[len(sink.values)-1] != want || sink.values[len(sink.values)-2] != want {
+		t.Fatal("lost paused measurements or admitted disabled measurement", sink.values)
+	}
+	if h := p.Health(); h.Attempts != held+2 || h.Succeeded != 2 || h.Failed != held {
+		t.Fatal(h)
+	}
+	// Other scopes cannot enter this owned provider.
+	foreign, err := p.Provider.Meter("application").Int64Counter("foreign")
+	check(t, err)
+	foreign.Add(ctx, 99)
+	check(t, p.Shutdown(ctx))
+	check(t, p.Shutdown(ctx))
+	if sink.closed.Load() != 1 || !p.Health().Closed || !errors.Is(p.Flush(ctx), sdkmetric.ErrExporterShutdown) {
+		t.Fatal("shutdown contract", p.Health())
 	}
 }
 
