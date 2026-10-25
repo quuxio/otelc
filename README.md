@@ -42,7 +42,7 @@ The [native paired benchmark candidate](docs/native-benchmarks.md) compares equi
 
 The [C allocation lifetime candidate](docs/c-resources.md) binds selected record-pointer `malloc`/`calloc` sites with Clang and observes matching calls after LLVM optimisation. Public build 5 connects those probes to allocation-to-`free` SDK spans/metrics, live controls, resource health and the common-policy C benchmark. Stack scopes, custom/interposed allocators, `realloc`, independent qualification and complete C language acceptance remain work.
 
-The internal [Rust compiler component](native/rust/compiler/README.md) connects compiler-owned synchronous MIR probes in unedited sources to the same official SDK pipeline. Its focused gate covers modules, optimised loops, original panics, live metric controls and decoded spans. Public Rust launch/preparation, automatic lifetimes, async/context integration, equivalent benchmarks and independent qualification remain work.
+The [public Rust candidate](docs/rust-source.md) builds stock and instrumented standalone applications from unchanged sources, using common function selectors and the official C++ SDK pipeline. Its direct launcher supports independent live metric gates and retains final SDK health. The [compiler component](native/rust/compiler/README.md) supplies synchronous MIR probes, including panic unwinding. Cargo builds, prepared host release, automatic lifetimes, async/context integration, equivalent benchmarks and independent qualification remain work.
 
 ## Java example and Grafana
 
