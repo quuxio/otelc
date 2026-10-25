@@ -21,7 +21,7 @@ from otelc import benchmark, control, health, java, node, node_benchmark, prepar
 from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe, native_benchmark
 from otelc import native_launch
-from otelc import native_build, prepared_native
+from otelc import native_build, prepared_native, rust_compiler, rust_build, rust_launch
 from otelc.config import LANGUAGES, Policy
 
 
@@ -90,6 +90,20 @@ def main() -> int:
     native.add_argument("arguments", nargs=argparse.REMAINDER)
     native_protocol_parser = commands.add_parser('native-protocols', help='describe explicit owned native formats without compiling')
     native_protocol_parser.add_argument('--build-version', type=int, choices=(2, 3, 4, 5), default=2)
+    rust_tools = commands.add_parser('rust-tools', help='build the pinned original-source Rust compiler and private bridge')
+    rust_tools.add_argument('--output', type=Path, required=True)
+    rust_build_parser = commands.add_parser('rust-build', help='candidate: retain stock and woven original-source Rust applications')
+    rust_build_parser.add_argument('--root', type=Path, required=True)
+    rust_build_parser.add_argument('--entry', type=Path, required=True)
+    rust_build_parser.add_argument('--output', type=Path, required=True)
+    rust_build_parser.add_argument('--tools', type=Path, required=True)
+    rust_build_parser.add_argument('--sdk-build', type=Path, required=True)
+    rust_build_parser.add_argument('--optimisation', type=int, choices=(0, 1, 2, 3), default=2)
+    rust_run_parser = commands.add_parser('rust-run', help='candidate: run a retained Rust build with live metric controls')
+    rust_run_parser.add_argument('--build', type=Path, required=True)
+    rust_run_parser.add_argument('--runtime', type=Path, required=True)
+    rust_run_parser.add_argument('--plain', action='store_true')
+    rust_run_parser.add_argument('arguments', nargs=argparse.REMAINDER)
     native_build_parser = commands.add_parser('native-build', help='candidate: retain a native build for owned execution')
     native_build_parser.add_argument('--language', choices=('c', 'cpp'), required=True)
     native_build_parser.add_argument('--root', type=Path, required=True)
@@ -134,7 +148,18 @@ def main() -> int:
         if args.command == 'native-protocols':
             print(json.dumps(prepared_native.protocols(build_version=args.build_version), indent=2))
             return 0
+        if args.command == 'rust-tools':
+            print(json.dumps(rust_compiler.build(args.output).manifest(), indent=2))
+            return 0
         policy = Policy.load(args.config)
+        if args.command == 'rust-build':
+            value = rust_build.build(policy, args.root, args.entry, args.output,
+                tools_directory=args.tools, sdk_directory=args.sdk_build, optimisation=args.optimisation)
+            print(json.dumps(value.manifest(), indent=2))
+            return 0
+        if args.command == 'rust-run':
+            return rust_launch.run(policy, args.runtime, build_directory=args.build, plain=args.plain,
+                                   arguments=application_arguments(args.arguments))
         if args.command == 'native-build':
             recipe = native_build.read(args.recipe)[0] if args.recipe else None
             value = native_build.build(policy, args.language, args.root, args.source or [],
@@ -173,7 +198,7 @@ def main() -> int:
                                      diagnostic_profile=args.diagnostic_profile, **witness_options)
         if args.command == "plan":
             print(json.dumps({"policy": policy.data, "implemented": ["java"],
-                              "candidates": ["typescript", "javascript", "python"],
+                              "candidates": ["typescript", "javascript", "python", "rust"],
                               "remaining": [language for language in LANGUAGES if language != "java"]}, indent=2))
             return 0
         if args.command == "benchmark":
