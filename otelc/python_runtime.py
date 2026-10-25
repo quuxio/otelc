@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from asyncio.exceptions import CancelledError
 import os
 import threading
 import time
@@ -15,7 +16,7 @@ from opentelemetry.context import Context
 
 from otelc.config import Policy
 from otelc.python_sdk_process import SdkChannel
-from otelc import python_tracing
+from otelc import python_objects, python_tracing
 from otelc.python_lifetimes import Lifetimes
 
 MAX_ACTIVE = 65536
@@ -35,6 +36,12 @@ def exception_type(error: BaseException) -> str:
     """Read the raw type name without str/repr or application attribute hooks."""
     name = type.__dict__['__qualname__'].__get__(type(error))
     return name if type(name) is str and len(name.encode()) <= 1024 else 'BaseException'
+
+
+def cancelled(error: BaseException) -> bool:
+    """Classify actual cancellation types without instance or metaclass hooks."""
+    return any(base is GeneratorExit or base is CancelledError
+               for base in python_objects.hierarchy(type(error)))
 
 
 class PythonRuntime:
@@ -127,7 +134,11 @@ class PythonRuntime:
             if call.span is not None:
                 if error is not None:
                     kind = exception_type(error)
-                    call.span.set_status(trace.StatusCode.ERROR)
+                    if cancelled(error):
+                        call.span.set_attribute('otelc.cancelled', True)
+                        call.span.set_status(trace.StatusCode.ERROR, 'cancelled')
+                    else:
+                        call.span.set_status(trace.StatusCode.ERROR)
                     call.span.add_event('exception', {'exception.type': kind})
                 call.span.end()
             if call.collect and self.collection:
