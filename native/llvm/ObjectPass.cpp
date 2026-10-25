@@ -1,6 +1,7 @@
 // Explicit constructor/destructor boundary component. Runtime ownership is separate.
 #include "object_pass.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Instructions.h"
@@ -56,8 +57,35 @@ struct Site {
   std::set<std::string> Constructors, Callers;
   std::string File;
   unsigned Line, Column;
+  bool Global = false;
   bool Hit = false;
 };
+
+std::set<Function *> reachable(SmallVector<Function *> Pending) {
+  std::set<Function *> Result;
+  while (!Pending.empty()) {
+    auto *F = Pending.pop_back_val();
+    if (!Result.insert(F).second) continue;
+    for (auto &Block : *F) for (auto &Instruction : Block)
+      if (auto *Call = dyn_cast<CallBase>(&Instruction))
+        if (auto *Target = dyn_cast<Function>(Call->getCalledOperand()->stripPointerCastsAndAliases())) Pending.push_back(Target);
+  }
+  return Result;
+}
+
+std::set<Function *> initialisers(Module &M) {
+  SmallVector<Function *> Pending;
+  if (auto *Entries = M.getGlobalVariable("llvm.global_ctors")) {
+    if (auto *Array = dyn_cast_or_null<ConstantArray>(Entries->hasInitializer() ? Entries->getInitializer() : nullptr)) {
+      for (const auto &Entry : Array->operands()) {
+        auto *Row = dyn_cast<ConstantStruct>(Entry);
+        if (Row && Row->getNumOperands() >= 2)
+          if (auto *F = dyn_cast<Function>(Row->getOperand(1)->stripPointerCastsAndAliases())) Pending.push_back(F);
+      }
+    }
+  }
+  return reachable(std::move(Pending));
+}
 FunctionCallee probe(Module &M, StringRef Name, FunctionType *Signature) {
   if (auto *Existing = M.getNamedValue(Name)) {
     auto *Function = dyn_cast<llvm::Function>(Existing);
@@ -80,6 +108,20 @@ FunctionCallee probe(Module &M, StringRef Name, FunctionType *Signature) {
 }
 struct ObjectPass : PassInfoMixin<ObjectPass> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
+    if (const char *Mode = std::getenv("OTELC_OBJECT_C_UNIT"); Mode && StringRef(Mode) == "1") {
+      if (sys::path::extension(M.getSourceFileName()) != ".c")
+        report_fatal_error("otelc: C object exclusion does not match the source unit");
+      for (auto *Unit : M.debug_compile_units()) {
+        const auto Language = Unit->getSourceLanguage();
+        const auto Name = Language.getName();
+        bool IsC = Language.hasVersionedName() ? Name == dwarf::DW_LNAME_C :
+            Name == dwarf::DW_LANG_C || Name == dwarf::DW_LANG_C89 || Name == dwarf::DW_LANG_C99 ||
+            Name == dwarf::DW_LANG_C11 || Name == dwarf::DW_LANG_C17;
+        if (!IsC)
+          report_fatal_error("otelc: C object exclusion cannot hide another source language");
+      }
+      return PreservedAnalyses::all();
+    }
     if (M.getNamedMetadata("otelc.objects.instrumented"))
       report_fatal_error("otelc: object boundaries already instrumented");
     const char *Filename = std::getenv("OTELC_OBJECT_INVENTORY");
@@ -90,9 +132,13 @@ struct ObjectPass : PassInfoMixin<ObjectPass> {
     auto Parsed = json::parse((*Buffer)->getBuffer());
     if (!Parsed) report_fatal_error("otelc: invalid object inventory JSON");
     const auto &Inventory = object(*Parsed);
-    if (Inventory.getInteger("schema_version") != 1 ||
+    auto Version = Inventory.getInteger("schema_version");
+    if ((Version != 1 && Version != 2) ||
         Inventory.getString("kind") != "otelc.native.lifetime-inventory")
       report_fatal_error("otelc: unsupported object inventory");
+    if (Version == 2 && (Inventory.getString("profile") != "clang22-cxx-context-v1" ||
+        !Inventory.getObject("compile_context")))
+      report_fatal_error("otelc: explicit object inventory context missing");
     auto Root = text(Inventory, "root");
     SmallString<256> Canonical;
     if (sys::fs::real_path(M.getSourceFileName(), Canonical))
@@ -119,6 +165,21 @@ struct ObjectPass : PassInfoMixin<ObjectPass> {
       }
       for (const auto &Value : array(Unit, "constructions")) {
         const auto &Row = object(Value);
+        std::set<std::string> Callers{text(Row, "caller"), text(Row, "caller_base")};
+        SmallVector<std::string> Aliases;
+        bool Excluded = false;
+        for (const auto &Name : Callers) {
+          auto *Value = M.getNamedValue(Name);
+          auto *Caller = Value ? dyn_cast<Function>(Value->stripPointerCastsAndAliases()) : nullptr;
+          Excluded |= Caller && Caller->hasFnAttribute(Attribute::NoProfile);
+          if (Caller) Aliases.push_back(Caller->getName().str());
+          if (Caller && Row.getBoolean("thread_local_initialiser").value_or(false))
+            for (auto *Helper : reachable({Caller})) Aliases.push_back(Helper->getName().str());
+        }
+        Callers.insert(Aliases.begin(), Aliases.end());
+        if (Excluded) continue;
+        if (Row.getString("kind") == "InitListExpr")
+          report_fatal_error("otelc: object materialisation or trivial destruction needs a separate boundary profile");
         auto Kind = text(Row, "construction_kind");
         if (Kind == "delegating" || Kind == "non-virtual base" || Kind == "virtual base") continue;
         auto Found = Types.find(text(Row, "type_usr"));
@@ -131,8 +192,9 @@ struct ObjectPass : PassInfoMixin<ObjectPass> {
         if (!Line || !Column || *Line <= 0 || *Column <= 0)
           report_fatal_error("otelc: object debug location missing");
         Sites.push_back({&Found->second, {text(Row, "constructor_symbol"), text(Row, "constructor_base_symbol")},
-                        {text(Row, "caller"), text(Row, "caller_base")},
-                        path(text(*Location, "debug_file"), Root), static_cast<unsigned>(*Line), static_cast<unsigned>(*Column)});
+                        std::move(Callers),
+                        path(text(*Location, "debug_file"), Root), static_cast<unsigned>(*Line), static_cast<unsigned>(*Column),
+                        Row.getBoolean("global_initialiser").value_or(false)});
       }
     }
     if (Units != 1) report_fatal_error("otelc: expected one bound object translation unit");
@@ -144,6 +206,7 @@ struct ObjectPass : PassInfoMixin<ObjectPass> {
     auto Destroy = probe(M, "otelc_object_destroying_v1", FunctionType::get(I64, {Pointer, Pointer}, false));
     auto End = probe(M, "otelc_object_destroyed_v1", FunctionType::get(Void, {I64, Type::getInt32Ty(C)}, false));
     SmallVector<std::pair<CallBase *, Site *>> Creations;
+    auto Initialisers = initialisers(M);
     for (auto &F : M) for (auto &Block : F) for (auto &Instruction : Block) {
       auto *Call = dyn_cast<CallBase>(&Instruction);
       if (!Call || !Call->getDebugLoc()) continue;
@@ -155,7 +218,8 @@ struct ObjectPass : PassInfoMixin<ObjectPass> {
       auto DebugFile = path(File->getFilename(), File->getDirectory());
       Site *Match = nullptr;
       for (auto &Site : Sites) {
-        if (!Site.Callers.count(F.getName().str()) || !Site.Constructors.count(Target->getName().str()) ||
+        if ((!Site.Callers.count(F.getName().str()) && !(Site.Global && Initialisers.count(&F))) ||
+            !Site.Constructors.count(Target->getName().str()) ||
             DebugFile != Site.File || Location->getLine() != Site.Line || Location->getColumn() != Site.Column) continue;
         if ((!isa<CallInst>(Call) && !isa<InvokeInst>(Call)) || Call->arg_empty() || !Call->getArgOperand(0)->getType()->isPointerTy())
           report_fatal_error("otelc: unsupported object constructor call");
@@ -167,8 +231,14 @@ struct ObjectPass : PassInfoMixin<ObjectPass> {
         Match->Hit = true;
       }
     }
-    for (const auto &Site : Sites)
-      if (!Site.Hit) report_fatal_error("otelc: selected constructor has no matching compiler boundary");
+    for (const auto &Site : Sites) {
+      if (Site.Hit) continue;
+      std::string Message = "otelc: selected constructor has no matching compiler boundary at " + Site.File +
+          ":" + std::to_string(Site.Line) + ":" + std::to_string(Site.Column) + " for " + Site.Record->Name + " in";
+      for (const auto &Caller : Site.Callers) Message += " " + Caller;
+      M.getContext().emitError(Message);
+      return PreservedAnalyses::all();
+    }
     for (auto [Call, Site] : Creations) {
       Instruction *Insertion;
       if (auto *Invoke = dyn_cast<InvokeInst>(Call))

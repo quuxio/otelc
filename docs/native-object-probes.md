@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development component. The LLVM 22 object profile connects the [Clang semantic inventory](native-lifetimes.md) to compiler-inserted probes and the official C++ SDK. Internal tests execute unchanged C++ application source with both function and object probes. The public native launcher still refuses `lifetimes.enabled`; public build/policy wiring, benchmarks and independent oteleq qualification remain work. The separate [launcher SDK bridge](native-object-sdk.md) now connects these probes to the real HTTP pipeline and health accounting through an explicit internal host plan; it does not yet enable public lifetime launches.
+Status: development component. The LLVM 22 object profile connects the [Clang semantic inventory](native-lifetimes.md) to compiler-inserted probes and the official C++ SDK. Internal tests execute unchanged C++ application source with both function and object probes. The [public build-4 candidate](native-public-lifetimes.md) connects common-policy lifetime selection to owned build/launch; benchmarks and independent oteleq qualification remain work. The separate [launcher SDK bridge](native-object-sdk.md) now connects these probes to the real HTTP pipeline and health accounting through an explicit internal host plan; the explicit public candidate supplies the policy/context bindings.
 
 ## Observed boundaries
 
@@ -32,4 +32,4 @@ The maintained tests cover constructor failure, arrays, copy/delegation, address
 
 ## Remaining scope
 
-This component is not general C++ lifetime support. Trivial and aggregate construction are refused by this profile. Materialisation-only boundaries are unsupported and are not evidence of a successful observation. Multi-translation-unit build integration, implicit storage reuse without a destructor, arbitrary compiler flags, Microsoft C++ ABI, resource-close pairing and native task/service propagation remain unsupported. The inventory still declares `source_complete=false`. Public launch/export and performance evidence must pass before advertising the feature as available to application developers.
+This component is not general C++ lifetime support. Trivial and aggregate construction are refused by this profile. Materialisation-only boundaries are unsupported and are not evidence of a successful observation. Automatic build discovery, implicit storage reuse without a destructor, arbitrary compiler flags, Microsoft C++ ABI, resource-close pairing and native task/service propagation remain unsupported. The inventory still declares `source_complete=false`. Public launch/export has focused candidate tests; performance evidence, full gates and independent qualification must pass before whole-language admission.

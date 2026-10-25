@@ -82,7 +82,8 @@ class NativeUnitRecipeTests(unittest.TestCase):
     def test_explicit_descriptor_and_matched_commands_do_not_probe_the_driver(self) -> None:
         self.assertEqual(prepared.protocols()['build'], 2)
         self.assertEqual(prepared.protocols(build_version=3)['unit_recipe'], 1)
-        for version in (True, 1, 4):
+        self.assertEqual(prepared.protocols(build_version=4)['object_inventory'], 2)
+        for version in (True, 1, 5):
             with self.assertRaises(ValueError): prepared.protocols(build_version=version)
         descriptor = subprocess.run([str(ROOT / 'bin/quux-otelc'), '--config', '/no-policy',
             'native-protocols', '--build-version', '3'], env=dict(os.environ, PATH='/no-tools',

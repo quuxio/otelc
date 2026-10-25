@@ -301,6 +301,20 @@ class NativeLifetimeInventoryTests(unittest.TestCase):
         finally:
             receipt.write_bytes(original)
 
+    def test_global_tls_and_shared_default_member_sites_keep_actual_callers(self) -> None:
+        self.source.write_bytes((lifetimes.ROOT / 'tests/fixtures/native-object-storage.cpp').read_bytes())
+        policy = Policy.parse({'schema_version': 3, 'languages': ['cpp'],
+            'sources': {'include': ['**']}, 'lifetimes': {
+                'enabled': True, 'include': ['native_object_storage::Item']}})
+        rows = self.inspect('shared-storage', policy)['translation_units'][0]['constructions']
+        self.assertEqual(sum(row.get('global_initialiser') is True for row in rows), 1)
+        tls = [row for row in rows if row.get('thread_local_initialiser') is True]
+        self.assertEqual(len(tls), 1)
+        self.assertIn('_ZTH', tls[0]['caller'])
+        members = [row for row in rows if 'HolderC1' in row['caller']]
+        self.assertEqual(len(members), 3)
+        self.assertEqual(len({row['caller'] for row in members}), 3)
+
     def test_parameter_static_and_thread_storage_are_distinct_from_ordinary_locals(self) -> None:
         self.source.write_text('#include "model.hpp"\n'
             'demo::WorkItem global(3);\n'

@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development component. This inventories actual C++ types and construction sites using the installed LLVM 22 Clang AST, type and USR APIs. Inspection does not itself emit lifetime spans, establish successful construction or observe destruction. The separate [object probe component](native-object-probes.md) consumes these records in compiler-linked internal SDK tests; public native lifetime launch remains work.
+Status: development component. This inventories actual C++ types and construction sites using the installed LLVM 22 Clang AST, type and USR APIs. Inspection does not itself emit lifetime spans, establish successful construction or observe destruction. The separate [object probe component](native-object-probes.md) consumes these records in compiler-linked internal SDK tests; the [public build-4 candidate](native-public-lifetimes.md) adds actual compiler contexts, common-policy build and owned launch.
 
 Developers do not add annotations, imports, guard members or bootstrap code. Original application and header bytes are checked before and after inspection. No application is executed, and object layout is unchanged. One schema-3 policy supplies source and lifetime type selections:
 
