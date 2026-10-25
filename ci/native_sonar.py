@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
 
-from otelc import llvm_backend
+from otelc import llvm_backend, native_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = ('native/llvm/OtelcPass.cpp', 'adapters/native/src/metric_control.cpp',
@@ -118,9 +118,10 @@ def compilation_database(paths: list[Path], expected: set[Path]) -> list[dict[st
     return [selected[path] for path in sorted(expected)]
 
 
-def checked_artifact(row: dict[str, Any], path: Path) -> None:
+def checked_artifact(row: dict[str, Any], path: Path, *, full_identity: bool = False) -> None:
     """Refuse stale coverage/context files rather than importing another build."""
-    if row != llvm_backend.identity(path):
+    expected = native_gate.identity(path) if full_identity else llvm_backend.identity(path)
+    if row != expected:
         raise ValueError('native Sonar input changed: ' + path.name)
 
 
@@ -136,9 +137,9 @@ def generate(root: Path = ROOT) -> None:
     resources = json.loads((output / 'native-resources-coverage.json').read_bytes())
     resource_pass = json.loads((output / 'native-resource-pass-coverage.json').read_bytes())
     for record, index in ((resources, 8), (resource_pass, 9)):
-        checked_artifact(record['source'], root / PRODUCTION[index])
+        checked_artifact(record['source'], root / PRODUCTION[index], full_identity=index == 8)
         for header in record.get('headers', []):
-            checked_artifact(header, Path(header['path']))
+            checked_artifact(header, Path(header['path']), full_identity=index == 8)
     checked_artifact(objects['source'], root / PRODUCTION[7])
     for header in objects['headers']:
         checked_artifact(header, Path(header['path']))
@@ -165,8 +166,8 @@ def generate(root: Path = ROOT) -> None:
         source = root / relative
         lcov = Path(record['lcov']['path'])
         database = Path(record['compilation_database']['path'])
-        checked_artifact(record['lcov'], lcov)
-        checked_artifact(record['compilation_database'], database)
+        checked_artifact(record['lcov'], lcov, full_identity=relative == PRODUCTION[8])
+        checked_artifact(record['compilation_database'], database, full_identity=relative == PRODUCTION[8])
         if database not in databases:
             databases.append(database)
         file = ET.SubElement(document, 'file', path=relative)

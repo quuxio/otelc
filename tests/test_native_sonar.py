@@ -11,7 +11,7 @@ from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 from ci import native_sonar as sonar
-from otelc import llvm_backend
+from otelc import llvm_backend, native_gate
 
 
 class NativeSonarTests(unittest.TestCase):
@@ -54,8 +54,11 @@ class NativeSonarTests(unittest.TestCase):
             'line_coverage': {'count': 5, 'covered': 4}}
         self.objects = self.records[5] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[7]),
             'headers': [llvm_backend.identity(header)], 'line_coverage': {'count': 5, 'covered': 4}}
-        self.resources = self.records[6] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[8]),
+        # Match the actual Clang resource producer, which retains file facts.
+        self.resources = self.records[6] | {'source': native_gate.identity(self.root / sonar.PRODUCTION[8]),
             'line_coverage': {'count': 5, 'covered': 4}}
+        for name in ('lcov', 'compilation_database'):
+            self.resources[name] = native_gate.identity(Path(self.resources[name]['path']))
         self.resource_pass = self.records[7] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[9]),
             'headers': [llvm_backend.identity(header)], 'line_coverage': {'count': 5, 'covered': 4}}
         database = Path(self.native['compilation_database']['path'])
@@ -155,6 +158,41 @@ class NativeSonarTests(unittest.TestCase):
             sonar.generate(self.root)
         database = json.loads((self.output / 'native-compile-commands.json').read_bytes())
         self.assertEqual({Path(row['file']) for row in database}, self.sources)
+
+    def test_resource_frontend_records_keep_the_producers_full_file_identity(self) -> None:
+        for row in (self.resources['source'], self.resources['lcov'], self.resources['compilation_database']):
+            self.assertEqual(row, native_gate.identity(Path(row['path'])))
+            self.assertIn('inode', row)
+            self.assertIn('ctime_ns', row)
+        sonar.generate(self.root)
+
+    def test_resource_file_facts_cannot_be_changed_or_downgraded_to_hash_only(self) -> None:
+        original = copy.deepcopy(self.resources)
+        for group in ('source', 'lcov', 'compilation_database'):
+            for field in ('inode', 'device', 'mtime_ns', 'ctime_ns', 'mode', 'links', 'uid', 'gid', 'resolved_path'):
+                # Fresh synthetic unit reports, never rewritten SDK evidence.
+                self.resources = copy.deepcopy(original)
+                self.write_records(); sonar.generate(self.root)
+                value = self.resources[group][field]
+                self.resources[group][field] = value + 1 if type(value) is int else value + '-changed'
+                self.write_records()
+                with self.subTest(group=group, field=field), self.assertRaisesRegex(ValueError, 'input changed'):
+                    sonar.generate(self.root)
+            self.resources = copy.deepcopy(original)
+            self.resources[group] = llvm_backend.identity(Path(self.resources[group]['path']))
+            self.write_records()
+            with self.subTest(downgrade=group), self.assertRaisesRegex(ValueError, 'input changed'):
+                sonar.generate(self.root)
+
+    def test_resource_source_replacement_with_identical_bytes_still_refuses(self) -> None:
+        path = self.root / sonar.PRODUCTION[8]
+        original = path.read_bytes()
+        path.rename(path.with_suffix('.held'))
+        path.write_bytes(original)
+        self.assertEqual(llvm_backend.identity(path),
+                         {key: self.resources['source'][key] for key in ('path', 'sha256', 'size')})
+        with self.assertRaisesRegex(ValueError, 'input changed'):
+            sonar.generate(self.root)
 
     def test_changed_lcov_source_context_or_missing_implementation_input_refuse(self) -> None:
         for path in (Path(self.llvm['lcov']['path']), Path(self.native['compilation_database']['path']),
