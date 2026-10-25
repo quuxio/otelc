@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This explicit profile separates compilation, preparation and owned execution for unedited C/C++ applications. It uses the common schema-3 policy, LLVM 22, the registered function ABI and the official C++ SDK pipeline. The separate [build-3 context candidate](native-build-context.md) adds explicit per-unit compiler contexts, private helper assets and a neutral observation driver. Automatic build discovery, task/service propagation, automatic lifetimes, independent oteleq integration and complete language acceptance remain open.
+This explicit profile separates compilation, preparation and owned execution for unedited C/C++ applications. It uses the common schema-3 policy, LLVM 22, the registered function ABI and the official C++ SDK pipeline. The separate [build-3 context candidate](native-build-context.md) adds explicit per-unit compiler contexts, private helper assets and a neutral observation driver. The [C++ lifetime candidate](native-public-lifetimes.md) adds explicit build 4 through the same preparation/release API. Automatic build discovery, task/service propagation, independent oteleq integration and complete language acceptance remain open.
 
 ## Commands
 
@@ -18,7 +18,7 @@ bin/quux-otelc --config /tmp/native-demo.toml native-run \
   --build /tmp/native-prepared-build --runtime /tmp/native-prepared-run
 ```
 
-`native-protocols` needs neither a policy file nor a compiler. `native-build` writes `native-source-build.json` version 2 and binds the native build, plugin, gate and SDK build records. Preparation and launch recheck the recorded products and inputs without running a compiler. This is an input/product binding; it does not prove complete source origin or installed-library closure.
+`native-protocols` needs neither a policy file nor a compiler. Function-only `native-build --source` writes `native-source-build.json` version 2 and binds the native build, plugin, gate and SDK build records. Preparation and launch recheck the recorded products and inputs without running a compiler. This is an input/product binding; it does not prove complete source origin or installed-library closure.
 
 Add `--plain` to run the compiled uninstrumented lane. Each launch requires a new runtime directory. Use `--` before literal application arguments; the tooling does not interpret them as shell text. Standard input, output and error remain application channels. The SDK control endpoint is `<runtime>/app/control.json`, with the usual `metrics` commands for independent collection and emission switches.
 

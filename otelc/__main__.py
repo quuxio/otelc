@@ -87,7 +87,7 @@ def main() -> int:
     native.add_argument("--plain", action="store_true")
     native.add_argument("arguments", nargs=argparse.REMAINDER)
     native_protocol_parser = commands.add_parser('native-protocols', help='describe explicit owned native formats without compiling')
-    native_protocol_parser.add_argument('--build-version', type=int, choices=(2, 3), default=2)
+    native_protocol_parser.add_argument('--build-version', type=int, choices=(2, 3, 4), default=2)
     native_build_parser = commands.add_parser('native-build', help='candidate: retain a native build for owned execution')
     native_build_parser.add_argument('--language', choices=('c', 'cpp'), required=True)
     native_build_parser.add_argument('--root', type=Path, required=True)

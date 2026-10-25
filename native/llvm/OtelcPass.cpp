@@ -1,5 +1,8 @@
 // Itanium C++ EH instrumentation. Probes cannot throw or inspect arguments.
 #include "function_abi.h"
+#ifdef OTELC_OBJECT_WITH_FUNCTIONS_V1
+#include "object_pass.h"
+#endif
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/ADT/DenseMap.h"
@@ -195,9 +198,13 @@ void registerFunctions(Module &M, ArrayRef<Function *> Functions, FunctionCallee
 }
 #endif
 struct OtelcPass : PassInfoMixin<OtelcPass> {
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &Manager) {
     if (M.getNamedMetadata("otelc.instrumented"))
       report_fatal_error("otelc: module already instrumented");
+    (void)Manager;
+#ifdef OTELC_OBJECT_WITH_FUNCTIONS_V1
+    otelc::InstrumentObjectBoundaries(M, Manager);
+#endif
     auto &C = M.getContext();
     auto *Ptr = PointerType::getUnqual(C);
     auto *I64 = Type::getInt64Ty(C);

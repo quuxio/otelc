@@ -29,8 +29,9 @@ class NativeSonarTests(unittest.TestCase):
         header = self.root / 'native/llvm/function_abi.h'
         header.write_text('fixed ABI header\n')
         self.records = []
-        for name, relatives in (('llvm-pass', sonar.PRODUCTION[:1]), ('native-control', sonar.PRODUCTION[1:3]),
-                                ('native-launch', sonar.PRODUCTION[3:4]), ('native-gate', sonar.PRODUCTION[4:])):
+        for name, relatives in (('llvm-pass', sonar.PRODUCTION[:1]), ('native-control', sonar.CONTROL_PRODUCTION),
+                                ('native-launch', sonar.PRODUCTION[3:4]), ('native-gate', sonar.PRODUCTION[4:5]),
+                                ('native-lifetimes', sonar.PRODUCTION[5:6]), ('native-object-pass', sonar.PRODUCTION[7:8])):
             lcov = self.output / (name + '.lcov')
             lcov.write_text(''.join(self.lcov(self.root / relative) for relative in relatives))
             database = self.output / (name + '-compile.json')
@@ -41,15 +42,19 @@ class NativeSonarTests(unittest.TestCase):
                                      'headers': [llvm_backend.identity(header)],
                                      'line_coverage': {'count': 5, 'covered': 4}}
         self.native = self.records[1] | {
-            'source_inputs': [llvm_backend.identity(self.root / relative) for relative in sonar.PRODUCTION[1:3]],
-            'line_coverage': {str(self.root / relative): {'count': 5, 'covered': 4} for relative in sonar.PRODUCTION[1:3]}}
+            'source_inputs': [llvm_backend.identity(self.root / relative) for relative in sonar.CONTROL_PRODUCTION],
+            'line_coverage': {str(self.root / relative): {'count': 5, 'covered': 4} for relative in sonar.CONTROL_PRODUCTION}}
         self.launch = self.records[2] | {
             'source_inputs': [llvm_backend.identity(self.root / relative) for relative in sonar.PRODUCTION[3:4]],
             'line_coverage': {str(self.root / relative): {'count': 5, 'covered': 4} for relative in sonar.PRODUCTION[3:4]}}
         self.gate = self.records[3] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[4]),
             'line_coverage': {str(self.root / sonar.PRODUCTION[4]): {'count': 5, 'covered': 4}}}
+        self.lifetimes = self.records[4] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[5]),
+            'line_coverage': {'count': 5, 'covered': 4}}
+        self.objects = self.records[5] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[7]),
+            'headers': [llvm_backend.identity(header)], 'line_coverage': {'count': 5, 'covered': 4}}
         database = Path(self.native['compilation_database']['path'])
-        database.write_text(json.dumps([self.entry(self.root / relative) for relative in (*sonar.PRODUCTION[1:3], *sonar.TESTS)]))
+        database.write_text(json.dumps([self.entry(self.root / relative) for relative in (*sonar.CONTROL_PRODUCTION, *sonar.TESTS)]))
         self.native['compilation_database'] = llvm_backend.identity(database)
         self.write_records()
 
@@ -63,7 +68,8 @@ class NativeSonarTests(unittest.TestCase):
     def write_records(self) -> None:
         for name, value in (('llvm-pass-source-coverage-identity.json', self.llvm),
                             ('native-control-coverage.json', self.native),
-                            ('native-launch-coverage.json', self.launch), ('native-gate-coverage.json', self.gate)):
+                            ('native-launch-coverage.json', self.launch), ('native-gate-coverage.json', self.gate),
+                            ('native-lifetimes-coverage.json', self.lifetimes), ('native-object-pass-coverage.json', self.objects)):
             (self.output / name).write_text(json.dumps(value))
 
     def test_lcov_keeps_uncovered_lines_and_refuses_incomplete_foreign_or_inconsistent_data(self) -> None:
@@ -148,6 +154,10 @@ class NativeSonarTests(unittest.TestCase):
         for path in (Path(self.llvm['lcov']['path']), Path(self.native['compilation_database']['path']),
                      Path(self.launch['lcov']['path']), Path(self.launch['compilation_database']['path']),
                      Path(self.gate['lcov']['path']), Path(self.gate['compilation_database']['path']),
+                     Path(self.lifetimes['lcov']['path']), Path(self.lifetimes['compilation_database']['path']),
+                     self.root / sonar.PRODUCTION[5], self.root / sonar.PRODUCTION[6],
+                     Path(self.objects['lcov']['path']), Path(self.objects['compilation_database']['path']),
+                     self.root / sonar.PRODUCTION[7],
                      self.root / sonar.PRODUCTION[4],
                      self.root / sonar.PRODUCTION[0], self.root / sonar.PRODUCTION[1], self.root / sonar.PRODUCTION[3]):
             before = path.read_bytes()
