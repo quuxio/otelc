@@ -15,7 +15,7 @@ def main() -> int:
     """Fail if any selected launcher test is skipped, missing or unsuccessful."""
     sys.path.insert(0, str(ROOT / 'tests'))
     suite = unittest.defaultTestLoader.loadTestsFromNames(
-        ['test_native_launch', 'test_native_launch_tooling'])
+        ['test_native_launch', 'test_native_launch_tooling', 'test_native_object_launch_runtime'])
     selected = suite.countTestCases()
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     value = {'selected': selected, 'tests_run': result.testsRun,

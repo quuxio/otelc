@@ -98,7 +98,7 @@ class GoContextBundleTests(unittest.TestCase):
         self.assertEqual(value['detached_spans'], 'explicit-non-ending-unlink-v1')
         self.assertIn(b'func DetachSpanFromGLS', (self.output / 'pkg/runtime/trace_context.go').read_bytes())
         self.assertEqual((self.output / bundle.TRACE_OUTPUT / 'otelc_detached_span.go').read_bytes(), bundle.DETACH_SOURCE)
-        self.assertTrue((self.output / bundle.TRACE_OUTPUT / 'otelc.yaml').read_bytes().find(bundle.DETACH_RULE) >= 0)
+        self.assertIn(bundle.DETACH_RULE, (self.output / bundle.TRACE_OUTPUT / 'otelc.yaml').read_bytes())
         self.assertFalse((self.root / 'outside.go').exists())
         self.assertEqual(bundle.verify(self.bundle, self.output, tasks=True), value)
         self.assertEqual(self.bundle.read_bytes(), before)

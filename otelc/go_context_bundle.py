@@ -19,6 +19,7 @@ MODULE_GO_SUM = 'h1:fOCi1cByxU0s3sOwXPp5/gAnxsPl5KsTM9elgtBIESE='
 BUNDLE_SHA256 = '4a928c69ce269e37c98413c93159713fa7bcd8169c5d6b4de167305dc5ca9bb2'
 MAX_BUNDLE_BYTES = 16 * 1024 * 1024
 MANIFEST = 'context-bundle.json'
+RULES_FILENAME = 'otelc.yaml'
 TRACE_PREFIX = 'instrumentation_temp/go.opentelemetry.io/otel/sdk/trace/'
 TRACE_OUTPUT = 'instrumentation/go.opentelemetry.io/otel/sdk/trace/'
 
@@ -26,9 +27,9 @@ TRACE_OUTPUT = 'instrumentation/go.opentelemetry.io/otel/sdk/trace/'
 # signal handling and logging do not belong in the application's owned pipeline.
 INPUTS = {
     **{TRACE_PREFIX + name: TRACE_OUTPUT + name for name in (
-        'gls.go', 'go.mod', 'go.sum', 'hook.go', 'otel_trace_context.go', 'otelc.yaml')},
+        'gls.go', 'go.mod', 'go.sum', 'hook.go', 'otel_trace_context.go', RULES_FILENAME)},
     **{'instrumentation_temp/runtime/' + name: 'instrumentation/runtime/' + name
-       for name in ('go.mod', 'otelc.yaml', 'runtime_gls.go', 'stub.go')},
+       for name in ('go.mod', RULES_FILENAME, 'runtime_gls.go', 'stub.go')},
     'pkg_temp/go.mod': 'pkg/go.mod',
     'pkg_temp/hook/context.go': 'pkg/hook/context.go',
     'pkg_temp/runtime/trace_context.go': 'pkg/runtime/trace_context.go',
@@ -132,7 +133,7 @@ def _members(data: bytes) -> dict[str, bytes]:
 def _generated(original: dict[str, bytes], tasks: bool) -> dict[str, bytes]:
     result = {INPUTS[name]: data for name, data in original.items()}
     result['pkg/runtime/trace_context.go'] += DETACH_BRIDGE
-    result[TRACE_OUTPUT + 'otelc.yaml'] += DETACH_RULE
+    result[TRACE_OUTPUT + RULES_FILENAME] += DETACH_RULE
     result[TRACE_OUTPUT + 'otelc_detached_span.go'] = DETACH_SOURCE
     if tasks:
         path = TRACE_OUTPUT + 'otel_trace_context.go'

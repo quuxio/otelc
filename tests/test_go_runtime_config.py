@@ -41,17 +41,20 @@ class GoRuntimeConfigTests(unittest.TestCase):
         ):
             with self.subTest(functions=functions), self.assertRaises(ValueError):
                 runtime.configuration(policy, functions, lifetimes, digest)
+        foreign = Policy.parse({'schema_version': 3, 'languages': ['java']})
+        disabled = Policy.parse({'schema_version': 3, 'lifetimes': {'enabled': False}})
         with self.assertRaises(ValueError):
-            runtime.configuration(Policy.parse({'schema_version': 3, 'languages': ['java']}), (), (), 'a' * 64)
+            runtime.configuration(foreign, (), (), 'a' * 64)
         with self.assertRaises(ValueError):
-            runtime.configuration(Policy.parse({'schema_version': 3, 'lifetimes': {'enabled': False}}), (), (('WorkItem', True),), 'a' * 64)
+            runtime.configuration(disabled, (), (('WorkItem', True),), 'a' * 64)
 
     def test_private_publication_hash_modes_and_existing_path_preservation(self) -> None:
+        policy = self.policy()
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'runtime'
             old_umask = os.umask(0o777)
             try:
-                value = runtime.prepare(self.policy(), directory, functions=('app.workload',),
+                value = runtime.prepare(policy, directory, functions=('app.workload',),
                                         lifetimes=(('app.WorkItem', True),), selection_sha256='a' * 64)
             finally:
                 os.umask(old_umask)
@@ -62,15 +65,16 @@ class GoRuntimeConfigTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(original).hexdigest(), value['environment']['OTELC_GO_CONFIG_SHA256'])
             self.assertEqual(value['health_version'], 4)
             with self.assertRaises(FileExistsError):
-                runtime.prepare(self.policy(), directory, functions=(), lifetimes=(), selection_sha256='a' * 64)
+                runtime.prepare(policy, directory, functions=(), lifetimes=(), selection_sha256='a' * 64)
             self.assertEqual(config.read_bytes(), original)
 
     def test_ambient_sdk_options_and_oversized_config_refuse_before_output(self) -> None:
+        policy = self.policy()
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'runtime'
             with patch.dict(os.environ, {'OTEL_EXPORTER_OTLP_TIMEOUT': 'invalid'}), self.assertRaisesRegex(ValueError, 'ambient'):
-                runtime.prepare(self.policy(), directory, functions=(), lifetimes=(), selection_sha256='a' * 64)
+                runtime.prepare(policy, directory, functions=(), lifetimes=(), selection_sha256='a' * 64)
             self.assertFalse(directory.exists())
             with patch.object(runtime, 'MAX_CONFIG_BYTES', 1), self.assertRaisesRegex(ValueError, 'byte bound'):
-                runtime.prepare(self.policy(), directory, functions=(), lifetimes=(), selection_sha256='a' * 64)
+                runtime.prepare(policy, directory, functions=(), lifetimes=(), selection_sha256='a' * 64)
             self.assertFalse(directory.exists())

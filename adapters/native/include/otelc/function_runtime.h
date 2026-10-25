@@ -55,6 +55,8 @@ class FunctionRuntime {
   std::uint64_t Enter(const void *address) noexcept;
   bool Leave(std::uint64_t token, std::int32_t unwinding) noexcept;
   FunctionStatus Status() const;
+  // Snapshot the selected function's explicit context without reading SDK TLS.
+  opentelemetry::trace::SpanContext CurrentContext() const noexcept;
   // Stop admission immediately. Existing calls can still leave on their owner
   // threads; false means the caller must retain the engine and try again later.
   bool Close();

@@ -60,6 +60,8 @@ Lifetime identity uses typed `weak.Pointer` keys and `runtime.AddCleanup`. The m
 
 The probes reuse the common `otelc.lifetime.admitted`, `completed`, `duration`, `live`, `incomplete` and `lost` metrics with `type` and `boundary` labels. Boundaries are `observed_gc` and `resource`. Completed lifetime spans are separate traces with a link to construction context. Their open SDK frames are detached immediately, so an unrelated function or task does not inherit a lifetime span. Shutdown stops owned cleanup observations and retains unresolved objects/resources in local health; it does not end them at a fabricated GC or release time. Duplicate tracking is counted separately from loss. Capacity, unsupported bindings/sizes and failed context detachment remain visible as observer failures.
 
+If lifetime setup fails after starting either diagnostic span, every span already created by that attempt ends with `boundary=observer_failure`. The object is not admitted, no GC or release completion is recorded, and one lifetime loss remains visible. In particular, failure to detach the resource span cannot leave the earlier GC span open without a tracked object.
+
 The recorder limits active owned functions to at most 512 and uses the configured bounded lifetime capacity. This does not qualify interaction with arbitrary application-owned SDK context or upstream context-table pressure. The public launcher must still define/refuse unsupported profiles and expose the complete health evidence.
 
 Generated lifetime-only constructor/release hooks use `Watch`, a bounded completion guard with no function span or measurement. Selecting a lifetime therefore does not override the separate function inclusion/exclusion rules. Its observer starts, ends, active count and losses are reported separately. A failed, panicking, exiting or unknown completion cannot authorise a successful factory/release observation.
@@ -78,6 +80,8 @@ The candidate `runtime` package now connects those probes to its isolated offici
 Parent capture copies only immutable span context, not an application-owned span object. The official no-op tracer can return its existing non-recording parent directly; supplying that object would let a disabled tracing probe end or mutate it. The regression reproduces those parent mutations before the context-only handoff and checks unchanged parent state afterwards.
 
 The common metric-control client reads the same `control.json` format as the other TCP adapters. `status`, on/off, independent collection/emission, flush and health commands operate without a restart or rebuild. An incomplete client is closed during shutdown. Export failure remains visible after retry; API success does not establish downstream receipt.
+
+The control server passes its owned cancellation context through the accept loop and each handler. Closing the server cancels an in-flight flush and its HTTP exporter as well as closing incomplete clients. Each command still has its separate two-second deadline; a server struct does not retain the context.
 
 A collection-only switch does not wait for an unrelated SDK export; it changes future measurement admission while a previously started export can settle. Explicit emission/off commands keep the strict in-flight export barrier. The stalled-receiver regression checks this separation rather than treating a Collector timeout as a reason to leave collection enabled.
 

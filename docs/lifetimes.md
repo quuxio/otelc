@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Select object types in the same policy used for function instrumentation. The application needs no telemetry imports, annotations or probes. The current rebuild implements the internal Java example; the remaining adapters follow the [delivery plan](rebuild-plan.md).
+Select object types in the same policy used for function instrumentation. The application needs no telemetry imports, annotations or probes. The Java example and the Node, Python and C++ candidates have the distinct observation boundaries below. Complete language acceptance follows the [delivery plan](rebuild-plan.md).
 
 ```toml
 [lifetimes]
@@ -21,7 +21,7 @@ max_live = 1000000
 | --- | --- | --- |
 | `observed_gc` | Successful construction to weak-reference collection notification | Java final concrete classes with one constructor, in the example's application classloader |
 | `resource` | Successful construction to the first normal return from a selected instance release method | Java zero-argument synchronous `void` methods, such as existing `close()` |
-| Destruction | Complete object construction to destruction, including exception unwinding | Planned C++/LLVM adapter |
+| Destruction | Complete object construction to destruction, including exception unwinding | Non-trivial C++ complete objects in the [explicit native build-4 candidate](native-public-lifetimes.md); its declared boundaries apply |
 | Drop | Completed construction to ownership-driven drop | Planned Rust adapter |
 | Allocation/free | Selected allocation to matching free or resource release | Planned C/LLVM adapter |
 | Other managed runtimes | Observed GC where the runtime permits it, plus explicit resource release | [Node](node-source.md) and [Python](python-native.md) candidates with declared source/runtime limits; Go planned |

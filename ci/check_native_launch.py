@@ -34,10 +34,11 @@ def check() -> None:
     sources = [*sorted((ROOT / 'adapters/native').rglob('*.cpp')),
                *sorted((ROOT / 'adapters/native').rglob('*.h')),
                ROOT / 'adapters/native/CMakeLists.txt', ROOT / 'adapters/native/launcher/CMakeLists.txt',
-               llvm_backend.HEADER, llvm_backend.SOURCE,
+               llvm_backend.HEADER, llvm_backend.SOURCE, ROOT / 'native/llvm/object_abi.h',
                *(ROOT / path for path in ('otelc/native_launch.py', 'otelc/llvm_backend.py',
                   'otelc/config.py', 'otelc/file_inputs.py', 'otelc/control.py', 'otelc/health.py',
                   'tests/test_native_launch.py', 'tests/test_native_launch_tooling.py',
+                  'tests/test_native_object_launch_runtime.py',
                   'tests/test_java_integration.py', 'ci/native_launch_suite.py', 'ci/check_native_launch.py'))]
     before = [llvm_backend.identity(path) for path in sources]
     environment = {key: value for key, value in os.environ.items()

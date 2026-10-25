@@ -23,7 +23,7 @@ def counters(value: Any, fields: set[str] | frozenset[str], *, boolean: str | No
         raise ValueError('invalid Go health observer flag')
     for field in fields:
         counter = value[field]
-        if (type(counter) is not str or re.fullmatch(r'0|[1-9][0-9]{0,19}', counter) is None
+        if (type(counter) is not str or re.fullmatch(r'0|[1-9]\d{0,19}', counter, flags=re.ASCII) is None
                 or int(counter) > MAX_UINT64):
             raise ValueError('invalid Go health unsigned counter')
 
@@ -42,6 +42,36 @@ def exports(value: Any, *, traces: bool) -> None:
     counters({key: item for key, item in value.items() if key != 'observed'}, fields, boolean='closed')
 
 
+def controls(state: Any, pid: int) -> None:
+    """Require one exact same-process metric switch checkpoint."""
+    if (type(state) is not dict or set(state) != {'schema_version', 'pid', 'collection', 'emission', 'effective_emission_off'}
+            or type(state['schema_version']) is not int or state['schema_version'] != 1
+            or type(state['pid']) is not int or state['pid'] != pid
+            or any(type(state[field]) is not bool for field in ('collection', 'emission', 'effective_emission_off'))
+            or state['effective_emission_off'] != (not state['emission'])):
+        raise ValueError('invalid Go runtime health controls')
+
+
+def lifecycle(lifecycle: Any) -> None:
+    """Keep SDK flush and shutdown outcomes explicit."""
+    if (type(lifecycle) is not dict or set(lifecycle) != {'flush', 'shutdown'}
+            or any(type(item) is not str or item not in OUTCOMES for item in lifecycle.values())):
+        raise ValueError('invalid Go SDK lifecycle evidence')
+
+
+def http_observation(http: Any, traces_observed: bool) -> None:
+    """An HTTP observer belongs to the same owned trace SDK."""
+    if type(http) is not dict or type(http.get('observed')) is not bool:
+        raise ValueError('invalid Go HTTP span observation')
+    if http['observed']:
+        counters({key: item for key, item in http.items() if key != 'observed'},
+                 {'started', 'ended', 'active'}, boolean='closed')
+    elif http != {'observed': False}:
+        raise ValueError('unobserved Go HTTP spans have invented counters')
+    if http['observed'] != traces_observed:
+        raise ValueError('Go HTTP observer differs from its owned trace SDK')
+
+
 def validate(value: Any) -> dict[str, Any]:
     """Accept schema 4 only; HTTP activity is separate from function probes."""
     fields = {'schema_version', 'kind', 'language', 'scope', 'pid', 'policy_sha256',
@@ -58,31 +88,13 @@ def validate(value: Any) -> dict[str, Any]:
     for field in ('policy_sha256', 'selection_sha256'):
         if type(value[field]) is not str or re.fullmatch('[0-9a-f]{64}', value[field]) is None:
             raise ValueError('invalid Go runtime health digest')
-    state = value['controls']
-    if (type(state) is not dict or set(state) != {'schema_version', 'pid', 'collection', 'emission', 'effective_emission_off'}
-            or type(state['schema_version']) is not int or state['schema_version'] != 1
-            or type(state['pid']) is not int or state['pid'] != value['pid']
-            or any(type(state[field]) is not bool for field in ('collection', 'emission', 'effective_emission_off'))
-            or state['effective_emission_off'] != (not state['emission'])):
-        raise ValueError('invalid Go runtime health controls')
-    lifecycle = value['lifecycle']
-    if (type(lifecycle) is not dict or set(lifecycle) != {'flush', 'shutdown'}
-            or any(type(item) is not str or item not in OUTCOMES for item in lifecycle.values())):
-        raise ValueError('invalid Go SDK lifecycle evidence')
+    controls(value['controls'], value['pid'])
+    lifecycle(value['lifecycle'])
     counters(value['metric_flush'], {'attempts', 'failed_attempts'})
     counters(value['probe_accounting'], PROBE_COUNTERS, boolean='closed')
     exports(value['metric_exports'], traces=False)
     exports(value['trace_exports'], traces=True)
-    http = value['http_spans']
-    if type(http) is not dict or type(http.get('observed')) is not bool:
-        raise ValueError('invalid Go HTTP span observation')
-    if http['observed']:
-        counters({key: item for key, item in http.items() if key != 'observed'},
-                 {'started', 'ended', 'active'}, boolean='closed')
-    elif http != {'observed': False}:
-        raise ValueError('unobserved Go HTTP spans have invented counters')
-    if http['observed'] != value['trace_exports']['observed']:
-        raise ValueError('Go HTTP observer differs from its owned trace SDK')
+    http_observation(value['http_spans'], value['trace_exports']['observed'])
     if (value['metric_exports'].get('observed') is not True
             or value['downstream_receipt'] != 'unavailable' or value['otlp_partial_rejection'] != 'unavailable'):
         raise ValueError('unsupported Go health delivery claim')

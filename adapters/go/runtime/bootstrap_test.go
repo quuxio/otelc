@@ -69,6 +69,7 @@ func TestPeriodicRuntimeKeepsTracingIndependentFromBothMetricGates(t *testing.T)
 	}
 	command(t, r, "on")
 	invoke(r)
+	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		metrics, _, _ := sink.snapshot()
 		if metrics > 0 {
@@ -80,6 +81,11 @@ func TestPeriodicRuntimeKeepsTracingIndependentFromBothMetricGates(t *testing.T)
 		t.Fatal("startup-off could not enable periodic metrics")
 	}
 	command(t, r, "collection off")
+	// Collection-only control does not wait for an already admitted export.
+	// Flush serialises with that export before we count later periodic work.
+	if response := command(t, r, "flush"); response["error"] != nil {
+		t.Fatal("could not settle the admitted periodic export")
+	}
 	before, _, _ := sink.snapshot()
 	time.Sleep(30 * time.Millisecond)
 	if after, _, _ := sink.snapshot(); after != before {
