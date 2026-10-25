@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development. The SDK runtime now has a separate `free_entry` boundary with type-erased release lookup. The compiler and public C build/launch route are not connected yet; the current CLI still refuses enabled C lifetimes. This is not C language admission.
+Status: development. The SDK runtime has a separate `free_entry` boundary with type-erased release lookup. Clang resolves selected C record-pointer allocations, and a separate LLVM candidate observes matching compiled allocation/free calls. The public C build/launch route is not connected yet; the current CLI still refuses enabled C lifetimes. This is not C language admission.
 
 ## Expected behaviour and acceptance
 
@@ -18,6 +18,12 @@ The common schema-3 policy selects C record-pointer allocations by the type reso
 - Real SDK, compiler, public CLI, decoded OTLP and benchmark checks need at least 80% coverage for every new component, independent review and protected exact-head checks before delivery. Passing runtime tests alone does not enable the capability.
 
 The initial compiler profile will not cover `realloc`, custom or interposed allocators, stack scope boundaries or arbitrary pointer-flow inference. Those remain separate work. A `free` boundary does not establish external file/socket/resource release.
+
+## Compiler boundaries
+
+LLVM can remove allocations and frees during optimisation. The candidate validates source/type/call bindings before optimisation, retains an immutable string plan in the module and inserts probes after optimisation. Inlining can produce several emitted calls for one source site; an optimiser can also replace a `malloc`/zero-fill pair with `calloc`. The exclusive per-unit resolution record retains actual emitted call counts and callee names. A zero-match source site produces no fabricated lifetime. These counts describe static compiler boundaries, not runtime invocation counts or complete allocation coverage.
+
+`make native-resources-check` runs the real Clang/LLVM tests and independent 80% native/Python coverage floors. The tests compare stock and instrumented outcomes for retained allocations, allocator elision, inlining, allocator-family replacement and unoptimised builds. They also refuse changed, incomplete or ambiguous source bindings, conflicting callback ABIs and an existing resolution output. Compiler tests use test-owned observation callbacks; actual SDK/public launch and decoded OTLP acceptance remain separate work.
 
 ## Runtime checks
 

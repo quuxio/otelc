@@ -31,7 +31,8 @@ class NativeSonarTests(unittest.TestCase):
         self.records = []
         for name, relatives in (('llvm-pass', sonar.PRODUCTION[:1]), ('native-control', sonar.CONTROL_PRODUCTION),
                                 ('native-launch', sonar.PRODUCTION[3:4]), ('native-gate', sonar.PRODUCTION[4:5]),
-                                ('native-lifetimes', sonar.PRODUCTION[5:6]), ('native-object-pass', sonar.PRODUCTION[7:8])):
+                                ('native-lifetimes', sonar.PRODUCTION[5:6]), ('native-object-pass', sonar.PRODUCTION[7:8]),
+                                ('native-resources', sonar.PRODUCTION[8:9]), ('native-resource-pass', sonar.PRODUCTION[9:10])):
             lcov = self.output / (name + '.lcov')
             lcov.write_text(''.join(self.lcov(self.root / relative) for relative in relatives))
             database = self.output / (name + '-compile.json')
@@ -53,6 +54,10 @@ class NativeSonarTests(unittest.TestCase):
             'line_coverage': {'count': 5, 'covered': 4}}
         self.objects = self.records[5] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[7]),
             'headers': [llvm_backend.identity(header)], 'line_coverage': {'count': 5, 'covered': 4}}
+        self.resources = self.records[6] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[8]),
+            'line_coverage': {'count': 5, 'covered': 4}}
+        self.resource_pass = self.records[7] | {'source': llvm_backend.identity(self.root / sonar.PRODUCTION[9]),
+            'headers': [llvm_backend.identity(header)], 'line_coverage': {'count': 5, 'covered': 4}}
         database = Path(self.native['compilation_database']['path'])
         database.write_text(json.dumps([self.entry(self.root / relative) for relative in (*sonar.CONTROL_PRODUCTION, *sonar.TESTS)]))
         self.native['compilation_database'] = llvm_backend.identity(database)
@@ -69,7 +74,8 @@ class NativeSonarTests(unittest.TestCase):
         for name, value in (('llvm-pass-source-coverage-identity.json', self.llvm),
                             ('native-control-coverage.json', self.native),
                             ('native-launch-coverage.json', self.launch), ('native-gate-coverage.json', self.gate),
-                            ('native-lifetimes-coverage.json', self.lifetimes), ('native-object-pass-coverage.json', self.objects)):
+                            ('native-lifetimes-coverage.json', self.lifetimes), ('native-object-pass-coverage.json', self.objects),
+                            ('native-resources-coverage.json', self.resources), ('native-resource-pass-coverage.json', self.resource_pass)):
             (self.output / name).write_text(json.dumps(value))
 
     def test_lcov_keeps_uncovered_lines_and_refuses_incomplete_foreign_or_inconsistent_data(self) -> None:

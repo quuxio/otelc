@@ -52,6 +52,7 @@ class CResourceSemanticsTests(unittest.TestCase):
         lcov.write_bytes(subprocess.check_output([*command, '-format=lcov'], timeout=60))
         (ROOT / 'build/native-resources-coverage.json').write_text(json.dumps({
             'source': native_gate.identity(tools.RESOURCE_SOURCE), 'tool': receipt,
+            'compilation_database': native_gate.identity(cls.tool.directory / 'compile_commands.json'),
             'line_coverage': summary, 'lcov': native_gate.identity(lcov)}, indent=2) + '\n')
         print('C resource Clang coverage:', summary)
         assert summary['percent'] >= 80, summary
