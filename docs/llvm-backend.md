@@ -79,6 +79,8 @@ The pass preserves original catches and destructor cleanup, inserts cleanup for 
 
 Clang semantic annotations can be read by the internal pass: `__attribute__((annotate("otelc.instrument")))` and `__attribute__((annotate("otelc.exclude")))`. Unrelated annotations remain unchanged and exclusion wins. The common schema currently has no annotation switch, so the tooling API explicitly disables this internal option. Developers need no annotations for configuration-based selection.
 
+The pass also honours LLVM's `noprofile` function attribute. Clang emits it for `no_profile_instrument_function`, so private observation helpers can stay outside an include-all policy without enabling optional annotation reading. See the [native build-context guide](native-build-context.md#observation-tooling-inputs); application developers do not add these helpers or attributes.
+
 ## Evidence and remaining work
 
 `make llvm-check` runs the matched real compiler and enforces at least 80% line coverage independently for the Python component and each native pass variant. The registered variant repeats the base compiler corpus and additionally checks selected address/name agreement, UTF-8 and demangled C++ names, exclusions, ordinary pre-main initialisers, empty selection and incompatible registration declarations. The full `make check` also discovers these tests and enforces the floors. Default artifacts use `build/llvm-pass*`; registered artifacts use `build/llvm-pass-registry*` and a separately retained plugin. Python component coverage is under `build/llvm-python.coverage`. C++ Sonar uses the source-aware compilation context, which includes the base, registration and source-selection implementations.

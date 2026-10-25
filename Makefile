@@ -13,7 +13,7 @@ NATIVE_LAUNCH_OUTPUT ?= build/native-launch-sdk
 .NOTPARALLEL: check
 
 help:
-	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint, adapter tests and native compiler/SDK component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'llvm-plugin Build the LLVM 22 function-hook component in a new directory' 'llvm-check  Check real C/C++/IR compilation and 80% native/Python coverage' 'native-check Check official C++ SDK metric controls and 80% component coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
+	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint, adapter tests and native compiler/SDK component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'llvm-plugin Build the LLVM 22 function-hook component in a new directory' 'llvm-check  Check real C/C++/IR compilation and 80% native/Python coverage' 'native-check Check official C++ SDK metric controls and 80% component coverage' 'native-units-check Check explicit native build contexts and 80% component coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
 setup:
 	python3 -m venv .venv
@@ -48,6 +48,12 @@ llvm-check:
 	mkdir -p build
 	$(PYTHON) -m coverage run --data-file=build/llvm-python.coverage --source=otelc.llvm_backend -m unittest discover -s tests -p 'test_llvm*.py' -v
 	$(PYTHON) -m coverage report --data-file=build/llvm-python.coverage --fail-under=80
+
+.PHONY: native-units-check
+native-units-check:
+	mkdir -p build
+	$(PYTHON) -m coverage run --data-file=build/native-units.coverage --source=otelc.native_units -m unittest discover -s tests -p test_native_units.py -v
+	$(PYTHON) -m coverage report --data-file=build/native-units.coverage --fail-under=80
 
 native-check:
 	mkdir -p build
@@ -111,6 +117,7 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/otelc/native_gate.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/native_units.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_supervisor.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/prepared_native.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/check_native_launch.py' --fail-under=80

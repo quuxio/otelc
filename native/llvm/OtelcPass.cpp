@@ -246,7 +246,8 @@ struct OtelcPass : PassInfoMixin<OtelcPass> {
     SmallVector<Function *> Functions;
     DenseMap<Function *, std::string> Labels;
     for (auto &F : M) {
-      if (F.isDeclaration() || F.hasFnAttribute("no-instrument-function"))
+      if (F.isDeclaration() || F.hasFnAttribute("no-instrument-function") ||
+          F.hasFnAttribute(Attribute::NoProfile))
         continue;
       auto Name=llvm::demangle(F.getName().str());
       bool Selected = (Annotations.lookup(&F) & 1) != 0;

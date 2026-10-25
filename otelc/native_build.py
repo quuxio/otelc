@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-from otelc import file_inputs, llvm_backend, native_gate, native_launch
+from otelc import file_inputs, llvm_backend, native_gate, native_launch, native_units
 from otelc.config import Policy
 from otelc.python_sdk_io import decode
 
@@ -49,13 +49,19 @@ def sdk(directory: Path) -> dict[str, Any]:
 
 
 def build(policy: Policy, language: str, root: Path, sources: list[Path], output: Path,
-          *, sdk_directory: Path) -> dict[str, Any]:
+          *, sdk_directory: Path, recipe: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build both lanes and the fixed gate, preserving original application files."""
     source_sdk = sdk(sdk_directory)
-    built = native_launch.build(policy, language, root, sources, output,
-                                library=Path(source_sdk['library']['path']))
+    if recipe is None:
+        built = native_launch.build(policy, language, root, sources, output,
+                                    library=Path(source_sdk['library']['path']))
+    else:
+        if sources:
+            raise ValueError('native build selects either fixed sources or an explicit unit recipe')
+        built = native_units.build(policy, language, root, recipe, output,
+                                  library=Path(source_sdk['library']['path']))
     native_gate.build(built.directory / 'gate')
-    value = {'schema_version': 2, 'kind': 'otelc.native.source-build', 'profile': PROFILE,
+    value = {'schema_version': 2 if recipe is None else 3, 'kind': 'otelc.native.source-build', 'profile': PROFILE,
              'native': native_gate.identity(built.directory / 'native-build.json'),
              'plugin': native_gate.identity(built.directory / 'plugin' / llvm_backend.MANIFEST),
              'gate': native_gate.identity(built.directory / 'gate/gate.json'),
@@ -69,10 +75,10 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
     """Reconstruct only fixed product paths and recheck all declared bindings."""
     directory = directory.resolve(strict=True)
     value, _ = read(directory / MANIFEST)
-    if (set(value) != FIELDS or type(value['schema_version']) is not int or value['schema_version'] != 2
+    if (set(value) != FIELDS or type(value['schema_version']) is not int or value['schema_version'] not in (2, 3)
             or value['kind'] != 'otelc.native.source-build' or value['profile'] != PROFILE
             or value['source_complete'] is not False):
-        raise ValueError('native preparation requires source-build2/native-owned-v1')
+        raise ValueError('native preparation requires source-build2 or3/native-owned-v1')
     fixed = {'native': directory / 'native-build.json', 'plugin': directory / 'plugin' / llvm_backend.MANIFEST,
              'gate': directory / 'gate/gate.json'}
     for field, path in fixed.items():
@@ -90,9 +96,12 @@ def verify(directory: Path, policy: Policy) -> tuple[native_launch.Build, native
     gate, gate_raw = read(fixed['gate'])
     native_fields = {'schema_version', 'kind', 'profile', 'language', 'root', 'policy', 'policy_sha256',
                      'selection_sha256', 'inputs', 'sdk_library', 'products', 'commands', 'source_complete'}
+    units = value['schema_version'] == 3
+    if units:
+        native_fields |= {'recipe', 'files', 'artifacts', 'tools', 'dependencies'}
     if (set(metadata) != native_fields or type(metadata.get('schema_version')) is not int
-            or metadata['schema_version'] != 1 or metadata.get('kind') != 'otelc.native-build'
-            or metadata.get('profile') != 'llvm22-native-launch-v1'
+            or metadata['schema_version'] != (2 if units else 1) or metadata.get('kind') != 'otelc.native-build'
+            or metadata.get('profile') != (native_units.PROFILE if units else 'llvm22-native-launch-v1')
             or metadata.get('language') not in ('c', 'cpp') or type(metadata.get('root')) is not str
             or type(metadata.get('policy')) is not dict
             or metadata.get('policy_sha256') != native_launch.digest(metadata['policy'])

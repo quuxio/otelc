@@ -178,6 +178,16 @@ class LLVMIntegrationTests(unittest.TestCase):
         plain, woven = self.compile(source, 'annotations', 'c', policy=policy, annotations=True)
         self.compare(plain, woven, [], {'entries': 1, 'normal': 1, 'unwind': 0, 'invalid': 0})
 
+    def test_clang_profiling_exclusion_survives_without_annotation_mode(self) -> None:
+        source = self.base / 'noprofile.c'
+        source.write_text('#include <stdio.h>\n'
+            '__attribute__((noinline)) int selected_app(void){return 40;}\n'
+            '__attribute__((noinline,no_profile_instrument_function)) int selected_tooling(void){return 2;}\n'
+            'int main(void){printf("%d\\n",selected_app()+selected_tooling());return 0;}\n')
+        for optimisation in ('0', '2'):
+            plain, woven = self.compile(source, 'noprofile-' + optimisation, 'c', optimisation=optimisation)
+            self.compare(plain, woven, [], {'entries': 1, 'normal': 1, 'unwind': 0, 'invalid': 0})
+
     def test_operator_wildcard_matches_a_name_containing_an_asterisk(self) -> None:
         source = self.base / 'asterisk.cpp'
         source.write_text('#include <cstdio>\nstruct Box{__attribute__((noinline)) int operator*(){return 42;}};\n'
