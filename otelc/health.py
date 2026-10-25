@@ -78,6 +78,15 @@ def validate(value: Any) -> dict[str, Any]:
                 or any(not isinstance(functions.get(key), str) or not _counter(functions[key]) for key in counters)
                 or value.get('source_complete') is not False):
             raise ValueError('invalid native function accounting')
+    if 'object_accounting' in value:
+        objects = value['object_accounting']
+        counters = ('types', 'admitted', 'completed', 'live', 'destroying', 'ending',
+                    'censored', 'lost', 'duplicates', 'invalid')
+        if (value['language'] != 'cpp' or type(objects) is not dict
+                or set(objects) != set(counters) | {'closing', 'closed'}
+                or any(type(objects.get(key)) is not bool for key in ('closing', 'closed'))
+                or any(type(objects.get(key)) is not str or not _counter(objects[key]) for key in counters)):
+            raise ValueError('invalid native object accounting')
     if value.get("downstream_receipt") != "unavailable" or value.get("otlp_partial_rejection") != "unavailable":
         raise ValueError("unsupported runtime health delivery claim")
     return value
