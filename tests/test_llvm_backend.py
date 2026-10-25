@@ -26,6 +26,11 @@ class LLVMBackendTests(unittest.TestCase):
         self.source.write_text('fixed source')
         self.header = self.root / 'function_abi.h'
         self.header.write_text('fixed ABI header')
+        self.object_inputs = tuple(self.root / name for name in ('ObjectPass.cpp', 'object_pass.h', 'object_abi.h'))
+        for path in self.object_inputs:
+            path.write_text('fixed object input ' + path.name)
+        objects = patch.object(backend, 'OBJECT_INPUTS', self.object_inputs)
+        objects.start(); self.addCleanup(objects.stop)
         self.config = self.root / 'llvm-config'
         self.version = '22.1.8'
         self.compiler_version = '22.1.8'
@@ -39,7 +44,7 @@ class LLVMBackendTests(unittest.TestCase):
         self.run_mock = run.start(); self.addCleanup(run.stop)
 
     def fake_run(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
-        if '-shared' in command:
+        if '-shared' in command or '-c' in command:
             self.compilation = command
             if self.change:
                 self.change()
@@ -56,8 +61,35 @@ class LLVMBackendTests(unittest.TestCase):
             value = '-L"/libraries with spaces" -lLLVM-22'
         return subprocess.CompletedProcess(command, 0, value, '')
 
-    def build(self, name: str = 'output', *, coverage: bool = False, registry: bool = False) -> backend.Plugin:
-        return backend.build(self.root / name, config=self.config, coverage=coverage, function_registry=registry)
+    def build(self, name: str = 'output', *, coverage: bool = False, registry: bool = False, objects: bool = False) -> backend.Plugin:
+        return backend.build(self.root / name, config=self.config, coverage=coverage, function_registry=registry,
+                             source_aware=objects, object_lifetimes=objects)
+
+    def test_object_profile_compiles_two_fixed_units_and_binds_each_source(self) -> None:
+        plugin = self.build(coverage=True, registry=True, objects=True)
+        record = backend.verify(plugin)
+        self.assertEqual(record['profile'], backend.OBJECT_PROFILE)
+        self.assertEqual(record['object_probe_abi'], 'otelc.object.v1')
+        self.assertEqual(record['object_inputs'], [backend.identity(path) for path in self.object_inputs])
+        commands = json.loads((plugin.directory / 'command.json').read_text())
+        database = json.loads((plugin.directory / 'compile_commands.json').read_text())
+        self.assertEqual(len(commands), 3)
+        self.assertEqual([row['file'] for row in database], [str(self.source), str(self.object_inputs[0])])
+        for command in commands[:2]:
+            self.assertIn('-c', command)
+            self.assertIn('-DOTELC_OBJECT_WITH_FUNCTIONS_V1=1', command)
+            self.assertIn('-fcoverage-mapping', command)
+        self.assertIn('-shared', commands[-1])
+        self.object_inputs[0].write_text('changed object source')
+        with self.assertRaisesRegex(ValueError, 'object source'):
+            backend.verify(plugin)
+
+    def test_object_profile_refuses_missing_source_profile_and_non_boolean_selection(self) -> None:
+        for options in ({'object_lifetimes': True}, {'object_lifetimes': 'yes'},
+                        {'object_lifetimes': True, 'source_aware': True}):
+            with self.assertRaises(ValueError):
+                backend.build(self.root / 'refused', config=self.config, **options)
+        self.assertFalse((self.root / 'refused').exists())
 
     def test_matched_build_keeps_literal_flags_and_all_input_product_identities(self) -> None:
         plugin = self.build(coverage=True)

@@ -85,6 +85,8 @@ Clang semantic annotations can be read by the internal pass: `__attribute__((ann
 
 The source-aware group checks duplicate file-local function names, standard-library exclusion, physical project boundaries including external symlink targets, Unicode/path-glob agreement, missing debug metadata, original exceptions and annotation exclusion. Its artifacts use `build/llvm-pass-source*`.
 
+The separate [object probe component](native-object-probes.md) adds the explicit combined `llvm22-itanium-objects-v1` profile through `build(..., function_registry=True, source_aware=True, object_lifetimes=True)`. It requires a bound Clang semantic inventory and retains both actual plugin translation units. Older function profiles keep their existing contracts. `make native-check` executes the combined compiler/SDK fixture and enforces the object pass's own coverage floor; this profile is not yet exposed by the public application launcher.
+
 The ordinary fixtures cover C, C++ exceptions, recursion, threads, `-O0`/`-O2`, Unicode and C++ operator selection, exclusions, annotations and compiler refusals. `examples/llvm/workload.ll` is a separate ordinary IR example with no telemetry calls; stock and instrumented executables must both print `42`. Tests compare actual application stdout/stderr and balanced diagnostic probe counts, and check that original fixture files remain unchanged.
 
 These compiler tests do not establish downstream telemetry receipt, native metric overhead, native lifetime completeness or oteleq language admission. Those checks belong to the remaining native SDK/frontends and equivalent-workload delivery stages in the [rebuild plan](rebuild-plan.md).

@@ -34,7 +34,7 @@ The explicit [native launch candidate](docs/native-launch.md) connects original 
 
 The [native prepared-launch candidate](docs/native-prepared.md) exposes versioned build, prepare, command, release and execution records. Its pre-exec gate holds an owned child before application or loader-library constructors run in both lanes, preserving its identity, literal arguments and streams across release. Independent oteleq integration and final language qualification remain work.
 
-The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official Clang AST/type/USR APIs to inventory construction and variable materialisation without source edits. It is a building block; automatic native lifetime spans remain work.
+The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official Clang AST/type/USR APIs to inventory construction and variable materialisation without source edits. The [object probe component](docs/native-object-probes.md) connects selected non-trivial construction/destruction to actual SDK lifetime spans and metrics in unchanged internal fixtures. Public lifetime launch/export, broader boundaries and independent language qualification remain work.
 
 ## Java example and Grafana
 

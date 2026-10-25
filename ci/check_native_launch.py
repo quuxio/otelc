@@ -34,7 +34,7 @@ def check() -> None:
     sources = [*sorted((ROOT / 'adapters/native').rglob('*.cpp')),
                *sorted((ROOT / 'adapters/native').rglob('*.h')),
                ROOT / 'adapters/native/CMakeLists.txt', ROOT / 'adapters/native/launcher/CMakeLists.txt',
-               llvm_backend.HEADER, llvm_backend.SOURCE,
+               llvm_backend.HEADER, llvm_backend.SOURCE, ROOT / 'native/llvm/object_abi.h',
                *(ROOT / path for path in ('otelc/native_launch.py', 'otelc/llvm_backend.py',
                   'otelc/config.py', 'otelc/file_inputs.py', 'otelc/control.py', 'otelc/health.py',
                   'tests/test_native_launch.py', 'tests/test_native_launch_tooling.py',
