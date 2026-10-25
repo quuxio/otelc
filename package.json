@@ -7,7 +7,7 @@
     "node": ">=24.11.0"
   },
   "scripts": {
-    "check:node": "tsc --project adapters/node/tsconfig.json && node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-include='**/adapters/node/src/**/*' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=build/node-lcov.info adapters/node/test/*.test.ts"
+    "check:node": "tsc --project adapters/node/tsconfig.json && node node_modules/typescript-api/bin/tsc --project adapters/node/tsconfig.json && node --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-include='**/adapters/node/src/**/*' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=build/node-lcov.info adapters/node/test/*.test.ts"
   },
   "dependencies": {
     "@babel/core": "8.0.7",
@@ -28,6 +28,6 @@
     "typescript-api": "npm:typescript@6.0.3"
   },
   "devDependencies": {
-    "@types/node": "24.19.2"
+    "@types/node": "26.6.5"
   }
 }

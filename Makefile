@@ -7,8 +7,12 @@ NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
 BENCHMARK_LANGUAGE ?= java
 BENCHMARK_CONFIG ?= examples/otelc.toml
+BENCHMARK_BUILD ?=
+BENCHMARK_COMPARISON_ID ?=
+BENCHMARK_OUTPUT ?= build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
 LLVM_OUTPUT ?= build/llvm-plugin
 NATIVE_LAUNCH_OUTPUT ?= build/native-launch-sdk
+RUST_COMPILER_OUTPUT ?= build/rust-tools
 
 .PHONY: help setup check lint test go-check node-check node-observer node-native-coverage node-http python-inputs python-inputs-check llvm-plugin llvm-check native-check native-launch-sdk native-launch-check java-build java-check java-context-examples java-witness-bindings stack-up stack-down stack-check benchmark sonar-policy
 .NOTPARALLEL: check
@@ -16,7 +20,7 @@ NATIVE_LAUNCH_OUTPUT ?= build/native-launch-sdk
 help:
 	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint, adapter tests and native compiler/SDK component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'llvm-plugin Build the LLVM 22 function-hook component in a new directory' 'llvm-check  Check real C/C++/IR compilation and 80% native/Python coverage' 'native-check Check native SDK controls/functions/object probes and 80% coverage' 'native-lifetimes-check Check real Clang type/construction bindings and 80% native/Python coverage' 'native-units-check Check explicit native build contexts and 80% component coverage' 'native-resources-check Check real C allocation/free compiler boundaries and 80% native/Python coverage' 'native-public-lifetimes-check Check common-policy C++ lifetime build/launch and 80% Python coverage' 'native-public-resources-check Check common-policy C allocation/free launch, OTLP and 80% coverage' 'native-benchmark-check Check C/C++ stock/four-state timings, accounting and 80% coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
 
-	@printf '%s\n' 'rust-compiler-check Check pinned internal Rust compiler/SDK fixtures and 80% component coverage'
+	@printf '%s\n' 'rust-tools Build the pinned original-source Rust compiler and private bridge' 'rust-public-check Check public Rust builds, stock/four-state benchmarks and 80% Python component coverage' 'rust-compiler-check Check pinned internal Rust compiler/SDK fixtures and 80% component coverage'
 	@printf '%s\n' 'rust-lifetime-check Check lifetime discovery with explicit matching compiler products; no SDK build'
 
 setup:
@@ -108,6 +112,21 @@ native-launch-check:
 	$(PYTHON) -m coverage report --data-file=build/native-launch-python.coverage --include='*/ci/native_launch_suite.py' --fail-under=80
 
 .PHONY: rust-compiler-check
+.PHONY: rust-tools
+rust-tools:
+	mkdir -p build
+	$(PYTHON) -m otelc.rust_compiler --output "$(RUST_COMPILER_OUTPUT)"
+
+.PHONY: rust-public-check
+rust-public-check:
+	mkdir -p build
+	$(PYTHON) -m coverage run --data-file=build/rust-public.coverage --source=otelc.rust_compiler,otelc.rust_build,otelc.rust_launch,otelc.rust_benchmark,otelc.benchmark_cleanup -m unittest discover -s tests -p 'test_rust_*.py' -v
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_compiler.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_launch.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_benchmark.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/benchmark_cleanup.py' --fail-under=80
+
 rust-compiler-check:
 	mkdir -p build
 	$(PYTHON) -m coverage run --data-file=build/rust-orchestration.coverage --source=ci.check_rust_compiler,ci.rust_sonar -m ci.check_rust_compiler
@@ -178,6 +197,11 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/otelc/native_units.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_object_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_resource_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/rust_compiler.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/rust_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/rust_launch.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/rust_benchmark.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/benchmark_cleanup.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_benchmark.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_benchmark_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_supervisor.py' --fail-under=80
@@ -201,7 +225,7 @@ stack-down:
 	docker compose down
 
 benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http)
-	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc --config "$(BENCHMARK_CONFIG)" benchmark --language $(BENCHMARK_LANGUAGE) --sdk-build "$(NATIVE_LAUNCH_OUTPUT)" --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
+	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc --config "$(BENCHMARK_CONFIG)" benchmark --language $(BENCHMARK_LANGUAGE) --sdk-build "$(NATIVE_LAUNCH_OUTPUT)" $(if $(BENCHMARK_BUILD),--build "$(BENCHMARK_BUILD)") $(if $(BENCHMARK_COMPARISON_ID),--comparison-id "$(BENCHMARK_COMPARISON_ID)") --output "$(BENCHMARK_OUTPUT)"
 
 sonar-policy:
 	$(PYTHON) ci/verify_sonar_policy.py

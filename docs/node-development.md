@@ -16,7 +16,7 @@ make node-check
 .venv/bin/python -m unittest discover -s tests -p 'test_node_*.py' -v
 ```
 
-`make node-check` builds the public-V8 Promise observer, enforces its own 80% LLVM line-coverage floor, checks types with Microsoft TypeScript 7, and runs Node tests with an 80% source-component coverage floor. Ordinary application integration tests contribute actual loader/compiler/runtime coverage. The coverage build restores the ordinary binary before other checks or benchmarks. Both builds publish atomically so an existing mapped binary is preserved.
+`make node-check` builds the public-V8 Promise observer, enforces its own 80% LLVM line-coverage floor, checks SDK and test types with both Microsoft TypeScript 7 and the TypeScript 6 compiler API distribution, and runs Node tests with an 80% source-component coverage floor. Both compiler checks use the pinned Node 26 declarations and the existing strict, no-emission settings. Ordinary application integration tests contribute actual loader/compiler/runtime coverage. The coverage build restores the ordinary binary before other checks or benchmarks. Both builds publish atomically so an existing mapped binary is preserved.
 
 The ordinary integration suite also makes an isolated `npm ci --omit=dev` installation and runs a typed application through both actual compiler profiles. The native Microsoft compiler and its matching platform package are runtime dependencies, not development-only tools. This packaging check verifies compiler availability and unchanged input/output; it does not replace prepared-launch provenance or full application qualification.
 

@@ -71,15 +71,17 @@ class NativeBenchmarkAccountingTests(unittest.TestCase):
             ('metric_exports', 'units_failed', '1'), ('metric_exports', 'units_succeeded', None),
             ('object_accounting', 'closed', False), ('object_accounting', 'completed', '0'),
             ('object_accounting', 'lost', '1'), ('object_accounting', 'censored', '1')]
+        current = policy()
         for group, name, value in mutations:
             wrong = copy.deepcopy(valid); wrong[group][name] = value
             with self.subTest(group=group, name=name), self.assertRaises(ValueError):
-                adapter.validate_drain(wrong, policy())
+                adapter.validate_drain(wrong, current)
         for wrong in (None, valid | {'phase': 'running'}, valid | {'sdk_attached': False}):
-            with self.assertRaises(ValueError): adapter.validate_drain(wrong, policy())
+            with self.assertRaises(ValueError): adapter.validate_drain(wrong, current)
         wrong = copy.deepcopy(valid); wrong.pop('object_accounting')
-        with self.assertRaises(ValueError): adapter.validate_drain(wrong, policy())
-        with self.assertRaises(ValueError): adapter.validate_drain(valid, policy(lifetimes=False))
+        without_lifetimes = policy(lifetimes=False)
+        with self.assertRaises(ValueError): adapter.validate_drain(wrong, current)
+        with self.assertRaises(ValueError): adapter.validate_drain(valid, without_lifetimes)
 
     def test_embedded_sdk_has_no_synthetic_pid_and_external_sdk_identity_stays_strict(self):
         self.assertTrue(benchmark_process.sdk_identity({}, None))
@@ -99,8 +101,9 @@ class NativeBenchmarkAccountingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / 'run'
             data = copy.deepcopy(policy().data); data['context']['tasks'] = True
+            current, sdk = Policy.parse(data), Path('/no-sdk')
             with self.assertRaisesRegex(ValueError, 'propagation'):
-                adapter.run(Policy.parse(data), output, language='c', sdk_directory=Path('/no-sdk'))
+                adapter.run(current, output, language='c', sdk_directory=sdk)
             self.assertFalse(output.exists())
 
     def test_c_resource_drain_requires_closed_free_boundaries_and_no_censoring(self):

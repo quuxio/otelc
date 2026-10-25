@@ -42,9 +42,11 @@ The [native paired benchmark candidate](docs/native-benchmarks.md) compares equi
 
 The [C allocation lifetime candidate](docs/c-resources.md) binds selected record-pointer `malloc`/`calloc` sites with Clang and observes matching calls after LLVM optimisation. Public build 5 connects those probes to allocation-to-`free` SDK spans/metrics, live controls, resource health and the common-policy C benchmark. Stack scopes, custom/interposed allocators, `realloc`, independent qualification and complete C language acceptance remain work.
 
-The internal [Rust compiler component](native/rust/compiler/README.md) connects compiler-owned synchronous MIR probes in unedited sources to the same official SDK pipeline. Its focused gate covers modules, optimised loops, original panics, live metric controls and decoded spans. Public Rust launch/preparation, automatic lifetimes, async/context integration, equivalent benchmarks and independent qualification remain work.
+The [public Rust candidate](docs/rust-source.md) builds stock and instrumented standalone applications from unchanged sources, using common function selectors and the official C++ SDK pipeline. Its direct launcher supports independent live metric gates and retains final SDK health. The [compiler component](native/rust/compiler/README.md) supplies synchronous MIR probes, including panic unwinding. Cargo builds, prepared host release, automatic lifetimes, async/context integration and independent qualification remain work.
 
 The [Rust drop engine candidate](docs/rust-drop-engine.md) adds an internal ownership-transfer and drop boundary to the shared native SDK engine. Its [private Rust bridge and SDK candidate](docs/rust-drop-bridge.md) connects explicit hooks, bootstrap and versioned drop health. The [compiler-owned discovery candidate](docs/rust-lifetime-discovery.md) adds resolved type/layout and pre-optimisation ownership-site metadata with common configuration selection. Compiler-inserted Rust lifetime probes and their public build/launch integration remain required; these components do not enable Rust lifetime policies.
+
+The [Rust benchmark candidate](docs/rust-benchmarks.md) uses retained stock and woven builds of the ordinary Rust example, the same four live metric states and the shared Grafana comparison format. Actual Rust benchmark execution, protected checks and independent qualification are required before language completion. Rust automatic lifetimes and task/service propagation remain unsupported.
 
 ## Java example and Grafana
 
@@ -67,7 +69,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. Failed runs retain available evidence and report the first error, followed by any cleanup failures. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript, Python, C and C++ runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 
@@ -117,6 +119,8 @@ The separate [private-handle compiler component](docs/java-handle-witness.md) bi
 ```sh
 make check
 ```
+
+CI runs for pull requests against any base branch, including stacked language work. Linux, macOS and Sonar check out the same exact PR head; a manually dispatched branch run remains separate from PR-specific analysis. The protected main checks and component coverage floors still apply before merge.
 
 The full check also requires LLVM 22, CMake, Ninja, Protobuf with its compiler, and libcurl development headers/libraries. CI installs these dependencies. It builds and exercises the native HTTP runtime, rejects skipped launcher tests and enforces the component coverage floors; see [native launch checks](docs/native-launch.md#focused-checks).
 

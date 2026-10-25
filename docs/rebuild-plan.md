@@ -19,7 +19,7 @@ Object lifetimes are selected through the common policy. Report construction-to-
 5. LLVM: selectively reuse the archive's exception-aware pass and manifest/runtime contract; independent IR fixture.
 6. C: equivalent workload and selected resource acquisition/release observations.
 7. C++: equivalent exception-enabled workload, complete-object construction/destruction and resource observations.
-8. Rust: equivalent workload, compiler/Cargo integration, ownership/drop and qualified async cleanup.
+8. Rust: equivalent workload, compiler/Cargo integration, ownership/drop and qualified async cleanup. The [standalone source candidate](rust-source.md) now connects common selectors to compiler-owned synchronous MIR probes and direct stock/instrumented launch with live metric controls. Cargo, prepared host release, lifetime/context profiles, paired benchmarks and independent language qualification remain work.
 
 Do not claim a language complete until its source/outcome preservation, exact positive/negative selection, decoded telemetry, same-process live control, lifecycle boundaries, independent coverage floors, review and required CI/Sonar gates pass.
 

@@ -12,6 +12,18 @@ from otelc.__main__ import main
 
 
 class CliTests(unittest.TestCase):
+    def test_benchmark_error_keeps_the_primary_message_and_cleanup_notes(self) -> None:
+        failure = ValueError('measured checksum differs')
+        failure.add_note('Node benchmark SDK drain also failed: OSError')
+        stderr = io.StringIO()
+        with patch('sys.argv', ['quux-otelc', 'benchmark', '--output', '/unused']), \
+                patch('otelc.__main__.run_benchmark', side_effect=failure), contextlib.redirect_stderr(stderr), \
+                self.assertRaises(SystemExit) as caught:
+            main()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertEqual(stderr.getvalue(), 'quux-otelc: measured checksum differs\n'
+                         'quux-otelc: Node benchmark SDK drain also failed: OSError\n')
+
     def invoke(self, arguments: list[str]) -> str:
         output = io.StringIO()
         with patch("sys.argv", ["quux-otelc", *arguments]), contextlib.redirect_stdout(output):
@@ -21,7 +33,7 @@ class CliTests(unittest.TestCase):
     def test_inspection_reports_current_and_future_adapters(self) -> None:
         result = json.loads(self.invoke(["plan"]))
         self.assertEqual(result["implemented"], ["java"])
-        self.assertEqual(result["candidates"], ["typescript", "javascript", "python"])
+        self.assertEqual(result["candidates"], ["typescript", "javascript", "python", "rust"])
         self.assertIn("rust", result["remaining"])
 
     def test_not_implemented_is_an_execution_error(self) -> None:

@@ -37,6 +37,8 @@ Set `[benchmark]` `iterations`, `warmup` and `samples` in a copy of the common p
 
 ## Read the retained evidence
 
+Java, Node, Python and native C/C++ benchmark drivers keep the first measurement, cancellation or cleanup error as the primary failure. Shutdown, final SDK checks and input rechecks still run; later failures are retained as notes, including in CLI diagnostics. A cleanup failure also fails an otherwise successful run. Available raw samples and final records remain diagnostic evidence. Measurement and final application/SDK-validation failures prevent the final report and driver export. Closing the driver exporter can still fail after the Collector has accepted its metrics; that failure is reported, without claiming to retract the accepted data.
+
 `report.json` contains raw ns/operation arrays, medians, comparison/run identity, source and policy hashes, runtime/compiler/build identity, host information and state transitions. `responses.jsonl` retains each parsed Java/Node/Python application response before SDK flush or resource sampling can fail. `raw.jsonl` retains complete samples, including the driver-observed PID, checksum and resource windows. A failed later observation never becomes a successful CPU sample. Warmup and state/control/pipe time are excluded from the application's batch timer. Java, Node and Python rotate the four states so that each occupies every position over four samples, then reverse the next four-sample block; the report records this method. Neither schedule removes all host load or time-order bias. Use enough samples and inspect the raw sequence.
 
 Node reports also retain `plain/` and `instrumented/` launch/compiler/input evidence, independent SDK drain reports and stderr. The driver refuses publication on input mutation, incomplete final accounting, handoff/observer/queue loss, failed exports or a failed application. Raw files remain available after failure. A clean SDK report establishes producer accounting; it does not prove downstream receipt or OTLP partial-rejection absence.
@@ -54,6 +56,8 @@ Java, Node and Python `process_samples` retain CPU/RSS observations made with th
 After Node/Python sampling, the driver restores collection and emission in the same application/SDK processes and explicitly flushes the last retained collection-only values. This step is outside the latency and CPU sample windows. `metric-finalization.json` retains both control responses, and its file identity is included in the report. A failed flush or changed process/state prevents publication; raw samples remain available.
 
 Lifetime and trace configuration remain in every raw report. To measure lifecycle-observer cost, repeat the complete comparison under a separately labelled common policy with `[lifetimes] enabled = false`, keeping the remaining settings fixed. Do not interpret metric-off states as removing installed probes, trace work or lifecycle bookkeeping. Repeat runs on an otherwise idle host and inspect variation before drawing performance conclusions.
+
+The [Rust comparison candidate](rust-benchmarks.md) uses the same schema-2 results and Grafana queries with `language=rust`. Its SDK is embedded and counted once in application CPU/RSS. It requires the retained original example build and an external new output directory. Rust lifetime and task/service profiles remain separate unfinished work.
 
 ## View the comparison in Grafana
 
