@@ -108,6 +108,7 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/otelc/python_origin_execution.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/llvm_backend.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_sonar.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/native_gate.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/native_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/check_native_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/native_launch_suite.py' --fail-under=80
