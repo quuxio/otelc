@@ -111,6 +111,20 @@ class NativeLifetimeInventoryTests(unittest.TestCase):
     def inspect(self, name: str, policy: Policy | None = None, **options) -> dict:
         return lifetimes.inspect(policy or self.policy, self.root, [Path('main.cpp')], self.base / name, tool=self.tool, **options)
 
+    def test_standard_library_headers_use_the_actual_compilers_builtin_resources(self) -> None:
+        self.source.write_text('#include <chrono>\n#include <cstdarg>\n'
+            'struct WorkItem{WorkItem(){}~WorkItem(){}};\n'
+            'long workload(){WorkItem item;return std::chrono::steady_clock::now().time_since_epoch().count();}\n')
+        for name, options in (('standard-default', {}), ('standard-context', {'context': {
+                'directory': str(self.root), 'flags': ['-std=c++20', '-O2', '-fexceptions'],
+                'overlay': None, 'assets': []}})):
+            with self.subTest(profile=name):
+                value = self.inspect(name, **options)
+                self.assertTrue(any(row['path'].endswith('/stdarg.h') for row in value['inputs']))
+                unit = value['translation_units'][0]
+                self.assertEqual([row['name'] for row in unit['types']], ['WorkItem'])
+                self.assertTrue(unit['constructions'])
+
     def test_actual_per_unit_directory_defines_standard_and_optimisation_are_used(self) -> None:
         directory = self.root / 'unit'; directory.mkdir()
         includes = self.root / 'include'; includes.mkdir()
