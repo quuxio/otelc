@@ -12,7 +12,7 @@ from otelc import llvm_backend
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = ('native/llvm/OtelcPass.cpp', 'adapters/native/src/metric_control.cpp',
               'adapters/native/src/function_runtime.cpp', 'adapters/native/launcher/src/runtime.cpp',
-              'adapters/native/gate/ExecGate.c')
+              'adapters/native/gate/ExecGate.c', 'native/clang/Lifetimes.cpp')
 TEST = 'adapters/native/tests/metric_control_test.cpp'
 TESTS = (TEST, 'adapters/native/tests/function_runtime_test.cpp',
          'adapters/native/tests/fixtures/functions.c', 'adapters/native/tests/fixtures/functions.cpp')
@@ -128,10 +128,12 @@ def generate(root: Path = ROOT) -> None:
     native = json.loads((output / 'native-control-coverage.json').read_bytes())
     launch = json.loads((output / 'native-launch-coverage.json').read_bytes())
     gate = json.loads((output / 'native-gate-coverage.json').read_bytes())
+    lifetimes = json.loads((output / 'native-lifetimes-coverage.json').read_bytes())
     checked_artifact(llvm['source'], root / PRODUCTION[0])
     for header in llvm['headers']:
         checked_artifact(header, Path(header['path']))
     checked_artifact(gate['source'], root / PRODUCTION[4])
+    checked_artifact(lifetimes['source'], root / PRODUCTION[5])
     for record, relatives in ((native, PRODUCTION[1:3]), (launch, PRODUCTION[3:4])):
         for row in record['source_inputs']:
             checked_artifact(row, Path(row['path']))
@@ -145,7 +147,7 @@ def generate(root: Path = ROOT) -> None:
     native_records.update(lcov_records(Path(gate['lcov']['path']).read_text(), {root / PRODUCTION[4]}))
     document = ET.Element('coverage', version='1')
     databases = []
-    for relative, record in zip(PRODUCTION, (llvm, native, native, launch, gate), strict=True):
+    for relative, record in zip(PRODUCTION, (llvm, native, native, launch, gate, lifetimes), strict=True):
         source = root / relative
         lcov = Path(record['lcov']['path'])
         database = Path(record['compilation_database']['path'])
@@ -154,8 +156,9 @@ def generate(root: Path = ROOT) -> None:
         if database not in databases:
             databases.append(database)
         file = ET.SubElement(document, 'file', path=relative)
-        summary = record['line_coverage'] if relative == PRODUCTION[0] else record['line_coverage'][str(source)]
-        text = lcov.read_text() if relative == PRODUCTION[0] else native_records[source]
+        single = relative in (PRODUCTION[0], PRODUCTION[5])
+        summary = record['line_coverage'] if single else record['line_coverage'][str(source)]
+        text = lcov.read_text() if single else native_records[source]
         for number, covered in sorted(lcov_lines(text, source, summary=summary).items()):
             ET.SubElement(file, 'lineToCover', lineNumber=str(number), covered=str(covered).lower())
     ET.ElementTree(document).write(output / 'native-sonar-coverage.xml', encoding='utf-8', xml_declaration=True)
