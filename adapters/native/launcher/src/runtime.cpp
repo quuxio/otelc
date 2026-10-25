@@ -1,5 +1,6 @@
 #include "otelc/native_runtime.h"
 #include "otelc/function_runtime.h"
+#include "otelc/object_runtime.h"
 #include "otelc/deadline.h"
 
 #include <arpa/inet.h>
@@ -174,6 +175,7 @@ class Processor final : public traces::SpanProcessor {
 class Runtime {
  public:
   std::unique_ptr<native::FunctionRuntime> functions;
+  std::unique_ptr<native::ObjectRuntime> objects;
   ExportStats metric_stats, trace_stats;
   std::shared_ptr<native::MetricState> state;
   std::shared_ptr<metrics::MeterProvider> meters;
@@ -198,6 +200,20 @@ class Runtime {
     meters = std::make_shared<metrics::MeterProvider>(std::make_unique<metrics::ViewRegistry>(), resource);
     controller = std::make_unique<native::MetricController>(meters, state);
     native::ConfigureFunctionMetrics(*meters, 4096, policy.at("boundaries").get<std::vector<double>>());
+    bool object_enabled = false;
+    std::uint32_t object_limit = 0;
+    if (policy.contains("object_lifetimes")) {
+      const auto &object = policy.at("object_lifetimes");
+      Require(object.is_object() && object.size() == 2 && object.at("enabled").is_boolean()
+              && object.at("max_live").is_number_integer(), "invalid native object settings");
+      auto limit = object.at("max_live").get<std::int64_t>();
+      Require(limit > 0 && limit <= 1048576, "invalid native object live limit");
+      object_enabled = object.at("enabled").get<bool>();
+      Require(!object_enabled || plan.at("language") == "cpp", "object SDK profile requires C++");
+      object_limit = static_cast<std::uint32_t>(limit);
+      if (object_enabled)
+        native::ConfigureObjectMetrics(*meters, 4096, policy.at("boundaries").get<std::vector<double>>());
+    }
     auto endpoint = policy.at("endpoint").get<std::string>();
     otlp::OtlpHttpMetricExporterOptions metric_options(nullptr);
     metric_options.content_type = otlp::HttpRequestContentType::kBinary;
@@ -232,6 +248,9 @@ class Runtime {
     }
     functions = std::make_unique<native::FunctionRuntime>(state, meters->GetMeter(native::FunctionScopeName), selected,
         native::FunctionLimits{4096, 512, native::FunctionContext::owned});
+    if (object_enabled)
+      objects = std::make_unique<native::ObjectRuntime>(state, meters->GetMeter(native::FunctionScopeName), selected,
+          native::ObjectLimits{4096, object_limit});
   }
 
   ~Runtime() { StopControl(); }
@@ -268,7 +287,7 @@ class Runtime {
       auto count = std::stoull(exported.at("units_started").get<std::string>());
       queue_pending = "0"; queue_dropped = Decimal(ended > count ? ended - count : 0);
     }
-    return {{"schema_version", 1}, {"kind", "otelc.runtime-health"}, {"language", plan.at("language")},
+    Json result = {{"schema_version", 1}, {"kind", "otelc.runtime-health"}, {"language", plan.at("language")},
       {"scope", "sdk_pipeline"}, {"pid", ::getpid()}, {"phase", final ? "final" : "running"},
       {"sdk_attached", true}, {"policy_sha256", plan.at("policy_sha256")}, {"selection_sha256", plan.at("selection_sha256")},
       {"controls", Status()}, {"lifecycle", {{"flush", flush_.load()}, {"shutdown", shutdown}}},
@@ -284,6 +303,16 @@ class Runtime {
         {"invalid", Decimal(function.invalid)}, {"closed", function.closed},
         {"metadata_errors", Decimal(metadata_errors.load())}}},
       {"source_complete", false}, {"downstream_receipt", "unavailable"}, {"otlp_partial_rejection", "unavailable"}};
+    if (objects) {
+      const auto object = objects->Status();
+      result["object_accounting"] = {{"types", Decimal(object.types)}, {"admitted", Decimal(object.admitted)},
+        {"completed", Decimal(object.completed)}, {"live", Decimal(object.live)},
+        {"destroying", Decimal(object.destroying)}, {"ending", Decimal(object.ending)},
+        {"censored", Decimal(object.censored)}, {"lost", Decimal(object.lost)},
+        {"duplicates", Decimal(object.duplicates)}, {"invalid", Decimal(object.invalid)},
+        {"closing", object.closing}, {"closed", object.closed}};
+    }
+    return result;
   }
 
   void StartControl() {
@@ -336,6 +365,13 @@ class Runtime {
     StopControl();
     bool quiescent = functions->Close();
     while (!quiescent && Clock::now() < deadline) { std::this_thread::sleep_for(1ms); quiescent = functions->Close(); }
+    if (quiescent && objects) {
+      quiescent = objects->Close();
+      while (!quiescent && Clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+        quiescent = objects->Close();
+      }
+    }
     if (quiescent) {
       bool flushed = Flush(deadline);
       bool trace_ok = !tracer || native::detail::BeforeDeadline(deadline, [&](Micros remaining) {
@@ -458,6 +494,25 @@ extern "C" std::uint64_t otelc_function_enter_v1(const void *address) noexcept {
 }
 extern "C" void otelc_function_leave_v1(std::uint64_t token, std::int32_t unwinding) noexcept {
   if (auto *runtime = Installed()) runtime->functions->Leave(token, unwinding);
+}
+extern "C" void otelc_object_created_v1(const void *address, const char *type, const char *name) noexcept {
+  if (auto *runtime = Installed(); runtime && runtime->objects) {
+    runtime->objects->Admit(address, type, name, runtime->functions->CurrentContext());
+  } else {
+    ++Global().errors;
+  }
+}
+extern "C" std::uint64_t otelc_object_destroying_v1(const void *address, const char *type) noexcept {
+  if (auto *runtime = Installed(); runtime && runtime->objects)
+    return runtime->objects->Destroying(address, type);
+  ++Global().errors;
+  return 0;
+}
+extern "C" void otelc_object_destroyed_v1(std::uint64_t token, std::int32_t unwinding) noexcept {
+  if (auto *runtime = Installed(); runtime && runtime->objects)
+    runtime->objects->Destroyed(token, unwinding);
+  else
+    ++Global().errors;
 }
 extern "C" int otelc_native_start_v1(int descriptor) noexcept {
   auto &global = Global();

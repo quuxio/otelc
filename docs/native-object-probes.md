@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development component. The LLVM 22 object profile connects the [Clang semantic inventory](native-lifetimes.md) to compiler-inserted probes and the official C++ SDK. Internal tests execute unchanged C++ application source with both function and object probes. The public native launcher still refuses `lifetimes.enabled`; public policy/bootstrap/health wiring, downstream OTLP receipt, benchmarks and independent oteleq qualification remain work.
+Status: development component. The LLVM 22 object profile connects the [Clang semantic inventory](native-lifetimes.md) to compiler-inserted probes and the official C++ SDK. Internal tests execute unchanged C++ application source with both function and object probes. The public native launcher still refuses `lifetimes.enabled`; public build/policy wiring, benchmarks and independent oteleq qualification remain work. The separate [launcher SDK bridge](native-object-sdk.md) now connects these probes to the real HTTP pipeline and health accounting through an explicit internal host plan; it does not yet enable public lifetime launches.
 
 ## Observed boundaries
 
