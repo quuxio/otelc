@@ -61,6 +61,9 @@ def lifetime_failures(value: dict[str, Any], enabled: bool) -> list[int]:
 def validate_drain(report: dict[str, Any] | None, policy: Policy) -> None:
     """Require closed engines and complete SDK accounting before publishing timings."""
     value = health.validate(report)
+    if value['language'] == 'rust' and (value['schema_version'] != 1
+            or 'drop_accounting' in value or policy.data['lifetimes']['enabled']):
+        raise ValueError('public Rust function-only health profile differs')
     if (value['language'] not in ('c', 'cpp', 'rust') or value['phase'] != 'final' or value['sdk_attached'] is not True
             or value['lifecycle'] != {'flush': 'succeeded', 'shutdown': 'succeeded'}):
         raise ValueError('native benchmark SDK shutdown is incomplete')

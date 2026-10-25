@@ -77,6 +77,42 @@ class RustBenchmarkContractTests(unittest.TestCase):
         with patch.object(adapter.health, 'read', return_value=value), self.assertRaisesRegex(ValueError, 'no selected'):
             adapter.final_health(process, self.base, self.built, self.current)
 
+    def test_public_launch_and_benchmark_refuse_private_drop_profiles(self) -> None:
+        from otelc import native_benchmark, rust_launch
+
+        public = self.report()
+        rust_launch.validate_health(public, self.built, self.current, 101)
+        native_benchmark.validate_drain(public, self.current)
+        for changes in ({}, {'lost': '1'}, {'completed': '0', 'censored': '1'}):
+            value = copy.deepcopy(public)
+            drops = drain()['object_accounting']
+            drops['dropping'] = drops.pop('destroying')
+            value.update(schema_version=5, drop_accounting=drops | changes)
+            # This remains a valid private health shape, never a public plan2 profile.
+            self.assertIs(adapter.health.validate(value), value)
+            with self.subTest(changes=changes, boundary='launch'), self.assertRaises(ValueError):
+                rust_launch.validate_health(value, self.built, self.current, 101)
+            with self.subTest(changes=changes, boundary='benchmark'), self.assertRaises(ValueError):
+                native_benchmark.validate_drain(value, self.current)
+
+    def test_public_function_profile_refuses_wrong_versions_and_lifetime_policies(self) -> None:
+        from otelc import native_benchmark, rust_launch
+
+        for version in (True, 0, 2, 5):
+            value = self.report() | {'schema_version': version}
+            with self.subTest(version=version, boundary='launch'), self.assertRaises(ValueError):
+                rust_launch.validate_health(value, self.built, self.current, 101)
+            with self.subTest(version=version, boundary='benchmark'), self.assertRaises(ValueError):
+                native_benchmark.validate_drain(value, self.current)
+        selected = copy.deepcopy(self.current.data)
+        selected['lifetimes']['enabled'] = True
+        lifetimes = Policy.parse(selected)
+        value = self.report() | {'policy_sha256': native_launch.digest(lifetimes.data)}
+        with self.assertRaises(ValueError):
+            rust_launch.validate_health(value, self.built, lifetimes, 101)
+        with self.assertRaises(ValueError):
+            native_benchmark.validate_drain(value, lifetimes)
+
     def test_arbitrary_or_changed_example_and_empty_selection_refuse_before_output(self) -> None:
         for key, changed in (('entry', str(self.root / 'other.rs')), ('selected', []), ('inputs', []),
                 ('inputs', [{**self.metadata['inputs'][0], 'sha256': '0'*64}]),

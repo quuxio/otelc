@@ -74,7 +74,7 @@ Enter `quit` for orderly shutdown and export. Inspect the retained final SDK che
 bin/quux-otelc health --report /tmp/otelc-rust-example-run/health.json
 ```
 
-The direct launcher checks that final health identifies the actual child, Rust language, policy and selection with the SDK attached. It retains `rust-execution.json`, including the original process exit and any validation failure. A zero-exit application with missing or mismatched SDK health produces launcher exit 1. Non-zero application exits remain non-zero; interrupted waits terminate and reap the owned direct child. Final health alone does not prove downstream receipt.
+The direct launcher checks that final health identifies the actual child, Rust language, policy and selection with the SDK attached. This public function-only profile requires health version 1 and rejects private drop accounting, including apparently loss-free reports: its native plan does not install drop observers. The shared benchmark drain enforces the same profile and refuses lifetime-enabled Rust policies. Private plan-3/health-5 drop harnesses remain separate valid internal profiles. The launcher retains `rust-execution.json`, including the original process exit and any validation failure. A zero-exit application with missing or mismatched SDK health produces launcher exit 1. Non-zero application exits remain non-zero; interrupted waits terminate and reap the owned direct child. Final health alone does not prove downstream receipt.
 
 Run the stock lane using the same build and a new runtime directory:
 

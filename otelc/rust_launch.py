@@ -54,6 +54,9 @@ def start(built: rust_build.Build, policy: Policy, runtime: Path, *, plain: bool
 def validate_health(value: dict[str, Any], built: rust_build.Build, policy: Policy, pid: int) -> None:
     """Bind the final SDK checkpoint without treating API counters as delivery proof."""
     health.validate(value)
+    rust_build.validate_policy(policy)
+    if value['schema_version'] != 1 or 'drop_accounting' in value:
+        raise ValueError('public Rust function-only health profile differs')
     metadata = built.manifest()
     if (value['pid'] != pid or value['language'] != 'rust' or value['phase'] != 'final'
             or value['sdk_attached'] is not True
