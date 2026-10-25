@@ -39,7 +39,7 @@ def sdk(directory: Path) -> dict[str, Any]:
         raise ValueError('native prepared profile requires the fixed SDK build record/product')
     source = native_launch.ROOT / 'adapters/native'
     expected = [source / 'CMakeLists.txt', source / 'launcher/CMakeLists.txt',
-                *sorted(source.rglob('*.cpp')), *sorted(source.rglob('*.h')), llvm_backend.HEADER]
+                *sorted(source.rglob('*.cpp')), *sorted(source.rglob('*.h')), llvm_backend.HEADER, native_launch.ROOT / 'native/llvm/object_abi.h']
     if value['sources'] != [native_launch.identity(path) for path in expected]:
         raise ValueError('native SDK does not bind the current fixed source recipe')
     for record in value['build_tools']:

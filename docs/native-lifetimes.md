@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: development component. This inventories actual C++ types and construction sites using the installed LLVM 22 Clang AST, type and USR APIs. It is preparation for automatic object lifetime probes; it does **not** emit lifetime spans, establish successful construction or observe destruction. Native lifetime instrumentation remains work.
+Status: development component. This inventories actual C++ types and construction sites using the installed LLVM 22 Clang AST, type and USR APIs. Inspection does not itself emit lifetime spans, establish successful construction or observe destruction. The separate [object probe component](native-object-probes.md) consumes these records in compiler-linked internal SDK tests; public native lifetime launch remains work.
 
 Developers do not add annotations, imports, guard members or bootstrap code. Original application and header bytes are checked before and after inspection. No application is executed, and object layout is unchanged. One schema-3 policy supplies source and lifetime type selections:
 
@@ -37,6 +37,6 @@ The tests compile and run the real Clang helper against unchanged C++ fixtures. 
 
 ## Remaining work
 
-The next stage must join these semantic records to compiler probes and the native SDK runtime. A lifetime must start only after successful construction. Base/delegating constructor variants must not double-count a complete object, and address reuse must produce separate observations. Destruction, explicit resource release and observations censored at shutdown need distinct boundaries. Exception unwinding, copy/move, arrays, NRVO, placement construction and cross-thread destruction require executed plain-versus-instrumented evidence. This inventory alone does not satisfy those requirements or qualify C++ as complete.
+The separate probe component joins supported non-trivial constructor/destructor records to the native SDK. General materialisation and resource-release boundaries, public policy/bootstrap wiring, downstream receipt and benchmark/qualification evidence remain work. This inventory alone does not establish source completeness or qualify C++ as complete.
 
 The initial compilation recipe is C++17 on Itanium macOS/Linux targets. Arbitrary build flags, general build systems, Microsoft C++ ABI, foreign standard libraries and compiler plugins are not covered. A metadata-only Linux-target test on macOS does not establish Linux application execution.

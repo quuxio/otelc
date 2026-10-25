@@ -249,7 +249,7 @@ def build_sdk(output: Path, *, coverage: bool = False) -> dict[str, Any]:
     source = ROOT / 'adapters/native'
     sources = [source / 'CMakeLists.txt', source / 'launcher/CMakeLists.txt',
                *sorted(source.rglob('*.cpp')), *sorted(source.rglob('*.h')),
-               ROOT / 'native/llvm/function_abi.h']
+               ROOT / 'native/llvm/function_abi.h', ROOT / 'native/llvm/object_abi.h']
     before = [identity(path) for path in sources]
     build_tools = [identity(Path(cmake)), identity(Path(ninja))]
     output.mkdir(mode=0o700)

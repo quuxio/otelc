@@ -36,7 +36,7 @@ The [native prepared-launch candidate](docs/native-prepared.md) exposes versione
 
 The explicit [native build-3 context](docs/native-build-context.md) adds per-unit compiler flags/directories, private VFS inputs, main-symbol rename and an uninstrumented observation driver. It reuses the common policy and owned launch controls. Automatic build discovery and generated-provider qualification remain work.
 
-The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official Clang AST/type/USR APIs to inventory construction and variable materialisation without source edits. It is a building block; automatic native lifetime spans remain work.
+The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official Clang AST/type/USR APIs to inventory construction and variable materialisation without source edits. The [object probe component](docs/native-object-probes.md) connects selected non-trivial construction/destruction to actual SDK lifetime spans and metrics in unchanged internal fixtures. Public lifetime launch/export, broader boundaries and independent language qualification remain work.
 
 ## Java example and Grafana
 

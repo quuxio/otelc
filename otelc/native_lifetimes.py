@@ -173,7 +173,7 @@ def inspect(policy: Policy, root: Path, sources: list[Path], output: Path,
     receipt = tool.verify()
     tools = receipt['toolchain']
     compiler = str(Path(tools['directory']) / 'clang++')
-    target = target or llvm_backend.query(Path(compiler), '-dumpmachine')
+    target = target or llvm_backend.query(Path(compiler), '-print-target-triple')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', target) or not ('-apple-' in target or '-linux-' in target):
         raise ValueError('native lifetime inspection requires an Itanium macOS/Linux target')
     before = [native_gate.identity(path) for path in selected]

@@ -62,6 +62,7 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
       case CXXConstructionKind::VirtualBase: Row["construction_kind"] = "virtual base"; break;
     }
     Row["constructor_symbol"] = symbol(Constructor);
+    Row["constructor_base_symbol"] = symbol(Constructor, true);
     Row["constructor_signature"] = Constructor->getType().getAsString();
     Row["trivial"] = Constructor->isTrivial();
     Row["elidable"] = Expression->isElidable();
@@ -137,15 +138,15 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
     return Filename && Filename->starts_with(Root + "/");
   }
 
-  std::string symbol(const FunctionDecl *Declaration) {
+  std::string symbol(const FunctionDecl *Declaration, bool Base = false) {
     if (Declaration->isDependentContext()) return {};
     if (!Mangler->shouldMangleDeclName(Declaration)) return Declaration->getNameAsString();
     std::string Value;
     llvm::raw_string_ostream Stream(Value);
     if (auto *Constructor = llvm::dyn_cast<CXXConstructorDecl>(Declaration))
-      Mangler->mangleName(GlobalDecl(Constructor, Ctor_Complete), Stream);
+      Mangler->mangleName(GlobalDecl(Constructor, Base ? Ctor_Base : Ctor_Complete), Stream);
     else if (auto *Destructor = llvm::dyn_cast<CXXDestructorDecl>(Declaration))
-      Mangler->mangleName(GlobalDecl(Destructor, Dtor_Complete), Stream);
+      Mangler->mangleName(GlobalDecl(Destructor, Base ? Dtor_Base : Dtor_Complete), Stream);
     else
       Mangler->mangleName(Declaration, Stream);
     return Value;
@@ -157,6 +158,7 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
     return llvm::json::Object{{"kind", Constructor ? "CXXConstructorDecl" : llvm::isa<CXXDestructorDecl>(Declaration)
                 ? "CXXDestructorDecl" : "CXXMethodDecl"},
             {"name", Declaration->getNameAsString()}, {"symbol", symbol(Declaration)},
+            {"base_symbol", symbol(Declaration, true)},
             {"signature", Declaration->getType().getAsString()}, {"implicit", Declaration->isImplicit()},
             {"delegating", Constructor && Constructor->isDelegatingConstructor()},
             {"copy", Constructor && Constructor->isCopyConstructor()},
@@ -187,7 +189,8 @@ class Visitor : public RecursiveASTVisitor<Visitor> {
 
   llvm::json::Object site(SourceLocation Location, const CXXRecordDecl *Declaration) {
     return llvm::json::Object{{"type_usr", type(Declaration)}, {"location", location(Location)},
-            {"caller", Caller ? symbol(Caller) : ""}};
+            {"caller", Caller ? symbol(Caller) : ""},
+            {"caller_base", Caller ? symbol(Caller, true) : ""}};
   }
 
   ASTContext &Context;
