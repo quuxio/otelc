@@ -439,13 +439,13 @@ fn constructors<'tcx>(
             };
             blocks[current].statements.push(statement);
             if let Some((value, Some(previous))) = action {
-                blocks[current].statements.push(Statement {
-                    source_info: info,
-                    kind: StatementKind::Assign(Box::new((
+                blocks[current].statements.push(Statement::new(
+                    info,
+                    StatementKind::Assign(Box::new((
                         value.key.into(),
                         Rvalue::Use(Operand::Copy(previous.key.into()), WithRetag::No),
                     ))),
-                });
+                ));
             } else if let Some((value, None)) = action {
                 let target = blocks.push(BasicBlockData::new(None, cleanup));
                 blocks[current].terminator = Some(probe(
