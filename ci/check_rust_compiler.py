@@ -161,7 +161,7 @@ def check() -> None:
               'private_key_harness_processes': 4, 'observation_key_unit_tests': 3,
               'automatic_lifetime_application_processes': 8,
               'telemetry_evidence': 'Receiver-decoded protobuf reserialization, not original HTTP wire bytes',
-              'scope': 'Internal synchronous compiler and explicit drop/key bridge/SDK harnesses; not automatic Rust lifetime admission'}
+              'scope': 'Internal synchronous compiler, private drop/key harnesses and unchanged-source root-local lifetime MIR/SDK cases; not public Rust lifetime admission'}
     (work / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     rust_sonar.write(ROOT, before, compiler_lcov + bridge_lcov, coverage | bridge_coverage,
                      compiler_clippy + bridge_clippy, ROOT / 'build')

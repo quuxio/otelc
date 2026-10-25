@@ -69,7 +69,7 @@ class RustAutomaticDropCases:
             self.assertFalse(woven['instrumentation_complete'])
             stock = self.base / f'automatic-stock-{optimisation}'
             result = self.command([str(self.rustc), str(entry), '--edition=2024',
-                '-Copt-level=' + str(optimisation), '-o', str(stock)])
+                '-Copt-level=' + str(optimisation), '-C', 'instrument-coverage', '-o', str(stock)])
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             reference = subprocess.run([str(stock)], input=b'1\n2\n3\n1\n', capture_output=True,
                 env=dict(os.environ, RUST_BACKTRACE='0'), timeout=15)

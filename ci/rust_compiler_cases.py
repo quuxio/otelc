@@ -211,7 +211,8 @@ class RustCompilerCases(RustAutomaticDropCases, unittest.TestCase):
                    'sources': self.sources, 'selected': list(selected), 'output': str(inventory)}
         request.update(request_changes or {})
         arguments = [str(self.driver), str(entry), '--crate-name', 'component', '--edition=2024',
-                     '--sysroot', self.sysroot, '-Copt-level=' + str(optimisation), '-g', '-o', str(product)]
+                     '--sysroot', self.sysroot, '-Copt-level=' + str(optimisation),
+                     '-C', 'instrument-coverage', '-g', '-o', str(product)]
         if mode in ('weave', 'lifetime-weave'):
             library = bridge or self.bridge
             arguments += ['--extern', 'otelc_rust_bridge=' + str(library),
@@ -288,7 +289,7 @@ class RustCompilerCases(RustAutomaticDropCases, unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             stock = self.base / f'stock-{optimisation}'
             result = self.command([str(self.rustc), str(entry), '--edition=2024',
-                '-Copt-level=' + str(optimisation), '-o', str(stock)])
+                '-Copt-level=' + str(optimisation), '-C', 'instrument-coverage', '-o', str(stock)])
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             reference = subprocess.run([str(stock)], input=b'3\n2\n-1\n4\n-1\n', capture_output=True,
                 env=dict(os.environ, RUST_BACKTRACE='0'), timeout=15)
