@@ -267,6 +267,15 @@ FunctionStatus FunctionRuntime::Status() const {
           impl_->lost.load(), impl_->invalid.load(), impl_->closing, impl_->closing && !impl_->active};
 }
 
+trace::SpanContext FunctionRuntime::CurrentContext() const noexcept {
+  try {
+    std::lock_guard<std::mutex> guard(impl_->mutex);
+    auto *frame = impl_->Top(std::this_thread::get_id());
+    if (frame && frame->span) return frame->span->GetContext();
+  } catch (...) {}
+  return trace::SpanContext::GetInvalid();
+}
+
 bool FunctionRuntime::Close() {
   std::lock_guard<std::mutex> guard(impl_->mutex);
   impl_->closing = true;

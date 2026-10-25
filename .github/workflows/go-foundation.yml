@@ -1,0 +1,100 @@
+name: Go owned foundation
+on:
+  pull_request:
+    paths:
+      - 'adapters/go/**'
+      - 'otelc/go_health.py'
+      - 'otelc/go_context_bundle.py'
+      - 'otelc/go_runtime_config.py'
+      - 'tests/test_go_health.py'
+      - 'tests/test_go_context_bundle.py'
+      - 'tests/test_go_runtime_config.py'
+      - 'tests/test_go_scope_patch.py'
+      - 'tests/fixtures/go-detached/**'
+      - 'tests/fixtures/go-telemetry/**'
+      - 'ci/go_scope_patch.py'
+      - '.github/workflows/go-foundation.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: go-foundation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  foundation:
+    name: Owned Go foundation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: adapters/go/go.sum
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Check actual SDK races and component coverage
+        run: |
+          mkdir -p build/go-foundation
+          git rev-parse HEAD > build/go-foundation/head.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+          make go-check 2>&1 | tee build/go-foundation/go-tests.log
+      - name: Check common-policy health and context records
+        env:
+          PYTHONPATH: .:tests
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+          .venv/bin/python -m coverage run --data-file=build/go-foundation/python.coverage --source=otelc.go_health,otelc.go_context_bundle,otelc.go_runtime_config,ci.go_scope_patch -m unittest test_go_health test_go_context_bundle test_go_runtime_config test_go_scope_patch -v 2>&1 | tee build/go-foundation/python-tests.log
+          for module in go_health go_context_bundle go_runtime_config go_scope_patch; do
+            .venv/bin/python -m coverage report --data-file=build/go-foundation/python.coverage --include="*/$module.py" --fail-under=80
+          done
+          .venv/bin/python -m coverage json --data-file=build/go-foundation/python.coverage -o build/go-foundation/python-coverage.json
+      - name: Verify retained fixture dependency checksums
+        env:
+          GOWORK: 'off'
+          GOTOOLCHAIN: local
+        run: |
+          for task_fixture in tests/fixtures/go-detached tests/fixtures/go-telemetry; do
+            go -C "$task_fixture" mod download all
+            go -C "$task_fixture" mod verify
+            go -C "$task_fixture" list -mod=readonly -m all
+            git diff --exit-code -- "$task_fixture/go.mod" "$task_fixture/go.sum"
+          done
+      - name: Check generated context helpers against the official SDK
+        env:
+          PYTHONPATH: .:tests
+        run: |
+          .venv/bin/python -m unittest \
+            test_go_context_integration.GoContextIntegrationTests.test_generated_detach_helper_has_compiled_component_coverage \
+            test_go_telemetry_bundle.GoTelemetryBundleTests.test_exact_helper_has_compiled_coverage_and_real_baggage_clear_semantics \
+            -v 2>&1 | tee build/go-foundation/context-fixtures.log
+          git diff --exit-code -- tests/fixtures/go-detached tests/fixtures/go-telemetry
+      - name: Retain small test and coverage records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: go-foundation-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/go-foundation/*.txt
+            build/go-foundation/*.log
+            build/go-foundation/*.json
+            build/go-coverage.out
+            build/go-sonar-coverage.out
+            build/go-dependencies.txt
+            build/go-detach-component-coverage.json
+            build/go-telemetry-component-coverage.json
+            build/go-upstream/toolchain.json

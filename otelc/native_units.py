@@ -6,15 +6,12 @@ from pathlib import Path
 import re
 from typing import Any
 
-from otelc import llvm_backend, native_gate, native_launch
+from otelc import llvm_backend, native_gate, native_launch, native_object_build
 from otelc.config import Policy
 from otelc.python_sdk_io import decode
 
 PROFILE = 'llvm22-native-units-v1'
 RECIPE_KIND = 'otelc.native.unit-recipe'
-CLANG_CPP = 'clang++'
-BOOTSTRAP = 'bootstrap.cpp'
-COMPILATION_DATABASE = 'compile_commands.json'
 PATH_FLAGS = frozenset(('-I', '-isystem', '-iquote', '-include', '-imacros'))
 VALUE_FLAGS = frozenset(('-D', '-U'))
 SIMPLE_FLAGS = frozenset(('-g', '-g0', '-g1', '-g2', '-g3', '-gline-tables-only',
@@ -80,33 +77,6 @@ def overlay(filename: Path, root: Path, assets: set[Path]) -> None:
         names.add(original)
 
 
-def _validate_unit(unit: Any, root: Path, assets: set[Path], identifiers: set[str],
-                   contexts: set[tuple]) -> None:
-    """Check one unit and bind its distinct source/compiler context."""
-    require(type(unit) is dict and set(unit) == {'id', 'role', 'source', 'language', 'directory',
-            'flags', 'overlay', 'rename_main'}, 'invalid unit fields')
-    identifier = unit['id']
-    require(type(identifier) is str and re.fullmatch(r'[A-Za-z_]\w{0,63}', identifier, re.ASCII) is not None
-            and identifier != 'link' and identifier not in identifiers, 'invalid or repeated unit identity')
-    identifiers.add(identifier)
-    require(type(unit['language']) is str and unit['language'] in SUFFIXES
-            and unit['role'] in ('application', 'driver')
-            and type(unit['rename_main']) is bool, 'unsupported unit language, role or rename')
-    source, cwd = path(unit['source']), path(unit['directory'], directory=True)
-    require(source.suffix in SUFFIXES[unit['language']], 'source language/suffix mismatch')
-    flags(unit['flags'], cwd)
-    if unit['role'] == 'application':
-        require(source.is_relative_to(root) and cwd.is_relative_to(root), 'application unit escapes its root')
-        if unit['overlay'] is not None:
-            overlay(path(unit['overlay']), root, assets)
-    else:
-        require(source in assets and unit['overlay'] is None and not unit['rename_main'],
-                'neutral driver must be an unmodified private asset')
-    context = (str(source), unit['language'], str(cwd), tuple(unit['flags']), unit['overlay'], unit['role'])
-    require(context not in contexts, 'repeated compile context')
-    contexts.add(context)
-
-
 def validate(value: Any, root: Path) -> dict[str, Any]:
     """Copy one closed declarative recipe; no stored command strings are run."""
     require(type(value) is dict and set(value) == {'schema_version', 'kind', 'units', 'assets', 'link'}
@@ -120,11 +90,30 @@ def validate(value: Any, root: Path) -> dict[str, Any]:
     require(type(value['units']) is list and 1 <= len(value['units']) <= 257, 'invalid unit count')
     identifiers, contexts, applications, drivers = set(), set(), 0, 0
     for unit in value['units']:
-        _validate_unit(unit, root, set(assets), identifiers, contexts)
+        require(type(unit) is dict and set(unit) == {'id', 'role', 'source', 'language', 'directory',
+                'flags', 'overlay', 'rename_main'}, 'invalid unit fields')
+        identifier = unit['id']
+        require(type(identifier) is str and re.fullmatch(r'[A-Za-z_]\w{0,63}', identifier, re.ASCII) is not None
+                and identifier != 'link' and identifier not in identifiers, 'invalid or repeated unit identity')
+        identifiers.add(identifier)
+        require(type(unit['language']) is str and unit['language'] in SUFFIXES
+                and unit['role'] in ('application', 'driver')
+                and type(unit['rename_main']) is bool, 'unsupported unit language, role or rename')
+        source, cwd = path(unit['source']), path(unit['directory'], directory=True)
+        require(source.suffix in SUFFIXES[unit['language']], 'source language/suffix mismatch')
+        flags(unit['flags'], cwd)
         if unit['role'] == 'application':
             applications += 1
+            require(source.is_relative_to(root) and cwd.is_relative_to(root), 'application unit escapes its root')
+            if unit['overlay'] is not None:
+                overlay(path(unit['overlay']), root, set(assets))
         else:
             drivers += 1
+            require(source in assets and unit['overlay'] is None and not unit['rename_main'],
+                    'neutral driver must be an unmodified private asset')
+        context = (str(source), unit['language'], str(cwd), tuple(unit['flags']), unit['overlay'], unit['role'])
+        require(context not in contexts, 'repeated compile context')
+        contexts.add(context)
     require(1 <= applications <= 256 and drivers <= 1, 'requires application units and at most one neutral driver')
     link = value['link']
     require(type(link) is dict and set(link) == {'language', 'directory', 'flags'}
@@ -136,33 +125,8 @@ def validate(value: Any, root: Path) -> dict[str, Any]:
     return json.loads(json.dumps(value, allow_nan=False))
 
 
-def _unit_steps(unit: dict[str, Any], lane: str, output: Path, binaries: Path,
-                plugin: str) -> list[dict[str, Any]]:
-    """Compile one unit, then optionally rename its original main symbol."""
-    label = lane + '-' + unit['id']
-    final = output / (label + '.o')
-    compiled = output / (label + '.original.o') if unit['rename_main'] else final
-    dependencies = output / (label + '.d')
-    compiler = binaries / ('clang' if unit['language'] == 'c' else CLANG_CPP)
-    command = [str(compiler), *unit['flags'], '-g', '-MD', '-MF', str(dependencies),
-               '-MT', 'otelc-inputs', '-c', unit['source'], '-o', str(compiled)]
-    if unit['overlay'] is not None:
-        command.extend(['-ivfsoverlay', unit['overlay']])
-    if lane == 'instrumented' and unit['role'] == 'application':
-        command.append('-fpass-plugin=' + plugin)
-    result = [{'label': label, 'directory': unit['directory'], 'arguments': command,
-               'output': str(compiled), 'source': unit['source'],
-               'dependencies': str(dependencies), 'unit': unit['id'], 'lane': lane}]
-    if unit['rename_main']:
-        command = [str(binaries / 'llvm-objcopy'), '--redefine-sym', 'main=__oteleq_original_main',
-                   '--redefine-sym', '_main=___oteleq_original_main', str(compiled), str(final)]
-        result.append({'label': label + '-rename', 'directory': str(output),
-                       'arguments': command, 'output': str(final)})
-    return result
-
-
 def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: str,
-          library: Path) -> list[dict[str, Any]]:
+          library: Path, *, object_lifetimes: bool = False) -> list[dict[str, Any]]:
     """Derive the two matched compiler/link recipes, preserving explicit unit order."""
     binaries = Path(tools['directory'])
     result = []
@@ -172,17 +136,34 @@ def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: s
     for lane in ('plain', 'instrumented'):
         objects = []
         for unit in recipe['units']:
-            commands = _unit_steps(unit, lane, output, binaries, plugin)
-            result.extend(commands)
-            objects.append(commands[-1]['output'])
+            label = lane + '-' + unit['id']
+            final = output / (label + '.o')
+            compiled = output / (label + '.original.o') if unit['rename_main'] else final
+            dependencies = output / (label + '.d')
+            compiler = binaries / ('clang' if unit['language'] == 'c' else 'clang++')
+            command = [str(compiler), *unit['flags'], '-g', '-MD', '-MF', str(dependencies),
+                       '-MT', 'otelc-inputs', '-c', unit['source'], '-o', str(compiled)]
+            if unit['overlay'] is not None:
+                command.extend(['-ivfsoverlay', unit['overlay']])
+            if lane == 'instrumented' and unit['role'] == 'application':
+                command.append('-fpass-plugin=' + plugin)
+            extra = {'environment': native_object_build.environment(unit, output)} if (
+                object_lifetimes and lane == 'instrumented' and unit['role'] == 'application') else {}
+            append(label, unit['directory'], command, compiled, source=unit['source'],
+                   dependencies=str(dependencies), unit=unit['id'], lane=lane, **extra)
+            if unit['rename_main']:
+                command = [str(binaries / 'llvm-objcopy'), '--redefine-sym', 'main=__oteleq_original_main',
+                           '--redefine-sym', '_main=___oteleq_original_main', str(compiled), str(final)]
+                append(label + '-rename', str(output), command, final)
+            objects.append(str(final))
         if lane == 'instrumented':
             bootstrap = output / 'bootstrap.o'
-            command = [str(binaries / CLANG_CPP), '-std=c++17', '-O2', '-g', '-c', str(output / BOOTSTRAP),
+            command = [str(binaries / 'clang++'), '-std=c++17', '-O2', '-g', '-c', str(output / 'bootstrap.cpp'),
                        '-o', str(bootstrap), '-I', str(native_launch.ROOT / 'adapters/native/launcher/include')]
-            append('bootstrap', str(output), command, bootstrap, source=str(output / BOOTSTRAP))
+            append('bootstrap', str(output), command, bootstrap, source=str(output / 'bootstrap.cpp'))
             objects.insert(0, str(bootstrap))
         binary = output / lane
-        compiler = binaries / ('clang' if recipe['link']['language'] == 'c' else CLANG_CPP)
+        compiler = binaries / ('clang' if recipe['link']['language'] == 'c' else 'clang++')
         command = [str(compiler), *objects, *recipe['link']['flags'], '-o', str(binary)]
         if lane == 'instrumented':
             command.extend([str(library), '-Wl,-rpath,' + str(library.parent)])
@@ -193,7 +174,8 @@ def steps(recipe: dict[str, Any], output: Path, tools: dict[str, Any], plugin: s
 def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], output: Path,
           *, library: Path, llvm_config: Path | None = None) -> native_launch.Build:
     """Compile a caller-selected context without editing its application inputs."""
-    native_launch.validate_policy(policy, language)
+    objects = policy.data['lifetimes']['enabled']
+    native_launch.validate_policy(policy, language, object_lifetimes=objects)
     root = root.resolve(strict=True)
     require(root.is_dir() and root != Path('/'), 'invalid application root')
     recipe = validate(recipe, root)
@@ -204,7 +186,9 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
     sdk = native_launch.identity(library)
     output.mkdir(mode=0o700)
     output = output.resolve(strict=True)
-    plugin = llvm_backend.build(output / 'plugin', config=llvm_config, function_registry=True, source_aware=True)
+    object_records = native_object_build.build(policy, root, recipe, output, llvm_config=llvm_config) if objects else {}
+    plugin = llvm_backend.build(output / 'plugin', config=llvm_config, function_registry=True,
+                                source_aware=True, object_lifetimes=objects)
     manifest = llvm_backend.verify(plugin)
     tools = manifest['toolchain']
     extra_tools = {}
@@ -212,11 +196,12 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
         objcopy = Path(tools['directory']) / 'llvm-objcopy'
         extra_tools['objcopy'] = native_gate.identity(objcopy)
         require(tools['version'] in llvm_backend.query(objcopy, '--version'), 'object tool differs from LLVM')
-    (output / BOOTSTRAP).write_text(native_launch.BOOTSTRAP)
-    commands = steps(recipe, output, tools, manifest['plugin']['path'], library)
+    (output / 'bootstrap.cpp').write_text(native_launch.BOOTSTRAP)
+    commands = steps(recipe, output, tools, manifest['plugin']['path'], library, object_lifetimes=objects)
     dependencies, inputs = {}, {}
     for command in commands:
         environment = llvm_backend.environment(policy, language, source_root=root)
+        environment.update(command.get('environment', {}))
         native_launch._compile(command['arguments'], Path(command['directory']), output, command['label'], environment)
         if 'dependencies' in command:
             rows = native_launch._inputs(Path(command['dependencies']), Path(command['directory']))
@@ -230,21 +215,24 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
                 'compiler inputs differ between lanes')
     database = [{'directory': row['directory'], 'file': row['source'], 'arguments': row['arguments']}
                 for row in commands if 'source' in row]
-    (output / COMPILATION_DATABASE).write_text(json.dumps(database, indent=2) + '\n')
-    artifacts = {output / BOOTSTRAP, output / COMPILATION_DATABASE}
+    (output / 'compile_commands.json').write_text(json.dumps(database, indent=2) + '\n')
+    artifacts = {output / 'bootstrap.cpp', output / 'compile_commands.json'}
+    if objects:
+        artifacts.update(native_object_build.artifacts(recipe, output))
     for row in commands:
         artifacts.update((Path(row['output']), output / (row['label'] + '.stdout'), output / (row['label'] + '.stderr')))
         if 'dependencies' in row:
             artifacts.add(Path(row['dependencies']))
-    value = {'schema_version': 2, 'kind': 'otelc.native-build', 'profile': PROFILE,
+    value = {'schema_version': 3 if objects else 2, 'kind': 'otelc.native-build',
+        'profile': native_object_build.PROFILE if objects else PROFILE,
         'language': language, 'root': str(root), 'policy': policy.data,
         'policy_sha256': native_launch.digest(policy.data),
-        'selection_sha256': native_launch.digest({key: policy.data[key] for key in ('sources', 'functions')}),
+        'selection_sha256': native_launch.digest(native_launch.selection(policy.data, object_lifetimes=objects)),
         'inputs': list(inputs.values()), 'sdk_library': sdk,
         'products': [native_launch.identity(output / lane) for lane in ('plain', 'instrumented')],
         'commands': commands, 'recipe': recipe, 'files': list(held.values()), 'tools': extra_tools,
         'artifacts': [native_gate.identity(item) for item in sorted(artifacts)],
-        'dependencies': dependencies, 'source_complete': False}
+        'dependencies': dependencies, 'source_complete': False, **object_records}
     encoded = json.dumps(value, sort_keys=True, indent=2) + '\n'
     (output / 'native-build.json').write_text(encoded)
     result = native_launch.Build(output, encoded, plugin)
@@ -252,8 +240,19 @@ def build(policy: Policy, language: str, root: Path, recipe: dict[str, Any], out
     return result
 
 
-def _verify_dependencies(value: dict[str, Any], recipe: dict[str, Any]) -> None:
-    """Require complete, consistent compiler-input and retained-file sets."""
+def verify(built: native_launch.Build, value: dict[str, Any]) -> None:
+    """Check retained contexts and products without executing recorded commands."""
+    recipe = validate(value['recipe'], Path(value['root']))
+    objects = value['profile'] == native_object_build.PROFILE
+    plugin = llvm_backend.verify(built.plugin)
+    require(value['commands'] == steps(recipe, built.directory, plugin['toolchain'],
+            plugin['plugin']['path'], Path(value['sdk_library']['path']), object_lifetimes=objects),
+            'retained compiler context changed')
+    require(type(value['dependencies']) is dict and type(value['tools']) is dict
+            and all(type(value[name]) is list for name in ('files', 'artifacts')), 'invalid retained record collections')
+    require(all(type(row) is dict and type(row.get('path')) is str
+                for row in [*value['files'], *value['artifacts'], *value['tools'].values()]),
+            'invalid retained file identity')
     required_files = {row['source'] for row in recipe['units']} | set(recipe['assets'])
     expected_dependencies = {lane + '-' + unit['id'] for lane in ('plain', 'instrumented') for unit in recipe['units']}
     require(set(value['dependencies']) == expected_dependencies, 'incomplete per-unit dependency denominator')
@@ -270,33 +269,16 @@ def _verify_dependencies(value: dict[str, Any], recipe: dict[str, Any]) -> None:
             'incomplete compiler input denominator')
     require(len(value['files']) == len(required_files)
             and {row['path'] for row in value['files']} == required_files, 'incomplete input denominator')
-
-
-def _verify_artifacts(directory: Path, value: dict[str, Any]) -> None:
-    """Require every output, diagnostic channel and dependency file exactly once."""
-    expected_artifacts = {str(directory / name) for name in (BOOTSTRAP, COMPILATION_DATABASE)}
+    expected_artifacts = {str(built.directory / name) for name in ('bootstrap.cpp', 'compile_commands.json')}
+    if objects:
+        expected_artifacts.update(map(str, native_object_build.artifacts(recipe, built.directory)))
     for row in value['commands']:
-        expected_artifacts.update((row['output'], str(directory / (row['label'] + '.stdout')),
-                                   str(directory / (row['label'] + '.stderr'))))
+        expected_artifacts.update((row['output'], str(built.directory / (row['label'] + '.stdout')),
+                                   str(built.directory / (row['label'] + '.stderr'))))
         if 'dependencies' in row:
             expected_artifacts.add(row['dependencies'])
     require(len(value['artifacts']) == len(expected_artifacts)
             and {row['path'] for row in value['artifacts']} == expected_artifacts, 'incomplete compiler channel denominator')
-
-
-def verify(built: native_launch.Build, value: dict[str, Any]) -> None:
-    """Check retained contexts and products without executing recorded commands."""
-    recipe = validate(value['recipe'], Path(value['root']))
-    plugin = llvm_backend.verify(built.plugin)
-    require(value['commands'] == steps(recipe, built.directory, plugin['toolchain'],
-            plugin['plugin']['path'], Path(value['sdk_library']['path'])), 'retained compiler context changed')
-    require(type(value['dependencies']) is dict and type(value['tools']) is dict
-            and all(type(value[name]) is list for name in ('files', 'artifacts')), 'invalid retained record collections')
-    require(all(type(row) is dict and type(row.get('path')) is str
-                for row in [*value['files'], *value['artifacts'], *value['tools'].values()]),
-            'invalid retained file identity')
-    _verify_dependencies(value, recipe)
-    _verify_artifacts(built.directory, value)
     renamed = any(row['rename_main'] for row in recipe['units'])
     require(set(value['tools']) == ({'objcopy'} if renamed else set()), 'unexpected object tool denominator')
     if renamed:
@@ -311,5 +293,7 @@ def verify(built: native_launch.Build, value: dict[str, Any]) -> None:
                     'retained per-unit dependency manifest changed')
     expected_database = [{'directory': row['directory'], 'file': row['source'], 'arguments': row['arguments']}
                          for row in value['commands'] if 'source' in row]
-    require(json.loads((built.directory / COMPILATION_DATABASE).read_bytes()) == expected_database,
+    require(json.loads((built.directory / 'compile_commands.json').read_bytes()) == expected_database,
             'retained compilation database differs from executed commands')
+    if objects:
+        native_object_build.verify(value, built.directory)

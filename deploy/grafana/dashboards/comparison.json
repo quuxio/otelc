@@ -258,7 +258,7 @@
       "id": 7,
       "title": "Process CPU time per operation, including SDK flush window",
       "type": "bargauge",
-      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java and Go application samples include their embedded SDK. Node/Python report separate application and SDK roles. Go reports its supervisor in both lanes; Python reports one in its instrumented lane. Missing historical resource samples are not zero cost.",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java, Go and C/C++ application samples include their embedded SDK. Go reports its supervisor in both lanes; C/C++ report one in the instrumented lane, while plain is a direct stock executable. Node/Python report separate application and SDK roles; Python reports its instrumented supervisor. Missing historical resource samples are not zero cost.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -299,7 +299,7 @@
       "id": 8,
       "title": "Process RSS snapshots; not allocation or peak memory",
       "type": "bargauge",
-      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java and Go application samples include their embedded SDK. Node/Python report separate application and SDK roles. Go reports its supervisor in both lanes; Python reports one in its instrumented lane. Missing historical resource samples are not zero cost.",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java, Go and C/C++ application samples include their embedded SDK. Go reports its supervisor in both lanes; C/C++ report one in the instrumented lane, while plain is a direct stock executable. Node/Python report separate application and SDK roles; Python reports its instrumented supervisor. Missing historical resource samples are not zero cost.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -375,7 +375,7 @@
         },
         "showUnfilled": true
       },
-      "description": "One observation per lane. Starts immediately before stock app / prepared supervisor creation; includes verification, application/SDK readiness, metric-off control, IPC and the first one-call workload. Excludes preparation/build time. This is not pure interpreter startup or a statistically qualified latency estimate."
+      "description": "One observation per lane. Starts immediately before stock app / prepared supervisor creation; includes verification, application/SDK readiness, metric-off control, IPC and the first one-call workload. Excludes preparation/build time. This is not pure runtime startup or a statistically qualified latency estimate."
     }
   ]
 }

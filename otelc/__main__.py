@@ -19,7 +19,7 @@ from typing import Any
 
 from otelc import benchmark, control, health, java, node, node_benchmark, prepared_java, witness
 from otelc import prepared_python as python_adapter
-from otelc import python_benchmark, python_recipe
+from otelc import python_benchmark, python_recipe, native_benchmark
 from otelc import native_launch
 from otelc import native_build, prepared_native
 from otelc import go_benchmark, go_build, go_prepared_tools, prepared_go
@@ -80,7 +80,9 @@ def main() -> int:
     compare.add_argument("--output", type=Path, required=True)
     compare.add_argument('--build', type=Path, help='Go only: existing go-build directory for examples/go')
     compare.add_argument("--no-publish", action="store_true")
-    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python", "go"), default="java")
+    compare.add_argument("--language", choices=("java", "javascript", "typescript", "python", "go", "c", "cpp"), default="java")
+    compare.add_argument('--sdk-build', type=Path, default=Path('build/native-launch-sdk'),
+                         help='matching native SDK build for C/C++ benchmarks')
     compare.add_argument("--backend", choices=("native", "api"), default="native")
     compare.add_argument("--comparison-id", help="group equivalent language runs in Grafana")
     example = commands.add_parser("example")
@@ -114,7 +116,7 @@ def main() -> int:
     native.add_argument("--plain", action="store_true")
     native.add_argument("arguments", nargs=argparse.REMAINDER)
     native_protocol_parser = commands.add_parser('native-protocols', help='describe explicit owned native formats without compiling')
-    native_protocol_parser.add_argument('--build-version', type=int, choices=(2, 3), default=2)
+    native_protocol_parser.add_argument('--build-version', type=int, choices=(2, 3, 4), default=2)
     native_build_parser = commands.add_parser('native-build', help='candidate: retain a native build for owned execution')
     native_build_parser.add_argument('--language', choices=('c', 'cpp'), required=True)
     native_build_parser.add_argument('--root', type=Path, required=True)
@@ -265,5 +267,8 @@ def run_benchmark(policy: Policy, args: argparse.Namespace) -> dict[str, Any]:
     if args.language == 'python':
         return python_benchmark.run(policy, args.output, publish=not args.no_publish,
                                     comparison_id=args.comparison_id)
+    if args.language in ('c', 'cpp'):
+        return native_benchmark.run(policy, args.output, language=args.language, sdk_directory=args.sdk_build,
+                                    publish=not args.no_publish, comparison_id=args.comparison_id)
     return node_benchmark.run(policy, args.output, language=args.language, backend=args.backend,
                               publish=not args.no_publish, comparison_id=args.comparison_id)

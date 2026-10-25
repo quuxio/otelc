@@ -95,26 +95,7 @@ func TestFunctionOutcomesPreserveOriginalPanicAndIgnoreOuterUnwind(t *testing.T)
 		{"returned-typed-nil", func(p *Recorder) { _ = returnedError(p) }, []string{"returned_error"}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			h := newHarness(t, true, nil)
-			catch(func() { scenario.action(h.probe) })
-			spans := h.exporter.GetSpans()
-			if len(spans) != len(scenario.kinds) {
-				t.Fatalf("spans: %d, wanted %d", len(spans), len(scenario.kinds))
-			}
-			for n, kind := range scenario.kinds {
-				got := ""
-				for _, attr := range spans[n].Attributes {
-					if attr.Key == "error.type" {
-						got = attr.Value.AsString()
-					}
-				}
-				if got != kind || (kind != "" && spans[n].Status.Code != codes.Error) {
-					t.Fatalf("span %d error %q, wanted %q", n, got, kind)
-				}
-			}
-			if state := h.probe.Snapshot(); state.FunctionActive != 0 || state.UnwindUnknown != 0 || state.FunctionEnds != uint64(len(spans)) {
-				t.Fatalf("bad health: %+v", state)
-			}
+			assertFunctionOutcome(t, scenario.action, scenario.kinds)
 		})
 	}
 	var calls atomic.Int64
@@ -122,6 +103,30 @@ func TestFunctionOutcomesPreserveOriginalPanicAndIgnoreOuterUnwind(t *testing.T)
 	h := newHarness(t, true, nil)
 	if got := catch(func() { panicking(h.probe, payload) }); got != payload || calls.Load() != 0 {
 		t.Fatal("changed or formatted original panic")
+	}
+}
+
+func assertFunctionOutcome(t *testing.T, action func(*Recorder), kinds []string) {
+	t.Helper()
+	h := newHarness(t, true, nil)
+	catch(func() { action(h.probe) })
+	spans := h.exporter.GetSpans()
+	if len(spans) != len(kinds) {
+		t.Fatalf("spans: %d, wanted %d", len(spans), len(kinds))
+	}
+	for n, kind := range kinds {
+		got := ""
+		for _, attr := range spans[n].Attributes {
+			if attr.Key == "error.type" {
+				got = attr.Value.AsString()
+			}
+		}
+		if got != kind || (kind != "" && spans[n].Status.Code != codes.Error) {
+			t.Fatalf("span %d error %q, wanted %q", n, got, kind)
+		}
+	}
+	if state := h.probe.Snapshot(); state.FunctionActive != 0 || state.UnwindUnknown != 0 || state.FunctionEnds != uint64(len(spans)) {
+		t.Fatalf("bad health: %+v", state)
 	}
 }
 

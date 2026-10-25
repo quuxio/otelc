@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
@@ -39,7 +40,8 @@ func TestWeakLifetimesDistinguishFailedDuplicateReleaseAndObservedGC(t *testing.
 	h := newHarness(t, true, nil)
 	func() {
 		object := new(testObject)
-		if !Track(h.probe, object, 0) || !Track(h.probe, object, 0) {
+		first, repeated := Track(h.probe, object, 0), Track(h.probe, object, 0)
+		if !first || !repeated {
 			t.Fatal("track failed")
 		}
 		Release(h.probe, object, false)
@@ -150,6 +152,30 @@ func TestDetachFailuresRemainLoss(t *testing.T) {
 		if s := h.probe.Snapshot(); s.LifetimeLoss != 1 || s.ObjectsObserved != 0 {
 			t.Fatalf("missing detach failure %+v", s)
 		}
+		assertLifetimeObserverFailure(t, h, failAt)
+	}
+}
+
+func assertLifetimeObserverFailure(t *testing.T, h *harness, started int) {
+	t.Helper()
+	spans := h.exporter.GetSpans()
+	if len(spans) != started {
+		t.Fatalf("observer failure left a span open: ended=%d started=%d", len(spans), started)
+	}
+	for _, span := range spans {
+		attributes := attribute.NewSet(span.Attributes...)
+		boundary, _ := attributes.Value("boundary")
+		if boundary.AsString() != "observer_failure" {
+			t.Fatalf("observer failure invented a completed lifetime: %q", boundary.AsString())
+		}
+	}
+	for _, name := range []string{"otelc.lifetime.admitted", "otelc.lifetime.completed"} {
+		if metricCount(t, h, name) != 0 {
+			t.Fatalf("observer failure recorded %s", name)
+		}
+	}
+	if state := h.probe.Snapshot(); state.GCObserved != 0 || state.Released != 0 || state.LiveObjects != 0 || state.OpenResources != 0 {
+		t.Fatalf("observer failure retained or completed application state: %+v", state)
 	}
 }
 

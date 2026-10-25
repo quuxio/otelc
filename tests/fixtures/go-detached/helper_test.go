@@ -77,26 +77,31 @@ func TestDetachKeepsLiveSpanAndRemovesOnlyItsFrameAndPropagationState(t *testing
 		root  api.Span
 		left  int
 	}{{b, a, 2}, {a, c, 1}, {c, nil, 0}} {
-		var state *atomic.Bool
-		for frame := tc.sw; frame != nil; frame = frame.prev {
-			if frame.span == step.value {
-				state = frame.ended
-			}
-		}
-		if state == nil || !bridge.Detach(step.value) || !step.value.IsRecording() || state.Load() {
-			t.Fatal("detachment ended or lost the live span")
-		}
-		if tc.n != step.left || tc.lcs != step.root || len(spanStates.states) != step.left {
-			t.Fatal("unbalanced frame, local root or retained propagation state", tc.n, len(spanStates.states))
-		}
-		if bridge.Detach(step.value) {
-			t.Fatal("detached twice")
-		}
+		assertDetachedFrame(t, tc, step.value, step.root, step.left)
 	}
 	if tc.sw != nil {
 		t.Fatal("retained an empty stack")
 	}
 	runtime.Current = nil
+}
+
+func assertDetachedFrame(t *testing.T, tc *traceContext, value, root api.Span, left int) {
+	t.Helper()
+	var state *atomic.Bool
+	for frame := tc.sw; frame != nil; frame = frame.prev {
+		if frame.span == value {
+			state = frame.ended
+		}
+	}
+	if state == nil || !bridge.Detach(value) || !value.IsRecording() || state.Load() {
+		t.Fatal("detachment ended or lost the live span")
+	}
+	if tc.n != left || tc.lcs != root || len(spanStates.states) != left {
+		t.Fatal("unbalanced frame, local root or retained propagation state", tc.n, len(spanStates.states))
+	}
+	if bridge.Detach(value) {
+		t.Fatal("detached twice")
+	}
 }
 
 func TestDetachPreservesTheBoundaryOfAnInheritedContext(t *testing.T) {

@@ -1,0 +1,27 @@
+schema_version = 3
+languages = ["cpp"]
+
+[sources]
+include = ["**"]
+
+[functions]
+include = ["*workload*"]
+
+[lifetimes]
+enabled = true
+include = ["demo::Item"]
+max_live = 4096
+
+[metrics]
+collection = false
+emission = false
+
+[traces]
+enabled = true
+sample_ratio = 1.0
+
+[export]
+endpoint = "http://127.0.0.1:4320"
+interval_ms = 1000
+timeout_ms = 1000
+shutdown_timeout_ms = 5000

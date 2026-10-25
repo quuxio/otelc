@@ -12,6 +12,18 @@ from otelc.__main__ import main
 
 
 class CliTests(unittest.TestCase):
+    def test_benchmark_error_keeps_the_primary_message_and_cleanup_notes(self) -> None:
+        failure = ValueError('measured checksum differs')
+        failure.add_note('Node benchmark SDK drain also failed: OSError')
+        stderr = io.StringIO()
+        with patch('sys.argv', ['quux-otelc', 'benchmark', '--output', '/unused']), \
+                patch('otelc.__main__.run_benchmark', side_effect=failure), contextlib.redirect_stderr(stderr), \
+                self.assertRaises(SystemExit) as caught:
+            main()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertEqual(stderr.getvalue(), 'quux-otelc: measured checksum differs\n'
+                         'quux-otelc: Node benchmark SDK drain also failed: OSError\n')
+
     def invoke(self, arguments: list[str]) -> str:
         output = io.StringIO()
         with patch("sys.argv", ["quux-otelc", *arguments]), contextlib.redirect_stdout(output):
@@ -87,3 +99,14 @@ class CliTests(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
                 main()
             self.assertEqual(error.exception.code, 1)
+
+    def test_native_benchmarks_keep_their_sdk_selection_alongside_go(self) -> None:
+        report = {'run_id': 'native', 'median_ns_per_operation': {'plain': 10}}
+        for language in ('c', 'cpp'):
+            with self.subTest(language=language), patch('otelc.native_benchmark.run', return_value=report) as run:
+                self.invoke(['benchmark', '--language', language, '--sdk-build', '/tmp/native-sdk',
+                             '--output', '/tmp/native-comparison', '--comparison-id', 'shared', '--no-publish'])
+                self.assertEqual(run.call_args.kwargs['language'], language)
+                self.assertEqual(str(run.call_args.kwargs['sdk_directory']), '/tmp/native-sdk')
+                self.assertEqual(run.call_args.kwargs['comparison_id'], 'shared')
+                self.assertFalse(run.call_args.kwargs['publish'])
