@@ -1,0 +1,93 @@
+name: Rust public runtime
+on:
+  pull_request:
+    paths:
+      - 'native/rust/**'
+      - 'adapters/native/**'
+      - 'otelc/rust*.py'
+      - 'otelc/health.py'
+      - 'otelc/native_benchmark.py'
+      - 'otelc/benchmark_cleanup.py'
+      - 'tests/test_rust*.py'
+      - '.github/workflows/rust-runtime.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rust-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  runtime:
+    name: Public Rust runtime (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            llvm: /usr/lib/llvm-22/bin
+          - os: macos-26
+            llvm: /opt/homebrew/opt/llvm@22/bin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: ${{ matrix.llvm }}/clang
+      CXX: ${{ matrix.llvm }}/clang++
+      OTELC_LLVM_BIN: ${{ matrix.llvm }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Check storage and record the actual source head
+        run: |
+          mkdir -p build/rust-runtime
+          git rev-parse HEAD > build/rust-runtime/head.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+      - name: Install native SDK tools on Linux
+        if: runner.os == 'Linux'
+        run: bash ci/install_llvm22.sh
+      - name: Install native SDK tools on macOS
+        if: runner.os == 'macOS'
+        run: brew install llvm@22 cmake ninja protobuf curl
+      - name: Install the pinned compiler and locked Python inputs
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev
+          rustup run 1.98.1 cargo fetch --locked --manifest-path native/rust/compiler/Cargo.toml
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+      - name: Check genuine public builds, live controls, OTLP and paired benchmarks
+        env:
+          OTELC_RUST_TOOLS_TEST_OUTPUT: ${{ github.workspace }}/build/rust-runtime/tools-case
+          OTELC_RUST_PUBLIC_TEST_OUTPUT: ${{ github.workspace }}/build/rust-runtime/public-case
+        run: |
+          make rust-public-check PYTHON=.venv/bin/python 2>&1 | tee build/rust-runtime/tests.log
+          .venv/bin/python -m coverage json --data-file=build/rust-public.coverage -o build/rust-runtime/python-coverage.json
+      - name: Retain diagnostic records without regenerable build trees
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-public-runtime-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/rust-runtime/head.txt
+            build/rust-runtime/tests.log
+            build/rust-runtime/python-coverage.json
+            build/rust-runtime/tools-case/*.json
+            build/rust-runtime/tools-case/tools/*.json
+            build/rust-runtime/tools-case/tools/*.stderr
+            build/rust-runtime/public-case/*.json
+            build/rust-runtime/public-case/application/*.rs
+            build/rust-runtime/public-case/tools/*.json
+            build/rust-runtime/public-case/tools/*.stderr
+            build/rust-runtime/public-case/**/rust-execution.json
+            build/rust-runtime/public-case/**/health.json
+            build/rust-runtime/public-case/**/report.json
+            build/rust-runtime/public-case/**/raw.jsonl
+            build/rust-runtime/public-case/**/metric-finalization.json
