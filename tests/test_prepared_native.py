@@ -250,6 +250,7 @@ class PreparedNativeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'single-use'):
             prepared.command(runtime)
         path = runtime / 'native-execution.json'; raw = path.read_bytes()
+        parent_pid = os.getpid()
         for field, wrong in (('exec_verified', True), ('source_complete', True),
                              ('schema_version', True), ('released', 1), ('inputs_rechecked', 1),
                              ('process_exit_code', False), ('profile', 'unknown'),
@@ -259,7 +260,7 @@ class PreparedNativeTests(unittest.TestCase):
             try:
                 path.write_text(json.dumps(changed))
                 with self.subTest(field=field), self.assertRaises(ValueError):
-                    prepared.execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(), returncode=0)
+                    prepared.execution(runtime, supervisor_pid=process.pid, parent_pid=parent_pid, returncode=0)
             finally:
                 path.write_bytes(raw)
 
@@ -385,6 +386,7 @@ class PreparedNativeTests(unittest.TestCase):
         final = self.finish(runtime, process)
         execution, checkpoint = runtime / 'native-execution.json', runtime / 'app/health.json'
         execution_raw, checkpoint_raw = execution.read_bytes(), checkpoint.read_bytes()
+        parent_pid = os.getpid()
         for field, altered in (('language', 'java'), ('selection_sha256', '0' * 64)):
             changed = copy.deepcopy(final)
             changed['sdk_health'][field] = altered
@@ -392,7 +394,7 @@ class PreparedNativeTests(unittest.TestCase):
                 execution.write_text(json.dumps(changed))
                 checkpoint.write_text(json.dumps(changed['sdk_health']))
                 with self.subTest(field=field), self.assertRaises(ValueError):
-                    prepared.execution(runtime, supervisor_pid=process.pid, parent_pid=os.getpid(), returncode=0)
+                    prepared.execution(runtime, supervisor_pid=process.pid, parent_pid=parent_pid, returncode=0)
             finally:
                 execution.write_bytes(execution_raw)
                 checkpoint.write_bytes(checkpoint_raw)
