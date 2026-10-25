@@ -9,6 +9,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
+
+from otelc import python_runtime
 
 from test_java_integration import Capture
 
@@ -87,6 +90,50 @@ generator.close()
 print(json.dumps({'reads': reads, 'identities': identities, 'cancelled': cancelled,
                   'closed': closed, 'yielded': yielded}, sort_keys=True))
 '''
+
+
+class CancellationClassificationTests(unittest.TestCase):
+    def test_real_type_hierarchy_ignores_spoofed_class_and_metaclass_hooks(self) -> None:
+        class HostileMeta(type):
+            def __eq__(cls, other):
+                raise AssertionError('type equality hook ran')
+
+            def __getattribute__(cls, name):
+                if name in ('__mro__', '__qualname__'):
+                    raise AssertionError('type attribute hook ran')
+                return type.__getattribute__(cls, name)
+
+        class RealCancellation(python_runtime.CancelledError, metaclass=HostileMeta):
+            @property
+            def __class__(self):
+                raise AssertionError('instance class hook ran')
+
+        class SpoofCancellation(Exception, metaclass=HostileMeta):
+            @property
+            def __class__(self):
+                return python_runtime.CancelledError
+
+        for error, expected in ((GeneratorExit(), True), (python_runtime.CancelledError(), True),
+                                (RealCancellation(), True), (SpoofCancellation(), False),
+                                (ValueError(), False)):
+            with self.subTest(expected=expected):
+                self.assertIs(python_runtime.cancelled(error), expected)
+
+    def test_span_completion_keeps_normal_error_and_cancellation_boundaries(self) -> None:
+        for error in (None, ValueError(), GeneratorExit(), python_runtime.CancelledError()):
+            span = Mock()
+            python_runtime.end_span(span, error)
+            span.end.assert_called_once_with()
+            if error is None:
+                span.set_status.assert_not_called()
+                span.add_event.assert_not_called()
+                span.set_attribute.assert_not_called()
+            elif python_runtime.cancelled(error):
+                span.set_status.assert_called_once_with(python_runtime.trace.StatusCode.ERROR, 'cancelled')
+                span.set_attribute.assert_called_once_with('otelc.cancelled', True)
+            else:
+                span.set_status.assert_called_once_with(python_runtime.trace.StatusCode.ERROR)
+                span.set_attribute.assert_not_called()
 
 
 class PythonCancellationTests(unittest.TestCase):

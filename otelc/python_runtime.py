@@ -44,6 +44,19 @@ def cancelled(error: BaseException) -> bool:
                for base in python_objects.hierarchy(type(error)))
 
 
+def end_span(span: trace.Span, error: BaseException | None) -> None:
+    """Finish a function span without invoking application exception hooks."""
+    if error is not None:
+        kind = exception_type(error)
+        if cancelled(error):
+            span.set_attribute('otelc.cancelled', True)
+            span.set_status(trace.StatusCode.ERROR, 'cancelled')
+        else:
+            span.set_status(trace.StatusCode.ERROR)
+        span.add_event('exception', {'exception.type': kind})
+    span.end()
+
+
 class PythonRuntime:
     """Order metric switches with observations while keeping tracing independent."""
 
@@ -132,15 +145,7 @@ class PythonRuntime:
             self._detach(call)
             self.completed += 1
             if call.span is not None:
-                if error is not None:
-                    kind = exception_type(error)
-                    if cancelled(error):
-                        call.span.set_attribute('otelc.cancelled', True)
-                        call.span.set_status(trace.StatusCode.ERROR, 'cancelled')
-                    else:
-                        call.span.set_status(trace.StatusCode.ERROR)
-                    call.span.add_event('exception', {'exception.type': kind})
-                call.span.end()
+                end_span(call.span, error)
             if call.collect and self.collection:
                 attributes: dict[str, str | int] = {'function': call.name}
                 if call.code_id is not None:
