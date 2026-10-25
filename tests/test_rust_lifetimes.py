@@ -91,18 +91,48 @@ class RustLifetimeSelectionTests(unittest.TestCase):
         data['lifetimes']['enabled'] = False
         self.assertEqual(self.read(self.version_two(), Policy.parse(data))['bodies'], [])
 
-    def test_full_body_fingerprint_includes_excluded_unavailable_types(self) -> None:
+    def test_excluding_either_unavailable_spelling_wins_for_the_whole_type(self) -> None:
         value = self.version_two()
-        data = copy.deepcopy(self.policy.data)
-        data['lifetimes']['exclude'] = ['*File*']
-        policy = Policy.parse(data)
-        self.read(value, policy)
-        first = lifetimes.weave_request(self.path, policy, self.root, self.sources)
-        value['bodies'][0]['unavailable_locals'][0]['needs_drop'] = False
-        self.read(value, policy)
-        second = lifetimes.weave_request(self.path, policy, self.root, self.sources)
-        self.assertEqual(first['lifetimes'], second['lifetimes'])
-        self.assertNotEqual(first['lifetime_bodies'], second['lifetime_bodies'])
+        for excluded in ('File', 'std::fs::File', '*File*'):
+            data = copy.deepcopy(self.policy.data)
+            data['lifetimes']['exclude'] = [excluded]
+            policy = Policy.parse(data)
+            with self.subTest(excluded=excluded):
+                selected = self.read(value, policy)
+                self.assertEqual(selected['bodies'][0]['unavailable_locals'], [])
+                self.assertTrue(lifetimes.weave_bindings(self.path, policy, self.root, self.sources))
+                self.assertTrue(lifetimes.weave_request(self.path, policy, self.root, self.sources)['lifetimes'])
+
+    def test_unavailable_exact_inclusions_cannot_override_the_other_spelling_exclusion(self) -> None:
+        for included, excluded in (('File', None), ('std::fs::File', None),
+                                   ('File', 'std::fs::File'), ('std::fs::File', 'File')):
+            data = copy.deepcopy(self.policy.data)
+            data['lifetimes'].update(include=[included], exclude=[] if excluded is None else [excluded])
+            policy = Policy.parse(data)
+            with self.subTest(included=included, excluded=excluded):
+                selected = self.read(self.version_two(), policy)
+                if excluded is None:
+                    self.assertEqual(len(selected['bodies'][0]['unavailable_locals']), 1)
+                    with self.assertRaisesRegex(ValueError, 'unavailable.*File'):
+                        lifetimes.weave_request(self.path, policy, self.root, self.sources)
+                else:
+                    self.assertEqual(selected['bodies'], [])
+                    self.assertEqual(lifetimes.weave_bindings(self.path, policy, self.root, self.sources), {})
+
+    def test_full_body_fingerprint_includes_excluded_unavailable_types(self) -> None:
+        for excluded in ('File', 'std::fs::File', '*File*'):
+            value = self.version_two()
+            data = copy.deepcopy(self.policy.data)
+            data['lifetimes']['exclude'] = [excluded]
+            policy = Policy.parse(data)
+            with self.subTest(excluded=excluded):
+                self.read(value, policy)
+                first = lifetimes.weave_request(self.path, policy, self.root, self.sources)
+                value['bodies'][0]['unavailable_locals'][0]['needs_drop'] = False
+                self.read(value, policy)
+                second = lifetimes.weave_request(self.path, policy, self.root, self.sources)
+                self.assertEqual(first['lifetimes'], second['lifetimes'])
+                self.assertNotEqual(first['lifetime_bodies'], second['lifetime_bodies'])
 
     def test_unavailable_return_argument_and_local_roles_remain_distinct(self) -> None:
         value = self.version_two()

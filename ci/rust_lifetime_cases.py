@@ -192,6 +192,21 @@ fn main(){workload();opaque(7_u32);}
             policy = self.policy(lifetimes={'enabled': True, 'include': include})
             with self.subTest(include=include), self.assertRaisesRegex(ValueError, 'unavailable'):
                 rust_lifetimes.weave_request(output, policy, self.root, self.sources)
+        self.generic_exclusions(output, rows)
+
+    def generic_exclusions(self, output: Path, rows: list[dict]) -> None:
+        """Both actual generic type spellings obey common exclusion precedence."""
+        vector = next(row for row in rows if row['compiler_type'].endswith('::Vec'))
+        self.assertNotEqual(vector['compiler_type'], vector['rendered_type'])
+        include = [vector['compiler_type'] + '*']
+        policy = self.policy(lifetimes={'enabled': True, 'include': include})
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            rust_lifetimes.weave_request(output, policy, self.root, self.sources)
+        for excluded in (vector['compiler_type'], vector['rendered_type']):
+            policy = self.policy(lifetimes={'enabled': True, 'include': include, 'exclude': [excluded]})
+            with self.subTest(excluded=excluded):
+                self.assertEqual(rust_lifetimes.read(output, policy, self.root, self.sources)['bodies'], [])
+                self.assertEqual(rust_lifetimes.weave_bindings(output, policy, self.root, self.sources), {})
 
 
 def main() -> int:

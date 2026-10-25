@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from otelc.config import Policy
+from otelc.config import Policy, Selection
 from otelc.file_inputs import checked_file
 from otelc.python_sdk_io import decode
 
@@ -186,12 +186,14 @@ def _read(path: Path, policy: Policy, root: Path, sources: dict[str, str]) -> tu
     document = inventory(path, root, sources, inputs)
     selected = []
     source_selector, type_selector = policy.selection('sources'), policy.selection('lifetimes')
+    type_exclusions = Selection(type_selector.exclude, (), paths=type_selector.paths)
     for row in document['bodies']:
         include = policy.data['lifetimes']['enabled'] and source_selector.accepts(source(row['function'], root, inputs))
         locals_ = [item for item in row['locals'] if include
                    and source_selector.accepts(source(item['source'], root, inputs))
                    and type_selector.accepts(item['rendered_type'])]
         unsupported = [item for item in row.get('unavailable_locals', []) if include
+                       and not any(type_exclusions.accepts(item[key]) for key in ('compiler_type', 'rendered_type'))
                        and any(type_selector.accepts(item[key]) for key in ('compiler_type', 'rendered_type'))]
         if locals_ or unsupported:
             indexes = {item['local'] for item in locals_}
