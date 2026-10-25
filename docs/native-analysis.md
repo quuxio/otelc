@@ -18,6 +18,8 @@ Actual `llvm-cov export -format=lcov` reports retain every covered and uncovered
 
 The Clang C resource frontend records the source, LCOV and compilation database with full file identities: resolved path, device/inode, mode, timestamps, link count and owner/group, as well as size and hash. The collector requires this complete format for that producer. A changed or dropped file fact fails even when the source bytes still match. Other component records retain their declared byte-identity format; the producer role chooses the required validator.
 
+The C resource coverage producer copies its actual compilation database to `build/native-resources-compile-commands.json` before deleting temporary tool builds. Its report binds the retained copy's own file identity. Normal coverage conversion therefore keeps the original compiler commands available after cleanup; a full Sonar scan still requires the analysis-mode build contexts described above.
+
 `make test` writes `build/native-sonar-coverage.xml` after the real native execution. The generic XML uses repository-relative file paths and does not substitute function or aggregate percentages for line coverage. Its Python converter has a separate 80% component floor and focused refusal tests. The normal Python, Java, Node and Go reports remain separate.
 
 For a focused local analysis-context check with the installed matched LLVM 22 tools:

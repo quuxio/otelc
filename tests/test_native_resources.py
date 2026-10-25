@@ -6,6 +6,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,41 @@ class CResourceImportTests(unittest.TestCase):
             with self.subTest(module=name):
                 result = subprocess.run(command, capture_output=True, timeout=10)
                 self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b'', b''))
+class CResourceCoverageRetentionTests(unittest.TestCase):
+    def test_coverage_keeps_database_after_disposable_tool_cleanup(self):
+        from types import SimpleNamespace
+        from ci import native_sonar
+
+        for keep in (False, True):
+            with self.subTest(analysis=keep), tempfile.TemporaryDirectory() as root:
+                root = Path(root).resolve()
+                output = root / 'build'; output.mkdir()
+                temporary = tempfile.TemporaryDirectory(dir=output, delete=not keep)
+                base = Path(temporary.name)
+                tool = base / 'tool'; tool.mkdir()
+                database = tool / 'compile_commands.json'
+                original = b'[{"directory":"/original","file":"Resources.cpp","arguments":["clang++","-c","Resources.cpp"]}]\n'
+                database.write_bytes(original)
+                (base / 'resource-1.profraw').write_bytes(b'literal profile, not actual native coverage')
+                source = tools.RESOURCE_SOURCE
+                summary = {'count': 10, 'covered': 9, 'percent': 90.}
+                report = {'data': [{'files': [{'filename': str(source), 'summary': {'lines': summary}}]}]}
+                tool_receipt = {'toolchain': {'directory': '/fixed/llvm'}, 'product': {'path': '/fixed/helper'}}
+                fixture = SimpleNamespace(base=base, keep=keep, temporary=temporary,
+                    tool=SimpleNamespace(directory=tool, verify=lambda: tool_receipt))
+                with patch(__name__ + '.ROOT', root), patch.object(subprocess, 'run'), \
+                        patch.object(subprocess, 'check_output', side_effect=[json.dumps(report).encode(), b'literal lcov']):
+                    CResourceSemanticsTests.tearDownClass.__func__(fixture)
+                record = json.loads((output / 'native-resources-coverage.json').read_bytes())
+                retained = Path(record['compilation_database']['path'])
+                self.assertEqual(retained.read_bytes(), original)
+                self.assertEqual(retained.parent, output)
+                native_sonar.checked_artifact(record['compilation_database'], retained, full_identity=True)
+                self.assertEqual(base.exists(), keep)
+                retained.write_bytes(original + b'changed')
+                with self.assertRaisesRegex(ValueError, 'input changed'):
+                    native_sonar.checked_artifact(record['compilation_database'], retained, full_identity=True)
+                temporary.cleanup()
 
 
 class CResourceSemanticsTests(unittest.TestCase):
@@ -63,9 +99,11 @@ class CResourceSemanticsTests(unittest.TestCase):
         summary = files[0]['summary']['lines']
         lcov = ROOT / 'build/native-resources.lcov'
         lcov.write_bytes(subprocess.check_output([*command, '-format=lcov'], timeout=60))
+        database = ROOT / 'build/native-resources-compile-commands.json'
+        shutil.copyfile(cls.tool.directory / 'compile_commands.json', database)
         (ROOT / 'build/native-resources-coverage.json').write_text(json.dumps({
             'source': native_gate.identity(tools.RESOURCE_SOURCE), 'tool': receipt,
-            'compilation_database': native_gate.identity(cls.tool.directory / 'compile_commands.json'),
+            'compilation_database': native_gate.identity(database),
             'line_coverage': summary, 'lcov': native_gate.identity(lcov)}, indent=2) + '\n')
         print('C resource Clang coverage:', summary)
         assert summary['percent'] >= 80, summary
