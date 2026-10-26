@@ -1,0 +1,69 @@
+name: Python random-state isolation
+on:
+  pull_request:
+    paths:
+      - 'otelc/python*.py'
+      - 'tests/test_python_random_state.py'
+      - 'requirements*.txt'
+      - '.github/workflows/python-random-state.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: python-random-state-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  random-state:
+    name: Public Python RNG (${{ matrix.os }}, 3.14)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.14'
+      - name: Require storage and retain source and interpreter identities
+        run: |
+          mkdir -p build/python-random-state
+          git rev-parse HEAD > build/python-random-state/head.txt
+          python3 -VV > build/python-random-state/python.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+      - name: Install locked Python inputs
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+      - name: Check native public launches and actual successful and retried HTTP exports
+        env:
+          OTELC_PYTHON_RANDOM_TEST_OUTPUT: ${{ github.workspace }}/build/python-random-state/cases
+          PYTHONPATH: ${{ github.workspace }}/tests
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -o pipefail
+          make python-random-state-check PYTHON=.venv/bin/python 2>&1 | tee build/python-random-state/tests.log
+      - name: Retain compact original acceptance records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: python-random-state-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/python-random-state/head.txt
+            build/python-random-state/python.txt
+            build/python-random-state/tests.log
+            build/python-random-state/cases/*/application/entry.py
+            build/python-random-state/cases/*/baseline.stdout
+            build/python-random-state/cases/*/*/otelc.toml
+            build/python-random-state/cases/*/*/result.json
+            build/python-random-state/cases/*/*/runtime/python-execution.json
+            build/python-random-state/cases/*/*/runtime/sdk/python-sdk-status.json
+            build/python-random-state/cases/*/*/runtime/sdk/*.stderr
