@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from ci import qualify_go_benchmark as qualifier
-from otelc import file_inputs
+from otelc import file_inputs, go_source
 import test_go_benchmark_receipt as fixtures
 
 
@@ -45,6 +45,15 @@ class GoBenchmarkQualificationTests(unittest.TestCase):
         self.assertEqual((qualifier.ROOT / 'examples/benchmark-metrics.toml').read_bytes(), original)
         with patch.object(qualifier, 'ROOT', self.base), self.assertRaises(FileNotFoundError):
             qualifier.policy('http://127.0.0.1:12345', self.output / 'missing.toml')
+
+    def test_common_policy_selects_module_relative_go_workload(self) -> None:
+        selected = qualifier.policy('http://127.0.0.1:12345', self.output / 'otelc.toml')
+        name = 'io.quux.otelc.examples/go.workload'
+        inventory = {'schema_version': 1, 'main': 'io.quux.otelc.examples/go',
+            'functions': [{'name': name, 'file': 'BenchmarkApp.go', 'symbol': 'workload',
+                           'package': 'io.quux.otelc.examples/go', 'receiver_id': '', 'gap': ''}],
+            'types': [], 'allocations': []}
+        self.assertEqual([row['name'] for row in go_source.resolve(selected, inventory)['functions']], [name])
 
     def test_catalogue_checks_clean_git_revision_and_actual_original_facts(self) -> None:
         source = self.capture / 'a file.py'
@@ -238,7 +247,12 @@ class GoBenchmarkQualificationTests(unittest.TestCase):
                 patch.object(qualifier, 'execute', side_effect=execute), \
                 patch.object(qualifier, 'records'), patch.object(qualifier, 'products'), \
                 patch.object(qualifier.prepared_go, 'verify_build', return_value={}), \
+                patch.object(qualifier.receipt, 'workload_selection', side_effect=lambda _: self.assertEqual(len(commands), 1)), \
+                patch.object(qualifier.receipt, 'instrumentation', return_value={'function': 'workload', 'collected_calls': 80}), \
+                patch.object(qualifier.receipt, 'workload_telemetry'), \
                 patch.object(qualifier.downstream, 'check', side_effect=observed):
+            (evidence / 'instrumented-health.json').write_text('{}')
+            (evidence / 'instrumented-config.json').write_text('{}')
             result = qualifier.perform(self.module, output, evidence, 'fresh-run')
         self.assertEqual(result['retained']['expected_checksum'], 41284864)
         self.assertEqual(commands[0][0:3], commands[1][0:3])

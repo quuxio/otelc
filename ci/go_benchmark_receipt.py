@@ -5,15 +5,96 @@ whole-program equivalence, historical kernel identity or oteleq admission.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import statistics
+from collections.abc import Callable
 from typing import Any
+
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest, ExportMetricsServiceResponse
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 
 from otelc import benchmark, benchmark_process
 from otelc.config import Policy
 
 MODES = ('plain', 'both_off', 'collection_only', 'emission_only', 'both_on')
+
+
+def workload_selection(built: dict[str, Any]) -> str:
+    """This fixed example must weave its workload before any timing is accepted."""
+    selection = built['receipt']['selection']
+    name = 'io.quux.otelc.examples/go.workload'
+    require([row['name'] for row in selection['functions']] == [name]
+            and not selection['types'] and not selection['allocations'] and not selection['releases'],
+            'retained Go benchmark must select exactly the original workload function')
+    return name
+
+
+def instrumentation(value: dict[str, Any], health: dict[str, Any], configuration: dict[str, Any],
+                    built: dict[str, Any]) -> dict[str, Any]:
+    """Join actual woven invocation accounting, not just benchmark driver metrics."""
+    name = workload_selection(built)
+    require(configuration['functions'] == [name]
+            and configuration['selection_sha256'] == built['receipt']['selection']['sha256']
+            and configuration['policy_sha256'] == health['policy_sha256'] == value['config_sha256']
+            and health['selection_sha256'] == configuration['selection_sha256']
+            and health['pid'] == value['pids']['instrumented']
+            and health['phase'] == 'final' and health['sdk_attached'] is True,
+            'Go benchmark runtime configuration or final health differs from its woven selection')
+    calls = 1 + (value['config']['benchmark']['warmup'] + 4 * value['config']['benchmark']['samples']) * value['iterations']
+    probes = health['probe_accounting']
+    require(probes['closed'] is True
+            and probes['function_started'] == probes['function_ended'] == str(calls)
+            and all(probes[key] == '0' for key in ('function_active', 'function_lost', 'unwind_unknown')),
+            'Go benchmark did not execute and close every expected workload probe')
+    return {'function': name, 'invocations': calls,
+            'collected_calls': 2 * value['config']['benchmark']['samples'] * value['iterations']}
+
+
+def workload_telemetry(capture: dict[str, Any], read: Callable[[str], bytes], *,
+                       service: str, function: str, calls: int) -> dict[str, Any]:
+    """Decode actual captured OTLP and require cumulative workload call/duration units."""
+    observed: dict[str, list[int]] = {'otelc.function.calls': [], 'otelc.function.duration': []}
+    for index, event in enumerate(capture['events']):
+        require(event['index'] == index and event['upstream']['complete'] is True
+                and event['upstream']['status'] == 200, 'incomplete Go benchmark telemetry exchange')
+        entities = {}
+        for role, field in (('request', event['request_entity']), ('upstream', event['upstream']['entity'])):
+            expected = f'{index:04d}-{role}.entity'
+            require(field['file'] == expected, 'Go benchmark telemetry entity name differs')
+            raw = read(expected)
+            require(len(raw) == field['size'] and hashlib.sha256(raw).hexdigest() == field['sha256'],
+                    'Go benchmark telemetry entity bytes differ')
+            entities[role] = raw
+        if event['path'] == '/v1/traces':
+            require(ExportTraceServiceResponse.FromString(entities['upstream']).partial_success.rejected_spans == 0,
+                    'Collector rejected benchmark spans')
+            continue
+        require(event['path'] == '/v1/metrics', 'unexpected Go benchmark telemetry path')
+        require(ExportMetricsServiceResponse.FromString(entities['upstream']).partial_success.rejected_data_points == 0,
+                'Collector rejected benchmark metric points')
+        request = ExportMetricsServiceRequest.FromString(entities['request'])
+        for resource in request.resource_metrics:
+            attributes = {row.key: row.value.string_value for row in resource.resource.attributes}
+            if attributes.get('service.name') != service:
+                continue
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    if metric.name not in observed:
+                        continue
+                    data = metric.sum if metric.name.endswith('.calls') else metric.histogram
+                    require(data.aggregation_temporality == 2, 'Go workload metrics must be cumulative')
+                    for point in data.data_points:
+                        labels = {row.key: row.value.string_value for row in point.attributes}
+                        require(labels == {'function': function}, 'unexpected Go workload metric identity')
+                        count = point.as_int if metric.name.endswith('.calls') else point.count
+                        require(0 <= count <= calls, 'Go workload metric count exceeds collected batches')
+                        observed[metric.name].append(count)
+    require(all(counts and counts[-1] == calls and counts == sorted(counts) for counts in observed.values()),
+            'actual Go workload call and duration telemetry is missing or incomplete')
+    return {'function': function, 'collected_calls': calls,
+            'observations': {name: len(counts) for name, counts in observed.items()}}
 
 
 def require(condition: bool, message: str) -> None:

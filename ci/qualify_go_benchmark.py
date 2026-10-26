@@ -176,6 +176,8 @@ def perform(capture: ModuleType, output: Path, evidence: Path, comparison_id: st
         build, comparison = output / 'go-build', output / 'comparison'
         execute([*cli, 'go-build', '--scope-safe', '--root', str(ROOT / 'examples/go'),
                  '--output', str(build)], evidence, 'build')
+        built = prepared_go.verify_build(build, selected)
+        receipt.workload_selection(built)
         execute([*cli, 'benchmark', '--language', 'go', '--build', str(build),
                  '--comparison-id', comparison_id, '--output', str(comparison)], evidence, 'benchmark')
     received.require_complete()
@@ -184,13 +186,19 @@ def perform(capture: ModuleType, output: Path, evidence: Path, comparison_id: st
     responses = [decode(line.encode()) for line in (comparison / 'responses.jsonl').read_text().splitlines()]
     retained = receipt.report(value, raw, responses, selected, comparison_id)
     records(comparison, evidence, value)
-    built = prepared_go.verify_build(build, selected)
+    instrumentation = receipt.instrumentation(value, decode((evidence / 'instrumented-health.json').read_bytes()),
+        decode((evidence / 'instrumented-config.json').read_bytes()), built)
+    telemetry = receipt.workload_telemetry(received.receipt,
+        lambda name: (evidence / 'wire' / name).read_bytes(),
+        service=selected.data['resource']['service_name'], function=instrumentation['function'],
+        calls=instrumentation['collected_calls'])
     products(build, evidence)
     receipt.require(prepared_go.same(prepared_go.verify_build(build, selected), built),
                     'Go build inputs or images changed during retention')
     observed = downstream.check(value, evidence / 'downstream')
     return {'status': 'pass for retained Go benchmark and downstream mean data',
               'retained': retained, 'downstream': observed,
+              'instrumentation': instrumentation, 'workload_telemetry': telemetry,
               'limits': 'One host; lifetimes off and tracing fixed by the common policy. No whole-language/source-closure, trace/lifetime completeness, visual dashboard or oteleq provider admission'}
 
 

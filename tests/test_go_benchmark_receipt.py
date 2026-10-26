@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import statistics
 import unittest
+
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest, ExportMetricsServiceResponse
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
 
 from ci import go_benchmark_receipt as receipt
 from otelc import benchmark, benchmark_process
@@ -152,6 +156,97 @@ class GoBenchmarkReceiptTests(unittest.TestCase):
         value = copy.deepcopy(self.value)
         value['samples_ns_per_operation']['plain'][0] = float('nan')
         with self.assertRaises(ValueError): self.check(value)
+
+
+class WorkloadInstrumentationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.name = 'io.quux.otelc.examples/go.workload'
+        self.built = {'receipt': {'selection': {'functions': [{'name': self.name}],
+            'types': [], 'allocations': [], 'releases': [], 'sha256': 'a' * 64}}}
+        self.value = {'pids': {'instrumented': 123}, 'iterations': 10,
+            'config_sha256': 'b' * 64, 'config': {'benchmark': {'warmup': 1, 'samples': 4}}}
+        self.configuration = {'functions': [self.name], 'selection_sha256': 'a' * 64, 'policy_sha256': 'b' * 64}
+        self.health = {'pid': 123, 'phase': 'final', 'sdk_attached': True,
+            'policy_sha256': 'b' * 64, 'selection_sha256': 'a' * 64,
+            'probe_accounting': {'closed': True, 'function_started': '171', 'function_ended': '171',
+                'function_active': '0', 'function_lost': '0', 'unwind_unknown': '0'}}
+
+    def test_woven_selection_and_actual_closed_invocations_are_required(self) -> None:
+        result = receipt.instrumentation(self.value, self.health, self.configuration, self.built)
+        self.assertEqual(result, {'function': self.name, 'invocations': 171, 'collected_calls': 80})
+        for functions in ([], [{'name': 'excluded'}], [{'name': self.name}, {'name': 'main'}]):
+            built = copy.deepcopy(self.built)
+            built['receipt']['selection']['functions'] = functions
+            with self.subTest(functions=functions), self.assertRaises(ValueError):
+                receipt.workload_selection(built)
+        for key, value in (('pid', 999), ('phase', 'running'), ('policy_sha256', 'wrong')):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                receipt.instrumentation(self.value, self.health | {key: value}, self.configuration, self.built)
+        for key, value in (('function_started', '0'), ('function_ended', '170'), ('function_lost', '1'), ('closed', False)):
+            health = copy.deepcopy(self.health)
+            health['probe_accounting'][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                receipt.instrumentation(self.value, health, self.configuration, self.built)
+
+    def wire(self, counts=(20, 80), *, service='otelc-examples', function=None,
+             rejected=0, temporality=2, path='/v1/metrics') -> tuple[dict, dict[str, bytes]]:
+        events, files = [], {}
+        for index, count in enumerate(counts):
+            request = ExportMetricsServiceRequest()
+            resource = request.resource_metrics.add()
+            resource.resource.attributes.add(key='service.name').value.string_value = service
+            scope = resource.scope_metrics.add()
+            for name in ('otelc.function.calls', 'otelc.function.duration'):
+                metric = scope.metrics.add(name=name)
+                data = metric.sum if name.endswith('.calls') else metric.histogram
+                data.aggregation_temporality = temporality
+                point = data.data_points.add()
+                point.attributes.add(key='function').value.string_value = self.name if function is None else function
+                if name.endswith('.calls'):
+                    point.as_int = count
+                else:
+                    point.count = count
+                    point.bucket_counts.append(count)
+            response = ExportMetricsServiceResponse() if path == '/v1/metrics' else ExportTraceServiceResponse()
+            if path == '/v1/metrics': response.partial_success.rejected_data_points = rejected
+            else: response.partial_success.rejected_spans = rejected
+            fields = []
+            for role, raw in (('request', request.SerializeToString()), ('upstream', response.SerializeToString())):
+                name = f'{index:04d}-{role}.entity'
+                files[name] = raw
+                fields.append({'file': name, 'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
+            events.append({'index': index, 'path': path, 'request_entity': fields[0],
+                'upstream': {'complete': True, 'status': 200, 'entity': fields[1]}})
+        return {'events': events}, files
+
+    def check(self, wire: tuple[dict, dict[str, bytes]]) -> dict:
+        record, files = wire
+        return receipt.workload_telemetry(record, files.__getitem__, service='otelc-examples',
+                                          function=self.name, calls=80)
+
+    def test_actual_cumulative_workload_units_cannot_be_replaced_by_driver_metrics(self) -> None:
+        result = self.check(self.wire())
+        self.assertEqual(result['collected_calls'], 80)
+        self.assertEqual(result['observations'], {'otelc.function.calls': 2, 'otelc.function.duration': 2})
+        for change in ({'counts': ()}, {'service': 'benchmark-driver'}, {'function': 'wrong'},
+                       {'counts': (0,)}, {'counts': (80, 20, 80)}, {'counts': (81,)},
+                       {'temporality': 1}, {'rejected': 1}, {'path': '/v1/traces', 'rejected': 1},
+                       {'path': '/v1/traces'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.check(self.wire(**change))
+
+    def test_original_entity_names_bytes_and_completed_exchange_are_required(self) -> None:
+        for change in ('index', 'status', 'incomplete', 'name', 'bytes', 'path'):
+            record, files = self.wire()
+            event = record['events'][0]
+            if change == 'index': event['index'] = 1
+            elif change == 'status': event['upstream']['status'] = 503
+            elif change == 'incomplete': event['upstream']['complete'] = False
+            elif change == 'name': event['request_entity']['file'] = '../outside'
+            elif change == 'bytes': files['0000-request.entity'] += b'changed'
+            else: event['path'] = '/unknown'
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.check((record, files))
 
 
 if __name__ == '__main__':
