@@ -35,7 +35,7 @@ class Invocation:
 def exception_type(error: BaseException) -> str:
     """Read the raw type name without str/repr or application attribute hooks."""
     name = type.__dict__['__qualname__'].__get__(type(error))
-    if type(name) is not str:
+    if type(name) is not str or len(name) > 1024:
         return 'BaseException'
     try:
         size = len(name.encode())

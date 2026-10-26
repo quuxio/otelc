@@ -1,6 +1,10 @@
 """Exception labels are bounded UTF-8, without application formatting hooks."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 from otelc.python_runtime import exception_type
@@ -18,6 +22,27 @@ class ExceptionNameTests(unittest.TestCase):
                 error_type.__qualname__ = name
                 error = error_type()
                 self.assertEqual(exception_type(error), expected)
+
+    def test_rejecting_a_large_name_does_not_allocate_its_encoded_copy(self) -> None:
+        script = """import json, sys, tracemalloc
+sys.path.insert(0, sys.argv[1])
+from otelc.python_runtime import exception_type
+class LargeError(Exception):
+    pass
+LargeError.__qualname__ = 'x' * 1_000_000
+error = LargeError()
+tracemalloc.start()
+label = exception_type(error)
+_, peak = tracemalloc.get_traced_memory()
+tracemalloc.stop()
+print(json.dumps({'label': label, 'peak_bytes': peak}))
+"""
+        result = subprocess.run([sys.executable, '-I', '-B', '-c', script,
+                                 str(Path(__file__).resolve().parents[1])],
+                                capture_output=True, text=True, timeout=30, check=True)
+        measured = json.loads(result.stdout)
+        self.assertEqual(measured['label'], 'BaseException')
+        self.assertLess(measured['peak_bytes'], 16 * 1024, measured)
 
 
 if __name__ == '__main__':
