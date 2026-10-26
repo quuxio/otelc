@@ -271,8 +271,6 @@ class RustPublicExecutionTests(RustPreparedCases, unittest.TestCase):
     """Use genuine products; an explicit retained fixture avoids rebuilding locally."""
     @classmethod
     def setUpClass(cls) -> None:
-        cls.capture = Capture()
-        cls.addClassCleanup(cls.capture.close)
         output = os.environ.get('OTELC_RUST_PUBLIC_TEST_OUTPUT')
         if output:
             cls.base = Path(output).resolve()
@@ -281,6 +279,8 @@ class RustPublicExecutionTests(RustPreparedCases, unittest.TestCase):
             temporary = tempfile.TemporaryDirectory(prefix='otelc-public-rust-')
             cls.addClassCleanup(temporary.cleanup)
             cls.base = Path(temporary.name).resolve()
+        cls.capture = Capture(cls.base / 'otlp-http')
+        cls.addClassCleanup(cls.capture.close)
         cls.policy = policy(f'http://127.0.0.1:{cls.capture.server.server_port}')
         selected = os.environ.get('OTELC_RUST_PUBLIC_TEST_BUILD')
         if selected:
@@ -313,10 +313,6 @@ class RustPublicExecutionTests(RustPreparedCases, unittest.TestCase):
         rust_build.verify(cls.built, cls.policy)
         (cls.base / 'source-inputs.json').write_text(json.dumps(cls.source_inputs, indent=2) + '\n')
         (cls.base / 'applications.json').write_text(json.dumps(cls.applications, indent=2) + '\n')
-        for kind in ('traces', 'metrics'):
-            for index, message in enumerate(getattr(cls.capture, kind)):
-                # Capture stores decoded protobufs, not original HTTP bodies.
-                (cls.base / f'decoded-{kind}-{index}.protobuf').write_bytes(message.SerializeToString())
 
     def setUp(self) -> None:
         self.runtime = self.base / self._testMethodName
