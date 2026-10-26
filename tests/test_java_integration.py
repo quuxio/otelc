@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import gzip
+import hashlib
 import json
 import os
 import select
@@ -35,7 +36,15 @@ def wait_for_count(observed: Callable[[], int], expected: int, timeout: float = 
 
 
 class Capture:
-    def __init__(self) -> None:
+    MAX_RETAINED_BYTES = 64 * 1024 * 1024
+    MAX_RETAINED_REQUESTS = 1024
+
+    def __init__(self, record_directory: Path | None = None) -> None:
+        self.record_directory = record_directory
+        self._record_lock = threading.Lock()
+        self._record_count = self._record_bytes = 0
+        if record_directory is not None:
+            record_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.metrics: list[ExportMetricsServiceRequest] = []
         self.traces: list[ExportTraceServiceRequest] = []
         self.metric_response_gate = threading.Event()
@@ -69,6 +78,7 @@ class Capture:
             def do_POST(self) -> None:
                 response_code = 200
                 payload = self.request_payload()
+                owner.retain_request(self.path, self.headers.get("Content-Encoding", ""), payload)
                 if self.headers.get("Content-Encoding") == "gzip":
                     payload = gzip.decompress(payload)
                 if self.path.endswith("/metrics"):
@@ -98,6 +108,29 @@ class Capture:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.worker.start()
+
+    def retain_request(self, path: str, encoding: str, payload: bytes) -> None:
+        """Keep original HTTP entities before content decoding, without headers/tokens."""
+        if self.record_directory is None:
+            return
+        with self._record_lock:
+            if (self._record_count >= self.MAX_RETAINED_REQUESTS
+                    or self._record_bytes + len(payload) > self.MAX_RETAINED_BYTES):
+                raise ValueError('OTLP diagnostic capture budget exhausted')
+            prefix = self.record_directory / f'otlp-{self._record_count:06d}'
+            metadata = {'schema_version': 1, 'sequence': self._record_count,
+                        'received_at_unix_ns': time.time_ns(), 'path': path,
+                        'content_encoding': encoding, 'body_bytes': len(payload),
+                        'body_sha256': hashlib.sha256(payload).hexdigest(),
+                        'scope': 'received HTTP entity before content decoding; not response/SDK receipt'}
+            for suffix, data in (('.http-body', payload),
+                                 ('.json', (json.dumps(metadata, indent=2) + '\n').encode())):
+                target = Path(str(prefix) + suffix)
+                with target.open('xb') as stream:
+                    stream.write(data)
+                target.chmod(0o600)
+            self._record_count += 1
+            self._record_bytes += len(payload)
 
     def close(self) -> None:
         self.metric_response_gate.set()

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <array>
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <functional>
 #include <future>
@@ -102,7 +103,11 @@ struct SpanSink : traces::SpanExporter {
   std::mutex mutex;
   std::vector<std::unique_ptr<traces::SpanData>> spans;
   std::function<void()> callback;
-  std::unique_ptr<traces::Recordable> MakeRecordable() noexcept override { return std::make_unique<traces::SpanData>(); }
+  std::function<void()> create_callback;
+  std::unique_ptr<traces::Recordable> MakeRecordable() noexcept override {
+    if (create_callback) create_callback();
+    return std::make_unique<traces::SpanData>();
+  }
   opentelemetry::sdk::common::ExportResult Export(
       const opentelemetry::nostd::span<std::unique_ptr<traces::Recordable>> &batch) noexcept override {
     if (callback) callback();
@@ -337,6 +342,44 @@ void LimitsInvalidInputsAndExporterReentryAreVisible() {
   Finish(*no_traces, &third, "usr:NoTrace");
   assert(no_traces->Close());
 }
+void ObjectProbesPreserveErrnoIncludingCensoredShutdown() {
+  for (bool collection : {false, true}) for (bool emission : {false, true}) {
+    for (int unwinding : {0, 1}) {
+      World world(collection, emission);
+      auto engine = world.Engine();
+      int first = 0, second = 0, recursive = 0;
+      unsigned created = 0, exported = 0;
+      world.span_sink->create_callback = [&] { ++created; errno = ERANGE; };
+      world.span_sink->callback = [&] {
+        ++exported;
+        errno = EOVERFLOW;
+        assert(!engine->Admit(&recursive, "usr:Item", "Item") && errno == EOVERFLOW);
+        assert(!engine->Destroying(&recursive, "usr:Item") && errno == EOVERFLOW);
+        assert(!engine->Destroyed(42, 0) && errno == EOVERFLOW);
+        assert(!engine->Close() && errno == EOVERFLOW);
+      };
+      errno = EINTR;
+      assert(engine->Admit(&first, "usr:Item", "Item") && errno == EINTR);
+      errno = EDOM;
+      auto token = engine->Destroying(&first, "usr:Item");
+      assert(token && errno == EDOM);
+      errno = ECHILD;
+      assert(engine->Destroyed(token, unwinding) && errno == ECHILD);
+      assert(created == 1 && exported == 1);
+      errno = EBUSY;
+      assert(!engine->Destroyed(token, 0) && errno == EBUSY);
+      assert(!engine->Admit(nullptr, "usr:Item", "Item") && errno == EBUSY);
+      assert(engine->Destroyed(0, 0) && errno == EBUSY);
+      assert(engine->Admit(&second, "usr:Item", "Item") && errno == EBUSY);
+      errno = E2BIG;
+      assert(engine->Close() && errno == E2BIG);
+      assert(created == 2 && exported == 2);
+      auto status = engine->Status();
+      assert(status.closed && status.admitted == 2 && status.completed == 1 && status.censored == 1);
+    }
+  }
+}
+
 void CompilerInsertedObjectBoundariesUseTheSDK() {
 #ifdef OTELC_HAVE_OBJECT_FIXTURES
   World world;
@@ -419,6 +462,7 @@ int main() {
   PendingSDKExportStillOccupiesTheObservationBudget();
   AllLiveStatesAndStartupEnableKeepTracesIndependent();
   LimitsInvalidInputsAndExporterReentryAreVisible();
+  ObjectProbesPreserveErrnoIncludingCensoredShutdown();
   CompilerInsertedObjectBoundariesUseTheSDK();
   std::puts("native SDK object lifetime checks passed");
 }

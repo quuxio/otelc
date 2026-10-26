@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cerrno>
 #include <cmath>
 #include <map>
 #include <stdexcept>
@@ -23,6 +24,13 @@ using Clock = std::chrono::steady_clock;
 constexpr std::uint32_t MaxFunctions = 4096;
 constexpr std::uint32_t MaxActive = 512;
 constexpr std::size_t MaxName = 4096;
+struct SavedErrno {
+  SavedErrno() = default;
+  SavedErrno(const SavedErrno &) = delete;
+  SavedErrno &operator=(const SavedErrno &) = delete;
+  const int value = errno;
+  ~SavedErrno() noexcept { errno = value; }
+};
 // SDK processors/exporters may call selected application code. Refuse those
 // recursive probes visibly instead of recursing into the instrumentation engine.
 thread_local bool inside_runtime = false;
@@ -161,6 +169,7 @@ bool FunctionRuntime::Register(const otelc_function_descriptor_v1 *functions, st
 }
 
 std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
+  const SavedErrno saved;
   if (inside_runtime) {
     ++impl_->lost;
     return 0;
@@ -224,6 +233,7 @@ std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
 }
 
 bool FunctionRuntime::Leave(std::uint64_t token, std::int32_t unwinding) noexcept {
+  const SavedErrno saved;
   if (!token) return true;
   if (inside_runtime) { ++impl_->invalid; return false; }
   ProbeGuard probe;
