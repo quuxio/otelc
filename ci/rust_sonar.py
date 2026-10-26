@@ -12,6 +12,7 @@ RUST_SOURCES = ('native/rust/compiler/src/main.rs', 'native/rust/compiler/src/re
                 'native/rust/compiler/src/hooks.rs', 'native/rust/compiler/src/instrument.rs',
                 'native/rust/compiler/src/lifetimes.rs', 'native/rust/compiler/src/drops.rs',
                 'native/rust/compiler/src/modules.rs',
+                'native/rust/compiler/src/bindings.rs',
                 'native/rust/bridge/src/lib.rs')
 
 
@@ -28,7 +29,8 @@ def source_paths(root: Path) -> list[Path]:
                                       'ci/rust_sonar.py', 'otelc/health.py', 'tests/test_rust_drop_health.py',
                                       'ci/rust_lifetime_cases.py', 'ci/rust_drop_cases.py',
                                       'otelc/rust_lifetimes.py', 'tests/test_rust_lifetimes.py',
-                                      'ci/rust_module_cases.py', 'otelc/rust_modules.py', 'tests/test_rust_modules.py'))]
+                                      'ci/rust_module_cases.py', 'otelc/rust_modules.py', 'tests/test_rust_modules.py',
+                                      'ci/rust_binding_cases.py'))]
 
 
 def clippy_report(raw: bytes) -> None:
