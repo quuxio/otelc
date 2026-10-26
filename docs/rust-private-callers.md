@@ -45,8 +45,12 @@ Successful inspection writes `otelc.rust.module-inventory` schema 1 with
 code generation and must not create the requested image. Byte intervals refer
 to the physical original UTF-8 bytes, including BOM/CRLF offsets; they are not
 character or normalised-source offsets. The tooling reader
-`otelc.rust_modules.read(path, root, entry, sources)` requires the caller-held
-original catalogue and rechecks its bytes. Reading a statement does not prove
+`otelc.rust_modules.read(path, root, entry, sources, crate_name=...)` requires the
+caller-held original catalogue and the expected compiler crate name, and
+rechecks source bytes. `compiler_name` preserves rustc's exact crate-relative
+path: the crate root is empty and top-level module parents are empty strings.
+The separate `crate_name` field must match the caller's expected invocation;
+it is not prepended to original paths. Reading a statement does not prove
 that the compiler ran or establish complete input provenance.
 
 ## Checks and remaining work

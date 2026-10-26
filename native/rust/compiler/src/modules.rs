@@ -2,7 +2,11 @@
 use crate::request;
 use crate::request::{Request, digest};
 use anyhow::{Context, Result, bail};
-use rustc_hir::{ItemKind, def::DefKind, def_id::CRATE_DEF_ID};
+use rustc_hir::{
+    ItemKind,
+    def::DefKind,
+    def_id::{CRATE_DEF_ID, LOCAL_CRATE},
+};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{Span, def_id::LocalDefId};
 use serde::Serialize;
@@ -125,6 +129,7 @@ pub(crate) fn publish(tcx: TyCtxt<'_>) -> Result<()> {
         bail!("duplicate or excessive compiler module identities");
     }
     let value = serde_json::json!({"schema_version":1, "kind":"otelc.rust.module-inventory",
+        "crate_name":tcx.crate_name(LOCAL_CRATE).to_string(),
         "mode":"module-inspect", "byte_coordinates":"original-utf8", "sources":inputs.sources,
         "modules":rows, "source_complete":false});
     let bytes = serde_json::to_vec(&value)?;

@@ -26,11 +26,12 @@ class RustModuleInventoryTests(unittest.TestCase):
                         for path in (self.entry, self.module)}
         self.path = self.base / 'modules.json'
         self.value = {'schema_version': 1, 'kind': 'otelc.rust.module-inventory',
-                      'mode': 'module-inspect', 'byte_coordinates': 'original-utf8', 'sources': self.sources,
+                      'mode': 'module-inspect', 'crate_name': 'app',
+                      'byte_coordinates': 'original-utf8', 'sources': self.sources,
                       'source_complete': False, 'modules': [
-                          self.row('app', None, 'crate', self.entry, self.entry),
-                          self.row('app::inline', 'app', 'inline', self.entry, self.entry),
-                          self.row('app::private', 'app', 'external', self.entry, self.module)]}
+                          self.row('', None, 'crate', self.entry, self.entry),
+                          self.row('inline', '', 'inline', self.entry, self.entry),
+                          self.row('private', '', 'external', self.entry, self.module)]}
 
     @staticmethod
     def location(path: Path) -> dict:
@@ -43,7 +44,7 @@ class RustModuleInventoryTests(unittest.TestCase):
 
     def read(self, value=None):
         self.path.write_text(json.dumps(self.value if value is None else value))
-        return rust_modules.read(self.path, self.root, self.entry, self.sources)
+        return rust_modules.read(self.path, self.root, self.entry, self.sources, crate_name='app')
 
     def test_original_crate_inline_and_external_modules_keep_distinct_physical_locations(self) -> None:
         result = self.read()
@@ -59,8 +60,8 @@ class RustModuleInventoryTests(unittest.TestCase):
             if reason == 'expanded':
                 parent['body']['expanded'] = True
             else:
-                parent['parent'] = 'app::function'
-                parent['compiler_name'] = 'app::function::inline'
+                parent['parent'] = 'function'
+                parent['compiler_name'] = 'function::inline'
             child = copy.deepcopy(parent)
             child['compiler_name'] += '::child'
             child['parent'] = parent['compiler_name']
@@ -75,7 +76,8 @@ class RustModuleInventoryTests(unittest.TestCase):
 
     def test_closed_header_types_version_source_and_completeness_are_required(self) -> None:
         for field, replacement in [('schema_version', True), ('schema_version', 2), ('kind', 'foreign'),
-                                   ('mode', 'inspect'), ('byte_coordinates', 'characters'),
+                                   ('mode', 'inspect'), ('crate_name', 'foreign'),
+                                   ('byte_coordinates', 'characters'),
                                    ('sources', {}), ('source_complete', True),
                                    ('modules', []), ('modules', {}), ('extra', 1)]:
             value = copy.deepcopy(self.value)
@@ -137,14 +139,26 @@ class RustModuleInventoryTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.value))
         for sources in ({}, [], {True: 'a'}, {str(self.entry): True}):
             with self.subTest(sources=sources), self.assertRaises(ValueError):
-                rust_modules.read(self.path, self.root, self.entry, sources)
+                rust_modules.read(self.path, self.root, self.entry, sources, crate_name='app')
         for path in (Path('relative'), self.base):
             sources = self.sources | {str(path): 'a'}
             with self.subTest(path=path), self.assertRaises(ValueError):
-                rust_modules.read(self.path, self.root, self.entry, sources)
+                rust_modules.read(self.path, self.root, self.entry, sources, crate_name='app')
         self.module.write_text(self.module.read_text() + '// changed\n')
         with self.assertRaisesRegex(ValueError, 'bytes changed'):
-            rust_modules.read(self.path, self.root, self.entry, self.sources)
+            rust_modules.read(self.path, self.root, self.entry, self.sources, crate_name='app')
+
+    def test_exact_relative_root_identity_and_caller_held_crate_name_are_separate(self) -> None:
+        result = self.read()
+        self.assertEqual(result['modules'][0]['compiler_name'], '')
+        self.assertEqual(result['modules'][1]['parent'], '')
+        for name in ('foreign', '', None, True):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                rust_modules.read(self.path, self.root, self.entry, self.sources, crate_name=name)
+        value = copy.deepcopy(self.value)
+        value['modules'][0]['compiler_name'] = 'app'
+        with self.assertRaises(ValueError):
+            self.read(value)
 
     def test_module_declaration_and_inline_body_must_fit_the_original_parent_body(self) -> None:
         other = self.root / 'other.rs'

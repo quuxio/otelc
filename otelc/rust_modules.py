@@ -11,7 +11,8 @@ from otelc.python_sdk_io import decode
 LIMIT = 8 * 1024 * 1024
 
 
-def read(path: Path, root: Path, entry: Path, sources: dict[str, str]) -> dict[str, Any]:
+def read(path: Path, root: Path, entry: Path, sources: dict[str, str], *,
+         crate_name: str) -> dict[str, Any]:
     """Check a closed module inventory against caller-held original source bytes.
 
     This reader validates a retained compiler statement. It does not establish
@@ -19,7 +20,8 @@ def read(path: Path, root: Path, entry: Path, sources: dict[str, str]) -> dict[s
     """
     if (root != root.resolve(strict=True) or not root.is_dir()
             or type(sources) is not dict or not 1 <= len(sources) <= 65536
-            or str(entry) not in sources):
+            or str(entry) not in sources or type(crate_name) is not str or not crate_name
+            or len(crate_name.encode()) > 4096 or '\0' in crate_name):
         raise ValueError('Rust module inventory requires bounded original inputs')
     sizes = {}
     for name, expected in sources.items():
@@ -35,10 +37,11 @@ def read(path: Path, root: Path, entry: Path, sources: dict[str, str]) -> dict[s
         sizes[name] = len(raw)
     _, raw = checked_file(path, nofollow=True, include_content=True, max_bytes=LIMIT)
     value = decode(raw)
-    fields = {'schema_version', 'kind', 'mode', 'byte_coordinates', 'sources', 'modules', 'source_complete'}
+    fields = {'schema_version', 'kind', 'mode', 'crate_name', 'byte_coordinates', 'sources', 'modules', 'source_complete'}
     if (type(value) is not dict or set(value) != fields
             or type(value['schema_version']) is not int or value['schema_version'] != 1
             or value['kind'] != 'otelc.rust.module-inventory'
+            or value['crate_name'] != crate_name
             or value['mode'] != 'module-inspect' or value['sources'] != sources
             or value['byte_coordinates'] != 'original-utf8'
             or value['source_complete'] is not False
@@ -49,7 +52,7 @@ def read(path: Path, root: Path, entry: Path, sources: dict[str, str]) -> dict[s
     row_fields = {'compiler_name', 'parent', 'kind', 'declaration', 'body', 'eligible', 'reason'}
     for row in rows:
         if (type(row) is not dict or set(row) != row_fields
-                or type(row['compiler_name']) is not str or not row['compiler_name']
+                or type(row['compiler_name']) is not str
                 or len(row['compiler_name'].encode()) > 4096 or '\0' in row['compiler_name']
                 or type(row['kind']) is not str or row['kind'] not in ('crate', 'inline', 'external')
                 or type(row['eligible']) is not bool
@@ -68,11 +71,11 @@ def read(path: Path, root: Path, entry: Path, sources: dict[str, str]) -> dict[s
         if expanded and row['reason'] != 'expanded':
             raise ValueError('expanded Rust module cannot gain a physical caller route')
         if row['kind'] == 'crate':
-            if (row['parent'] is not None or row['declaration'] != row['body']
+            if (row['compiler_name'] != '' or row['parent'] is not None or row['declaration'] != row['body']
                     or row['body']['file'] != str(entry) or not row['eligible']):
                 raise ValueError('Rust module crate root differs from original entry')
-        elif (type(row['parent']) is not str or not row['parent']
-                or not row['compiler_name'].startswith(row['parent'] + '::')
+        elif (not row['compiler_name'] or type(row['parent']) is not str
+                or row['parent'] != row['compiler_name'].rpartition('::')[0]
                 or (row['kind'] == 'inline') != (row['declaration']['file'] == row['body']['file'])):
             raise ValueError('Rust module declaration/body relationship differs')
         names.append(row['compiler_name'])

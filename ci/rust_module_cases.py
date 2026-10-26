@@ -98,7 +98,7 @@ class RustModuleCases(unittest.TestCase):
     def accepted(self, **arguments) -> dict:
         result, output = self.inspect(**arguments)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        return rust_modules.read(output, self.root, self.entry, self.sources)
+        return rust_modules.read(output, self.root, self.entry, self.sources, crate_name='module_map')
 
     def test_nested_inline_external_path_and_empty_modules_keep_original_locations(self) -> None:
         document = self.accepted()
@@ -113,20 +113,20 @@ class RustModuleCases(unittest.TestCase):
             ('aliased', '', 'alternate/items.rs', 'external'),
         ):
             with self.subTest(name=name):
-                row = rows['module_map::' + name]
-                self.assertEqual(row['parent'], 'module_map' + ('::' + parent if parent else ''))
+                row = rows[name]
+                self.assertEqual(row['parent'], parent)
                 self.assertEqual(row['body']['file'], str(self.root / filename))
                 self.assertEqual(row['kind'], kind)
                 self.assertTrue(row['eligible'])
                 self.assertIsNone(row['reason'])
-        self.assertEqual(rows['module_map']['body']['file'], str(self.entry))
-        leaf = rows['module_map::tree::leaf']['body']
+        self.assertEqual(rows['']['body']['file'], str(self.entry))
+        self.assertEqual(document['crate_name'], 'module_map')
+        leaf = rows['tree::leaf']['body']
         self.assertEqual((leaf['start'], leaf['end']), (0, 0))
 
     def test_macro_and_block_routes_are_visible_but_cannot_gain_private_caller_access(self) -> None:
         rows = {row['compiler_name']: row for row in self.accepted()['modules']}
-        for name, reason in (('module_map::expanded', 'expanded'),
-                             ('module_map::main::block', 'block_module')):
+        for name, reason in (('expanded', 'expanded'), ('main::block', 'block_module')):
             with self.subTest(name=name):
                 self.assertFalse(rows[name]['eligible'])
                 self.assertEqual(rows[name]['reason'], reason)
@@ -150,13 +150,13 @@ class RustModuleCases(unittest.TestCase):
     def test_unicode_crlf_and_bom_use_physical_utf8_byte_coordinates(self) -> None:
         document = self.accepted()
         rows = {row['compiler_name']: row for row in document['modules']}
-        declaration = rows['module_map::café']['declaration']
+        declaration = rows['café']['declaration']
         original = self.entry.read_bytes()
         self.assertTrue(original.startswith(b'\xef\xbb\xbf'))
         self.assertEqual(original[declaration['start']:declaration['end']].decode(),
                          'mod café { fn value() {} }')
         self.assertEqual(declaration['start'], 3)
-        body = rows['module_map']['body']
+        body = rows['']['body']
         self.assertIn(b'\r\n', original[body['start']:body['end']])
         self.assertEqual(document['byte_coordinates'], 'original-utf8')
 
