@@ -258,7 +258,7 @@
       "id": 7,
       "title": "Process CPU time per operation, including SDK flush window",
       "type": "bargauge",
-      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java application samples include the embedded agent/SDK in the JVM. C/C++ application samples include the embedded C++ SDK; their instrumented lane separately reports its supervisor, while plain is a direct stock executable. Node/Python report independent application and SDK roles; Python also reports its supervisor. Missing historical resource samples are not zero cost.",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java, Go and C/C++ application samples include their embedded SDK. Go reports its supervisor in both lanes; C/C++ report one in the instrumented lane, while plain is a direct stock executable. Node/Python report separate application and SDK roles; Python reports its instrumented supervisor. Missing historical resource samples are not zero cost.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -299,7 +299,7 @@
       "id": 8,
       "title": "Process RSS snapshots; not allocation or peak memory",
       "type": "bargauge",
-      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java application samples include the embedded agent/SDK in the JVM. C/C++ application samples include the embedded C++ SDK; their instrumented lane separately reports its supervisor, while plain is a direct stock executable. Node/Python report independent application and SDK roles; Python also reports its supervisor. Missing historical resource samples are not zero cost.",
+      "description": "CPU uses platform ps resolution and includes batch, control and explicit SDK flush. RSS is the maximum of two snapshots per batch. Application body latency is measured separately. Java, Go and C/C++ application samples include their embedded SDK. Go reports its supervisor in both lanes; C/C++ report one in the instrumented lane, while plain is a direct stock executable. Node/Python report separate application and SDK roles; Python reports its instrumented supervisor. Missing historical resource samples are not zero cost.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

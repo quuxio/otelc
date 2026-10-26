@@ -6,6 +6,7 @@ NODE ?= $(if $(CI),node,$(if $(wildcard /opt/homebrew/opt/node@24/bin/node),/opt
 NODE_PATH_PREFIX = $(if $(findstring /,$(NODE)),$(dir $(NODE)):)
 NPM_CACHE ?= $(CURDIR)/build/npm-cache
 BENCHMARK_LANGUAGE ?= java
+GO_BENCHMARK_BUILD ?= build/go-example
 BENCHMARK_CONFIG ?= examples/otelc.toml
 LLVM_OUTPUT ?= build/llvm-plugin
 NATIVE_LAUNCH_OUTPUT ?= build/native-launch-sdk
@@ -96,8 +97,10 @@ native-launch-check:
 
 go-public-check:
 	mkdir -p build
-	PYTHONPATH=tests $(PYTHON) -m coverage run --data-file=build/go-public.coverage --source=otelc.go_build,otelc.go_source,otelc.go_build_tags,otelc.go_prepared_tools,otelc.go_supervisor,otelc.prepared_go,otelc.go_http_bundle,otelc.path_boundaries,ci.check_go_http -m unittest test_go_source test_go_build test_prepared_go test_go_build_tags test_go_prepared_tools test_go_scope_build test_go_scope_tooling test_go_boundaries test_go_http_bundle test_go_http_integration test_go_http2 test_go_baggage test_go_supervisor -v
+	PYTHONPATH=tests $(PYTHON) -m coverage run --data-file=build/go-public.coverage --source=otelc.go_build,otelc.go_benchmark,otelc.benchmark_cleanup,otelc.go_source,otelc.go_build_tags,otelc.go_prepared_tools,otelc.go_supervisor,otelc.prepared_go,otelc.go_http_bundle,otelc.path_boundaries,ci.check_go_http -m unittest test_go_source test_go_build test_go_benchmark test_go_benchmark_failures test_prepared_go test_go_build_tags test_go_prepared_tools test_go_scope_build test_go_scope_tooling test_go_boundaries test_go_http_bundle test_go_http_integration test_go_http2 test_go_baggage test_go_supervisor -v
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_benchmark.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/benchmark_cleanup.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_source.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_build_tags.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/go-public.coverage --include='*/otelc/go_prepared_tools.py' --fail-under=80
@@ -182,6 +185,8 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/ci/build_go_upstream.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/go_scope_patch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_build.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/go_benchmark.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/otelc/benchmark_cleanup.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_source.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_build_tags.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/go_prepared_tools.py' --fail-under=80
@@ -204,8 +209,11 @@ stack-up: stack-check
 stack-down:
 	docker compose down
 
-benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http)
-	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc --config "$(BENCHMARK_CONFIG)" benchmark --language $(BENCHMARK_LANGUAGE) --sdk-build "$(NATIVE_LAUNCH_OUTPUT)" --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
+$(GO_BENCHMARK_BUILD)/build.json:
+	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc --config "$(BENCHMARK_CONFIG)" go-build --scope-safe --root "$(CURDIR)/examples/go" --output "$(abspath $(GO_BENCHMARK_BUILD))" --go "$(GO)"
+
+benchmark: $(if $(filter java,$(BENCHMARK_LANGUAGE)),java-build) $(if $(filter javascript typescript,$(BENCHMARK_LANGUAGE)),node-observer node-http) $(if $(filter go,$(BENCHMARK_LANGUAGE)),$(GO_BENCHMARK_BUILD)/build.json)
+	OTELC_PYTHON="$(PYTHON)" bin/quux-otelc --config "$(BENCHMARK_CONFIG)" benchmark --language $(BENCHMARK_LANGUAGE) --sdk-build "$(NATIVE_LAUNCH_OUTPUT)" $(if $(filter go,$(BENCHMARK_LANGUAGE)),--build "$(abspath $(GO_BENCHMARK_BUILD))") --output build/benchmarks/$(BENCHMARK_LANGUAGE)-$$(date +%Y%m%d-%H%M%S)
 
 sonar-policy:
 	$(PYTHON) ci/verify_sonar_policy.py

@@ -85,3 +85,28 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["language"], "typescript")
             self.assertEqual(run.call_args.kwargs["backend"], "api")
             self.assertEqual(run.call_args.kwargs["comparison_id"], "shared")
+        with patch('otelc.go_benchmark.run', return_value=report) as run:
+            self.invoke(['benchmark', '--language', 'go', '--build', '/tmp/go-build',
+                         '--output', '/tmp/go-comparison', '--comparison-id', 'shared', '--no-publish'])
+            self.assertEqual(str(run.call_args.kwargs['build_directory']), '/tmp/go-build')
+            self.assertEqual(run.call_args.kwargs['comparison_id'], 'shared')
+            self.assertFalse(run.call_args.kwargs['publish'])
+
+    def test_go_benchmark_requires_its_build_and_other_languages_refuse_it(self) -> None:
+        for arguments in (['--language', 'go'], ['--language', 'python', '--build', '/tmp/go-build']):
+            with self.subTest(arguments=arguments), patch('sys.argv', [
+                    'quux-otelc', 'benchmark', '--output', '/tmp/comparison', *arguments]), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                main()
+            self.assertEqual(error.exception.code, 1)
+
+    def test_native_benchmarks_keep_their_sdk_selection_alongside_go(self) -> None:
+        report = {'run_id': 'native', 'median_ns_per_operation': {'plain': 10}}
+        for language in ('c', 'cpp'):
+            with self.subTest(language=language), patch('otelc.native_benchmark.run', return_value=report) as run:
+                self.invoke(['benchmark', '--language', language, '--sdk-build', '/tmp/native-sdk',
+                             '--output', '/tmp/native-comparison', '--comparison-id', 'shared', '--no-publish'])
+                self.assertEqual(run.call_args.kwargs['language'], language)
+                self.assertEqual(str(run.call_args.kwargs['sdk_directory']), '/tmp/native-sdk')
+                self.assertEqual(run.call_args.kwargs['comparison_id'], 'shared')
+                self.assertFalse(run.call_args.kwargs['publish'])
