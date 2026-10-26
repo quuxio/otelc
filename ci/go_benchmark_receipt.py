@@ -9,11 +9,12 @@ import hashlib
 import json
 import math
 import statistics
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest, ExportMetricsServiceResponse
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceResponse
+from opentelemetry.proto.metrics.v1.metrics_pb2 import Metric
 
 from otelc import benchmark, benchmark_process
 from otelc.config import Policy
@@ -56,21 +57,52 @@ def instrumentation(value: dict[str, Any], health: dict[str, Any], configuration
             'collected_calls': 2 * value['config']['benchmark']['samples'] * value['iterations']}
 
 
+def _entities(event: dict[str, Any], index: int, read: Callable[[str], bytes]) -> dict[str, bytes]:
+    """Read only the two fixed entity names and verify their original bytes."""
+    require(event['index'] == index and event['upstream']['complete'] is True
+            and event['upstream']['status'] == 200, 'incomplete Go benchmark telemetry exchange')
+    entities = {}
+    for role, field in (('request', event['request_entity']), ('upstream', event['upstream']['entity'])):
+        expected = f'{index:04d}-{role}.entity'
+        require(field['file'] == expected, 'Go benchmark telemetry entity name differs')
+        raw = read(expected)
+        require(len(raw) == field['size'] and hashlib.sha256(raw).hexdigest() == field['sha256'],
+                'Go benchmark telemetry entity bytes differ')
+        entities[role] = raw
+    return entities
+
+
+def _metrics(request: ExportMetricsServiceRequest, service: str) -> Iterator[Metric]:
+    """Preserve metric order while selecting the caller-held service resource."""
+    for resource in request.resource_metrics:
+        attributes = {row.key: row.value.string_value for row in resource.resource.attributes}
+        if attributes.get('service.name') != service:
+            continue
+        for scope in resource.scope_metrics:
+            yield from scope.metrics
+
+
+def _counts(metric: Metric, function: str, calls: int) -> list[int]:
+    """Check cumulative units and exact function labels before joining counts."""
+    is_counter = metric.name == 'otelc.function.calls'
+    data = metric.sum if is_counter else metric.histogram
+    require(data.aggregation_temporality == 2, 'Go workload metrics must be cumulative')
+    result = []
+    for point in data.data_points:
+        labels = {row.key: row.value.string_value for row in point.attributes}
+        require(labels == {'function': function}, 'unexpected Go workload metric identity')
+        count = point.as_int if is_counter else point.count
+        require(0 <= count <= calls, 'Go workload metric count exceeds collected batches')
+        result.append(count)
+    return result
+
+
 def workload_telemetry(capture: dict[str, Any], read: Callable[[str], bytes], *,
                        service: str, function: str, calls: int) -> dict[str, Any]:
     """Decode actual captured OTLP and require cumulative workload call/duration units."""
     observed: dict[str, list[int]] = {'otelc.function.calls': [], 'otelc.function.duration': []}
     for index, event in enumerate(capture['events']):
-        require(event['index'] == index and event['upstream']['complete'] is True
-                and event['upstream']['status'] == 200, 'incomplete Go benchmark telemetry exchange')
-        entities = {}
-        for role, field in (('request', event['request_entity']), ('upstream', event['upstream']['entity'])):
-            expected = f'{index:04d}-{role}.entity'
-            require(field['file'] == expected, 'Go benchmark telemetry entity name differs')
-            raw = read(expected)
-            require(len(raw) == field['size'] and hashlib.sha256(raw).hexdigest() == field['sha256'],
-                    'Go benchmark telemetry entity bytes differ')
-            entities[role] = raw
+        entities = _entities(event, index, read)
         if event['path'] == '/v1/traces':
             require(ExportTraceServiceResponse.FromString(entities['upstream']).partial_success.rejected_spans == 0,
                     'Collector rejected benchmark spans')
@@ -79,22 +111,9 @@ def workload_telemetry(capture: dict[str, Any], read: Callable[[str], bytes], *,
         require(ExportMetricsServiceResponse.FromString(entities['upstream']).partial_success.rejected_data_points == 0,
                 'Collector rejected benchmark metric points')
         request = ExportMetricsServiceRequest.FromString(entities['request'])
-        for resource in request.resource_metrics:
-            attributes = {row.key: row.value.string_value for row in resource.resource.attributes}
-            if attributes.get('service.name') != service:
-                continue
-            for scope in resource.scope_metrics:
-                for metric in scope.metrics:
-                    if metric.name not in observed:
-                        continue
-                    data = metric.sum if metric.name.endswith('.calls') else metric.histogram
-                    require(data.aggregation_temporality == 2, 'Go workload metrics must be cumulative')
-                    for point in data.data_points:
-                        labels = {row.key: row.value.string_value for row in point.attributes}
-                        require(labels == {'function': function}, 'unexpected Go workload metric identity')
-                        count = point.as_int if metric.name.endswith('.calls') else point.count
-                        require(0 <= count <= calls, 'Go workload metric count exceeds collected batches')
-                        observed[metric.name].append(count)
+        for metric in _metrics(request, service):
+            if metric.name in observed:
+                observed[metric.name].extend(_counts(metric, function, calls))
     require(all(counts and counts[-1] == calls and counts == sorted(counts) for counts in observed.values()),
             'actual Go workload call and duration telemetry is missing or incomplete')
     return {'function': function, 'collected_calls': calls,
