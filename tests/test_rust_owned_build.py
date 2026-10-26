@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from otelc import native_gate, rust_build, rust_owned_build as owned
+from otelc import native_build, native_gate, rust_build, rust_compiler, rust_owned_build as owned
 from otelc.config import Policy
 
 
@@ -32,6 +32,21 @@ class RustOwnedBuildTests(unittest.TestCase):
                          'sdk': {'path': str(self.sdk / 'native-sdk-build.json')}}
         self.compiler = self.base / 'literal-compiler'
         self.compiler.write_bytes(b'not an executable compiler')
+        self.sysroot = self.base / 'rust-sysroot'
+        self.llvm = self.base / 'llvm-installation'
+        self.sdk_sources = self.base / 'sdk-sources'
+        for path in (self.sysroot, self.llvm / 'bin', self.sdk_sources):
+            path.mkdir(parents=True)
+        self.gate_source = self.sdk_sources / 'ExecGate.c'
+        self.gate_source.write_bytes(b'literal original gate source')
+        for patcher in (patch.object(native_gate, 'SOURCE', self.gate_source),
+                patch.object(rust_compiler, 'read', return_value=SimpleNamespace(manifest=lambda: {
+                    'sysroot': str(self.sysroot), 'sources': [{'path': str(self.gate_source)}], 'tools': []})),
+                patch.object(native_build, 'sdk', return_value={
+                    'toolchain': {'directory': str(self.llvm / 'bin')},
+                    'sources': [{'path': str(self.gate_source)}], 'build_tools': []})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.policy = Policy.parse({'schema_version': 3, 'languages': ['rust']})
         # The source verifier is separately tested with genuine compiler/SDK
         # products. These small literal cases test the envelope boundary only.
@@ -201,6 +216,50 @@ class RustOwnedBuildTests(unittest.TestCase):
         (value.directory / 'gate/otelc-exec-gate').write_bytes(b'changed product')
         with self.assertRaisesRegex(ValueError, 'fixed version-one'):
             owned.verify(replace(value, encoded=encoded), self.policy)
+
+    def test_nested_identity_integer_facts_cannot_be_boolean_or_float_substitutes(self) -> None:
+        value = self.build()
+        original = value.manifest()
+        envelope = value.directory / owned.MANIFEST
+        for key in ('source_build', 'gate'):
+            for substitute in (True, 1.0):
+                changed = original | {key: original[key] | {'links': substitute}}
+                envelope.write_text(json.dumps(changed))
+                with self.subTest(key=key, substitute=substitute), self.assertRaises(ValueError):
+                    owned.read(value.directory, self.policy, source=self.source)
+        gate_path = value.directory / 'gate/gate.json'
+        original_gate = value.gate.metadata()
+        for key in ('source', 'executable', 'compiler'):
+            for substitute in (True, 1.0):
+                changed = original_gate | {key: original_gate[key] | {'links': substitute}}
+                raw = json.dumps(changed)
+                gate_path.write_text(raw)
+                encoded = json.dumps(original | {'gate': native_gate.identity(gate_path)})
+                envelope.write_text(encoded)
+                changed_build = replace(value, encoded=encoded, gate=native_gate.Product(raw))
+                with self.subTest(gate_key=key, substitute=substitute), self.assertRaises(ValueError):
+                    owned.verify(changed_build, self.policy)
+
+    def test_original_compiler_and_sdk_input_trees_refuse_before_writes(self) -> None:
+        before = native_gate.identity(self.gate_source)
+        for root in (self.sdk_sources, self.sysroot, self.llvm, rust_compiler.ROOT / 'native/rust',
+                     Path(owned.__file__).resolve().parent):
+            alias = self.base / ('input-alias-' + root.name)
+            alias.symlink_to(root, target_is_directory=True)
+            for parent in (root, alias):
+                output = parent / 'owned-output'
+                with self.subTest(parent=parent), self.assertRaisesRegex(ValueError, 'outside original'):
+                    owned.build(self.policy, self.source, output)
+                self.assertFalse(output.exists())
+        self.gate_builder.assert_not_called()
+        self.assertEqual(native_gate.identity(self.gate_source), before)
+
+    def test_sdk_source_directory_is_not_an_owned_build_output(self) -> None:
+        output = self.sdk_sources / 'owned-output'
+        with self.assertRaisesRegex(ValueError, 'outside original'):
+            owned.outside(output, self.source, self.metadata)
+        self.assertFalse(output.exists())
+        self.gate_builder.assert_not_called()
 
 
 if __name__ == '__main__':
