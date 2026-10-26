@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from otelc import control, native_gate, prepared_rust as prepared, rust_build, rust_owned_build
 from otelc.config import Policy
+from ci import rust_telemetry
 
 APPLICATION = r'''use std::io::{self,BufRead};
 #[used]
@@ -103,6 +104,7 @@ class RustPreparedCases:
             self.assertEqual(marker.read_bytes(), b'ctor\n')
             endpoint = runtime / 'app/control.json'
             for collection, emission in ((False, False), (False, True), (True, False), (True, True)):
+                before_points = len(rust_telemetry.points(self.capture, current.data['resource']['service_name']))
                 if not plain:
                     control.wait_ready(endpoint, app['pid'])
                     control.request(endpoint, 'collection ' + ('on' if collection else 'off'))
@@ -111,12 +113,22 @@ class RustPreparedCases:
                 self.assertEqual(self.line(process), b'22\n')
                 if not plain:
                     control.request(endpoint, 'flush')
+                    if not emission:
+                        self.assertEqual(len(rust_telemetry.points(self.capture,
+                            current.data['resource']['service_name'])), before_points)
+                    if not collection:
+                        self.assertEqual(rust_telemetry.calls(self.capture, current.data['resource']['service_name']), 0)
             result = self.finish_prepared(runtime, process)
             if plain:
                 self.assertIsNone(result['sdk_health'])
                 self.assertFalse((runtime / 'app/plan.json').exists())
+                self.assertEqual(rust_telemetry.spans(self.capture, current.data['resource']['service_name']), [])
+                self.assertEqual(rust_telemetry.points(self.capture, current.data['resource']['service_name']), [])
             else:
                 self.assertEqual(result['sdk_health']['pid'], app['pid'])
+                receipt = rust_telemetry.verify(self.capture, current, result['sdk_health'],
+                    function='app.rs::workload', expected_spans=4, expected_calls=2)
+                prepared.files.write(runtime / 'rust-telemetry-receipt.json', receipt)
         self.assertEqual(native_gate.identity(source.directory / rust_build.MANIFEST), before)
 
     def test_prepared_real_drop_profile_preserves_plain_and_instrumented_outcomes(self) -> None:
@@ -138,6 +150,13 @@ class RustPreparedCases:
                 self.assertEqual(result['sdk_health']['schema_version'], 5)
                 self.assertEqual(result['sdk_health']['drop_accounting']['completed'], '3')
                 self.assertEqual(result['sdk_health']['pid'], app['pid'])
+                receipt = rust_telemetry.verify(self.capture, current, result['sdk_health'],
+                    function='LifetimeApp.rs::workload', expected_spans=1, expected_calls=1,
+                    lifetimes={'Item lifetime': 1, 'Zero lifetime': 2})
+                prepared.files.write(runtime / 'rust-telemetry-receipt.json', receipt)
+            else:
+                self.assertEqual(rust_telemetry.spans(self.capture, current.data['resource']['service_name']), [])
+                self.assertEqual(rust_telemetry.points(self.capture, current.data['resource']['service_name']), [])
 
     def test_prepared_real_cli_runs_original_constructor_and_literal_arguments(self) -> None:
         source = self.prepared_source()
@@ -165,3 +184,6 @@ class RustPreparedCases:
         self.assertEqual(report['failures'], {})
         self.assertTrue(report['released'])
         self.assertEqual(report['sdk_health']['pid'], report['application']['pid'])
+        receipt = rust_telemetry.verify(self.capture, Policy.load(configuration), report['sdk_health'],
+            function='app.rs::workload', expected_spans=1, expected_calls=1)
+        prepared.files.write(self.runtime / 'rust-telemetry-receipt.json', receipt)

@@ -18,6 +18,7 @@ RUST_COMPILER_OUTPUT ?= build/rust-tools
 .NOTPARALLEL: check
 
 help:
+	@printf '%s\n' 'rust-receipt-check Check original HTTP retention and literal Rust receipt/loss controls without compiling applications'
 	@printf '%s\n' 'rust-prepared-check Check Rust prepared records, ownership controls and supervisor failures without compiling applications'
 	@printf '%s\n' 'rust-owned-check Check Rust owned-build records and refusal cases without compiling applications'
 	@printf '%s\n' 'setup       Install locked Python, Node SDK and Markdown tools' 'check       Run lint, adapter tests and native compiler/SDK component coverage gates' 'go-check    Run SDK gate race tests and require 80% Go statements overall and per file' 'node-check  Check Microsoft compiler types and source/SDK/native coverage' 'node-observer Build the public-V8 observer for the selected Node version/ABI' 'node-http   Generate the source-bound official HTTP preservation product' 'python-inputs Build the candidate native CPython entry/import/code input component' 'python-inputs-check Profile native entry/import/code cases and require 80% per-file lines' 'llvm-plugin Build the LLVM 22 function-hook component in a new directory' 'llvm-check  Check real C/C++/IR compilation and 80% native/Python coverage' 'native-check Check native SDK controls/functions/object probes and 80% coverage' 'native-lifetimes-check Check real Clang type/construction bindings and 80% native/Python coverage' 'native-units-check Check explicit native build contexts and 80% component coverage' 'native-resources-check Check real C allocation/free compiler boundaries and 80% native/Python coverage' 'native-public-lifetimes-check Check common-policy C++ lifetime build/launch and 80% Python coverage' 'native-public-resources-check Check common-policy C allocation/free launch, OTLP and 80% coverage' 'native-benchmark-check Check C/C++ stock/four-state timings, accounting and 80% coverage' 'java-build  Build the official Java-agent extension' 'java-context-examples Build ordinary task/HTTP examples and their prepared manifests' 'java-witness-bindings Compile exact offline diagnostic action bindings' 'stack-up    Start the separate rebuild Collector/Grafana stack' 'stack-down  Stop rebuild containers, retain data' 'benchmark   Compare plain and four live states; export results to Grafana' 'sonar-policy Verify the project Previous version policy'
@@ -119,7 +120,14 @@ rust-tools:
 	mkdir -p build
 	$(PYTHON) -m otelc.rust_compiler --output "$(RUST_COMPILER_OUTPUT)"
 
-.PHONY: rust-public-check rust-owned-check rust-prepared-check
+.PHONY: rust-public-check rust-owned-check rust-prepared-check rust-receipt-check
+rust-receipt-check:
+	mkdir -p build
+	PYTHONPATH="$(CURDIR)/tests$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m coverage run --data-file=build/rust-receipt.coverage --source=ci.rust_telemetry,ci.histogram_observation -m unittest test_rust_telemetry test_rust_capture_records test_rust_histogram_observation -v
+	$(PYTHON) -m coverage report --data-file=build/rust-receipt.coverage --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-receipt.coverage --include='*/ci/rust_telemetry.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-receipt.coverage --include='*/ci/histogram_observation.py' --fail-under=80
+
 rust-prepared-check:
 	mkdir -p build
 	PYTHONPATH="$(CURDIR)/tests$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m coverage run --data-file=build/rust-prepared.coverage --source=otelc.prepared_rust,otelc.rust_supervisor -m unittest test_rust_prepared -v
@@ -133,7 +141,9 @@ rust-owned-check:
 
 rust-public-check:
 	mkdir -p build
-	$(PYTHON) -m coverage run --data-file=build/rust-public.coverage --source=otelc.rust_compiler,otelc.rust_build,otelc.rust_owned_build,otelc.rust_launch,otelc.rust_benchmark,otelc.benchmark_cleanup,otelc.prepared_rust,otelc.rust_supervisor -m unittest discover -s tests -p 'test_rust_*.py' -v
+	$(PYTHON) -m coverage run --data-file=build/rust-public.coverage --source=otelc.rust_compiler,otelc.rust_build,otelc.rust_owned_build,otelc.rust_launch,otelc.rust_benchmark,otelc.benchmark_cleanup,otelc.prepared_rust,otelc.rust_supervisor,ci.rust_telemetry,ci.histogram_observation -m unittest discover -s tests -p 'test_rust_*.py' -v
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/ci/rust_telemetry.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/ci/histogram_observation.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_compiler.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_owned_build.py' --fail-under=80
@@ -218,6 +228,8 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/otelc/rust_owned_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/prepared_rust.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/rust_supervisor.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/rust_telemetry.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/histogram_observation.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/rust_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/rust_benchmark.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/benchmark_cleanup.py' --fail-under=80
