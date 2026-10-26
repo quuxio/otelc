@@ -38,6 +38,8 @@ The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official C
 
 The explicit [native build-3 context](docs/native-build-context.md) adds per-unit compiler flags/directories, private VFS inputs, main-symbol rename and an uninstrumented observation driver. It reuses the common policy and owned launch controls. Automatic build discovery and generated-provider qualification remain work.
 
+The [native paired benchmark candidate](docs/native-benchmarks.md) compares equivalent C/C++ applications against direct stock baselines and all four live metric states. It retains actual CPU/RSS, owned shutdown and SDK loss/export checks, using the shared report and Grafana format. C++ lifetime cost can be compared under a separate common policy; C resource lifetimes and independent benchmark qualification remain work.
+
 ## Java example and Grafana
 
 Requirements: Python 3.12+, a full JDK 21+, Maven, Node 24.11+/npm for SDK and Markdown checks, and Docker Compose. Set `JAVA_HOME` for the selected JDK. The new stack uses separate ports and volumes, preserving any older otelc stack.
@@ -59,7 +61,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. Failed runs retain available evidence and report the first error, followed by any cleanup failures. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript, Python, C and C++ runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 
@@ -109,6 +111,8 @@ The separate [private-handle compiler component](docs/java-handle-witness.md) bi
 ```sh
 make check
 ```
+
+CI runs for pull requests against any base branch, including stacked language work. Linux, macOS and Sonar check out the same exact PR head; a manually dispatched branch run remains separate from PR-specific analysis. The protected main checks and component coverage floors still apply before merge.
 
 The full check also requires LLVM 22, CMake, Ninja, Protobuf with its compiler, and libcurl development headers/libraries. CI installs these dependencies. It builds and exercises the native HTTP runtime, rejects skipped launcher tests and enforces the component coverage floors; see [native launch checks](docs/native-launch.md#focused-checks).
 

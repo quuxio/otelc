@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from otelc import benchmark, benchmark_process, control, node, node_provenance
+from otelc import benchmark, benchmark_cleanup, benchmark_process, control, node, node_provenance
 from otelc.config import Policy
 
 
@@ -40,6 +40,7 @@ def measure_process(policy: Policy, output: Path, runtime: Path, invocation: lis
     sdk_pid = None
     with (output / (lane + '.stderr')).open('w') as errors:
         process = subprocess.Popen(invocation, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
+        failure = None
         try:
             if endpoint is not None:
                 ready = control.wait_ready(endpoint, process.pid)
@@ -55,24 +56,37 @@ def measure_process(policy: Policy, output: Path, runtime: Path, invocation: lis
             benchmark_process.measure_batches(process, policy, output, endpoint, sdk_pid, expected, records)
             if endpoint is not None:
                 benchmark_process.finalize_metrics(process, endpoint, sdk_pid, output)
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            finish_process(process, policy, runtime, manifest, sdk_pid)
+            cleanup = benchmark_cleanup.Cleanup(failure)
+            cleanup.run(lambda: finish_process(process, policy, runtime, manifest, sdk_pid), 'Node benchmark cleanup')
+            cleanup.finish()
     return process.pid, sdk_pid
 
 
 def finish_process(process: subprocess.Popen[str], policy: Policy, runtime: Path,
                    manifest: dict[str, Any], sdk_pid: int | None) -> None:
     """Drain and retain verification even when an earlier sample fails."""
-    try:
-        try:
-            benchmark.stop(process)
-        finally:
-            if sdk_pid is not None:
-                final = node.wait_report(runtime, timeout=policy.data['export']['shutdown_timeout_ms'] / 1000 + 2.)
-                validate_drain(final, process.pid, sdk_pid)
-    finally:
-        if not node_provenance.finish(runtime, manifest):
-            raise ValueError('Node benchmark launch input verification failed')
+    cleanup = benchmark_cleanup.Cleanup()
+    cleanup.run(lambda: benchmark.stop(process), 'Node benchmark stop')
+    if sdk_pid is not None:
+        cleanup.run(lambda: finish_sdk(process, policy, runtime, sdk_pid), 'Node benchmark SDK drain')
+    cleanup.run(lambda: finish_inputs(runtime, manifest), 'Node benchmark input verification')
+    cleanup.finish()
+
+
+def finish_sdk(process: subprocess.Popen[str], policy: Policy, runtime: Path, sdk_pid: int) -> None:
+    """Read the independent final SDK report even when application stop failed."""
+    final = node.wait_report(runtime, timeout=policy.data['export']['shutdown_timeout_ms'] / 1000 + 2.)
+    validate_drain(final, process.pid, sdk_pid)
+
+
+def finish_inputs(runtime: Path, manifest: dict[str, Any]) -> None:
+    """Retain input verification without replacing an earlier drain failure."""
+    if not node_provenance.finish(runtime, manifest):
+        raise ValueError('Node benchmark launch input verification failed')
 
 
 def run(policy: Policy, output: Path, *, language: str, backend: str = 'native',
