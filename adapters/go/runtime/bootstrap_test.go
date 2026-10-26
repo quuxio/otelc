@@ -68,11 +68,24 @@ func TestPeriodicRuntimeKeepsTracingIndependentFromBothMetricGates(t *testing.T)
 		t.Fatal("periodic tracing was gated by metrics")
 	}
 	command(t, r, "on")
-	invoke(r)
+	// A periodic export can contain the live gauges before the selected call.
+	// Exercise that order explicitly; request arrival alone is not call receipt.
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		metrics, _, _ := sink.snapshot()
 		if metrics > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if metrics, _, calls := sink.snapshot(); metrics == 0 || calls != 0 {
+		t.Fatal("missing gauge-only periodic export before the selected call")
+	}
+	invoke(r)
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		metrics, _, calls := sink.snapshot()
+		if metrics > 0 && calls == 1 {
 			break
 		}
 		time.Sleep(time.Millisecond)
