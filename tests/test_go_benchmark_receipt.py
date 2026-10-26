@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
+from pathlib import Path
 import statistics
 import unittest
 
@@ -170,6 +172,9 @@ class WorkloadInstrumentationTests(unittest.TestCase):
             'policy_sha256': 'b' * 64, 'selection_sha256': 'a' * 64,
             'probe_accounting': {'closed': True, 'function_started': '171', 'function_ended': '171',
                 'function_active': '0', 'function_lost': '0', 'unwind_unknown': '0'}}
+        policy_bytes = json.dumps(self.value['config'], sort_keys=True).encode()
+        self.value['config_sha256'] = hashlib.sha256(policy_bytes + b'\n').hexdigest()
+        self.configuration['policy_sha256'] = self.health['policy_sha256'] = hashlib.sha256(policy_bytes).hexdigest()
 
     def test_woven_selection_and_actual_closed_invocations_are_required(self) -> None:
         result = receipt.instrumentation(self.value, self.health, self.configuration, self.built)
@@ -187,6 +192,23 @@ class WorkloadInstrumentationTests(unittest.TestCase):
             health['probe_accounting'][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 receipt.instrumentation(self.value, health, self.configuration, self.built)
+
+    def test_original_runtime_and_report_policy_encodings_have_distinct_identities(self) -> None:
+        witness = json.loads((Path(__file__).parent / 'fixtures/go-benchmark-policy-identities.json').read_bytes())
+        self.assertNotEqual(witness['runtime_policy_sha256'], witness['report_config_sha256'])
+        value = self.value | {'config': witness['policy'], 'iterations': 10000,
+                             'config_sha256': witness['report_config_sha256']}
+        configuration = self.configuration | {'policy_sha256': witness['runtime_policy_sha256']}
+        health = copy.deepcopy(self.health)
+        health['policy_sha256'] = witness['runtime_policy_sha256']
+        health['probe_accounting'].update(function_started='650001', function_ended='650001')
+        self.assertEqual(receipt.instrumentation(value, health, configuration, self.built)['invocations'], 650001)
+        with self.assertRaises(ValueError):
+            receipt.instrumentation(value | {'config_sha256': witness['runtime_policy_sha256']},
+                                    health, configuration, self.built)
+        with self.assertRaises(ValueError):
+            receipt.instrumentation(value, health | {'policy_sha256': witness['report_config_sha256']},
+                                    configuration | {'policy_sha256': witness['report_config_sha256']}, self.built)
 
     def wire(self, counts=(20, 80), *, service='otelc-examples', function=None,
              rejected=0, temporality=2, path='/v1/metrics') -> tuple[dict, dict[str, bytes]]:

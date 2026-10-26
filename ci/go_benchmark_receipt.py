@@ -35,9 +35,13 @@ def instrumentation(value: dict[str, Any], health: dict[str, Any], configuration
                     built: dict[str, Any]) -> dict[str, Any]:
     """Join actual woven invocation accounting, not just benchmark driver metrics."""
     name = workload_selection(built)
+    # Existing producer formats differ only in the report's trailing newline.
+    # Derive both identities from the held policy; never substitute one hash.
+    policy_bytes = json.dumps(value['config'], sort_keys=True, allow_nan=False).encode()
     require(configuration['functions'] == [name]
             and configuration['selection_sha256'] == built['receipt']['selection']['sha256']
-            and configuration['policy_sha256'] == health['policy_sha256'] == value['config_sha256']
+            and configuration['policy_sha256'] == health['policy_sha256'] == hashlib.sha256(policy_bytes).hexdigest()
+            and value['config_sha256'] == hashlib.sha256(policy_bytes + b'\n').hexdigest()
             and health['selection_sha256'] == configuration['selection_sha256']
             and health['pid'] == value['pids']['instrumented']
             and health['phase'] == 'final' and health['sdk_attached'] is True,

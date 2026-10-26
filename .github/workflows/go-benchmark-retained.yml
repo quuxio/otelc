@@ -6,6 +6,7 @@ on:
       - 'ci/go_benchmark_downstream.py'
       - 'ci/qualify_go_benchmark.py'
       - 'tests/test_go_benchmark_receipt.py'
+      - 'tests/fixtures/go-benchmark-policy-identities.json'
       - 'tests/test_go_benchmark_downstream.py'
       - 'tests/test_qualify_go_benchmark.py'
       - '.github/workflows/go-benchmark-retained.yml'
