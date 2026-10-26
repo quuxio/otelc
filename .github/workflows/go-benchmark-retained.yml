@@ -1,0 +1,108 @@
+name: Go retained benchmark
+on:
+  pull_request:
+    paths:
+      - 'ci/go_benchmark_receipt.py'
+      - 'ci/go_benchmark_downstream.py'
+      - 'ci/qualify_go_benchmark.py'
+      - 'tests/test_go_benchmark_receipt.py'
+      - 'tests/test_go_benchmark_downstream.py'
+      - 'tests/test_qualify_go_benchmark.py'
+      - '.github/workflows/go-benchmark-retained.yml'
+  workflow_dispatch:
+    inputs:
+      capture_revision:
+        description: Independently reviewed quuxio/oteleq capture-forward commit (40 lower-case hex characters)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: go-retained-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  components:
+    name: Retained benchmark components (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Check bounded records, failed runs and per-component coverage
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+          make go-benchmark-evidence-check PYTHON=.venv/bin/python
+  qualification:
+    name: Actual retained Go benchmark and stack
+    if: github.event_name == 'workflow_dispatch'
+    needs: components
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      OTELEQ_CAPTURE_REVISION: ${{ inputs.capture_revision }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Require an immutable capture revision
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          assert re.fullmatch('[a-f0-9]{40}', os.environ['OTELEQ_CAPTURE_REVISION']), 'reviewed exact capture commit required'
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: quuxio/oteleq
+          ref: ${{ inputs.capture_revision }}
+          path: tools/oteleq-capture
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: adapters/go/go.sum
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install locked Python inputs and start the pinned stack
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+          docker compose config --quiet
+          docker compose up -d
+      - name: Retain actual stock, four-state, wire and downstream evidence
+        run: |
+          .venv/bin/python -B -m ci.qualify_go_benchmark \
+            --oteleq-root "$PWD/tools/oteleq-capture" \
+            --oteleq-sha "$OTELEQ_CAPTURE_REVISION" \
+            --comparison-id "go-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --output "$PWD/build/go-retained"
+      - name: Retain stack versions and terminal diagnostics
+        if: always()
+        run: |
+          mkdir -p build/go-retained/evidence
+          docker compose ps --all --format json > build/go-retained/evidence/compose-containers.json
+          docker compose images --format json > build/go-retained/evidence/compose-images.json
+          docker compose logs --no-color --tail=2000 > build/go-retained/evidence/compose-terminal.log
+      - name: Retain only the declared comparison evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: go-retained-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/go-retained/evidence/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Stop this runner's stack
+        if: always()
+        run: docker compose down

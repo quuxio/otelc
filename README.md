@@ -55,7 +55,7 @@ Use `bin/quux-otelc` from the checkout after `make setup`. It starts the tooling
 
 Enter `10` to run ten operations, `gc` to request collection from the test application, or `quit` to exit. The ten-operation checksum is `41284864`. The [ordinary application](examples/java/BenchmarkApp.java) has no telemetry dependency. otelc generates official-agent configuration and loads its own small extension; it does not modify application source or classes on disk.
 
-Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/otelc-comparison) or [function metrics and object lifetimes](http://localhost:3001/d/otelc-lifetimes):
+Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/otelc-comparison) or [function metrics and object lifetimes](http://localhost:3001/d/otelc-lifetimes). The separate [retained Go qualification runner](docs/go-retained-benchmark.md) also preserves raw capture and checks actual Prometheus/Grafana data:
 
 ```sh
 make benchmark
