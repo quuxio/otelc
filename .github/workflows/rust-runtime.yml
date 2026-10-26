@@ -87,6 +87,13 @@ jobs:
             build/rust-runtime/tools-case/tools/*.json
             build/rust-runtime/tools-case/tools/*.stderr
             build/rust-runtime/public-case/*.json
+            build/rust-runtime/public-case/caller-compilation/original/*.rs
+            build/rust-runtime/public-case/caller-compilation/drivers/*.rs
+            build/rust-runtime/public-case/caller-compiled/*.json
+            build/rust-runtime/public-case/caller-compiled/*.stderr
+            build/rust-runtime/public-case/caller-owned/*.json
+            build/rust-runtime/public-case/caller-owned/gate/*.json
+            build/rust-runtime/public-case/caller-owned/gate/otelc-exec-gate
             build/rust-runtime/public-case/prepared-original/*.rs
             build/rust-runtime/public-case/prepared-compiled/*.json
             build/rust-runtime/public-case/prepared-compiled/*.stderr

@@ -31,6 +31,55 @@ fn main(){println!("ready {} {}",std::process::id(),std::env::args().nth(1).unwr
 class RustPreparedCases:
     """An ordinary original Rust fixture contains a constructor and literal argv."""
 
+    def test_prepared_real_generated_caller_keeps_original_module_and_excludes_helpers(self) -> None:
+        root = self.base / 'caller-compilation'
+        original, driver = root / 'original/application.rs', root / 'drivers/main.rs'
+        original.parent.mkdir(parents=True)
+        driver.parent.mkdir()
+        original.write_text('fn implementation(x:i32)->i32{x*3+1}\n'
+                            'pub fn workload(x:i32)->i32{implementation(x)}\n')
+        driver.write_text('use std::io::{self,BufRead};\n'
+            '#[path="../original/application.rs"] mod original;\n'
+            'fn main(){println!("ready {} {}",std::process::id(),std::env::args().nth(1).unwrap());\n'
+            'for line in io::stdin().lock().lines(){let x:i32=line.unwrap().parse().unwrap();\n'
+            'println!("{}",original::workload(x));}}\n')
+        before = [native_gate.identity(path) for path in (original, driver)]
+        prepared.files.write(self.base / 'caller-inputs.json', {
+            'original': before[0], 'generated': before[1],
+            'scope': 'Declared separate physical files before compilation; not general source closure'})
+        data = copy.deepcopy(self.policy.data)
+        data['resource']['service_name'] = 'otelc-rust-prepared-generated-caller'
+        data['sources']['include'] = ['original/**']
+        current = Policy.parse(data)
+        tools = self.built.manifest()
+        source = rust_build.build(current, root, driver.relative_to(root), self.base / 'caller-compiled',
+            tools_directory=Path(tools['tools']['path']).parent,
+            sdk_directory=Path(tools['sdk']['path']).parent)
+        manifest = source.manifest()
+        function = 'original/application.rs::original::workload'
+        self.assertEqual(manifest['selected'], [function])
+        self.assertEqual(manifest['inputs'], sorted(before, key=lambda row: row['path']))
+        self.assertEqual([native_gate.identity(path) for path in (original, driver)], before)
+        owned = rust_owned_build.build(current, source, self.base / 'caller-owned')
+        self.runtime.mkdir(mode=0o700)
+        for plain in (True, False):
+            runtime = self.runtime / str(plain)
+            process, app = self.prepared_child(owned, current, runtime, plain=plain,
+                                               marker=self.runtime / (str(plain) + '.ctor'))
+            self.assertEqual(self.line(process), f'ready {app["pid"]} literal $value; *\n'.encode())
+            process.stdin.write(b'7\n'); process.stdin.flush()
+            self.assertEqual(self.line(process), b'22\n')
+            result = self.finish_prepared(runtime, process)
+            if plain:
+                self.assertIsNone(result['sdk_health'])
+                self.assertEqual(rust_telemetry.spans(self.capture, current.data['resource']['service_name']), [])
+                self.assertEqual(rust_telemetry.points(self.capture, current.data['resource']['service_name']), [])
+            else:
+                receipt = rust_telemetry.verify(self.capture, current, result['sdk_health'],
+                    function=function, expected_spans=1, expected_calls=1)
+                prepared.files.write(runtime / 'rust-telemetry-receipt.json', receipt)
+        self.assertEqual([native_gate.identity(path) for path in (original, driver)], before)
+
     def prepared_source(self) -> rust_build.Build:
         cls = type(self)
         if not hasattr(cls, '_prepared_source'):
