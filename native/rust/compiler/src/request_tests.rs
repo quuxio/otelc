@@ -104,6 +104,20 @@ fn module_discovery_never_enables_weaving_or_selected_function_calls() {
 }
 
 #[test]
+fn original_body_binding_is_read_only_and_has_no_selected_callers() {
+    let fixture = Fixture::new();
+    let mut value = fixture.value.clone();
+    value["mode"] = json!("binding-inspect");
+    assert!(!fixture.load(&value).unwrap().weaving());
+    value["selected"] = json!(["app.rs::main"]);
+    fixture.rejects(&value);
+    value["selected"] = json!([]);
+    value["schema_version"] = json!(2);
+    fixture.rejects(&value);
+    assert!(!PathBuf::from(fixture.value["output"].as_str().unwrap()).exists());
+}
+
+#[test]
 fn lifetime_weaving_requires_a_separate_closed_nonempty_local_binding_profile() {
     let fixture = Fixture::new();
     let mut value = fixture.value.clone();

@@ -50,7 +50,7 @@ impl Request {
         if self.schema_version == 1 {
             return matches!(
                 self.mode.as_str(),
-                "inspect" | "weave" | "lifetime-inspect" | "module-inspect"
+                "inspect" | "weave" | "lifetime-inspect" | "module-inspect" | "binding-inspect"
             ) && self.lifetimes.is_none()
                 && self.lifetime_bodies.is_none();
         }

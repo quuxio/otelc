@@ -25,6 +25,7 @@ help:
 
 	@printf '%s\n' 'rust-tools Build the pinned original-source Rust compiler and private bridge' 'rust-public-check Check public Rust builds, stock/four-state benchmarks and 80% Python component coverage' 'rust-compiler-check Check pinned internal Rust compiler/SDK fixtures and 80% component coverage'
 	@printf '%s\n' 'rust-module-check Inspect original Rust module routes using explicit compiler products; no SDK or application launch'
+	@printf '%s\n' 'rust-binding-check Fingerprint original typed Rust bodies using explicit compiler products; no SDK or application launch'
 	@printf '%s\n' 'rust-lifetime-check Check lifetime discovery with explicit matching compiler products; no SDK build'
 
 setup:
@@ -170,6 +171,12 @@ rust-compiler-check:
 
 .PHONY: rust-lifetime-check
 .PHONY: rust-module-check
+.PHONY: rust-binding-check
+rust-binding-check:
+	mkdir -p build
+	PYTHONPATH=.:tests $(PYTHON) -m coverage run --data-file=build/rust-binding.coverage --source=ci.rust_binding_cases -m ci.rust_binding_cases
+	$(PYTHON) -m coverage report --data-file=build/rust-binding.coverage --include='*/ci/rust_binding_cases.py' --fail-under=80
+
 rust-module-check:
 	mkdir -p build
 	PYTHONPATH=.:tests $(PYTHON) -m coverage run --data-file=build/rust-module.coverage --source=ci.rust_module_cases,otelc.rust_modules -m ci.rust_module_cases

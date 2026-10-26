@@ -4,6 +4,7 @@ extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
+extern crate rustc_hashes;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_interface;
@@ -11,6 +12,7 @@ extern crate rustc_middle;
 extern crate rustc_parse;
 extern crate rustc_span;
 
+mod bindings;
 mod drops;
 mod hooks;
 mod instrument;
@@ -139,6 +141,11 @@ fn instrument<'tcx>(tcx: TyCtxt<'tcx>, id: LocalDefId) -> &'tcx Body<'tcx> {
 struct Probe;
 impl Callbacks for Probe {
     fn config(&mut self, config: &mut Config) {
+        if request().mode == "binding-inspect" {
+            config.override_queries = Some(|_, providers| {
+                bindings::install(&mut providers.queries);
+            });
+        }
         if request().mode == "lifetime-inspect" {
             config.override_queries = Some(|_, providers| {
                 lifetimes::install(&mut providers.queries);
@@ -207,6 +214,9 @@ impl Callbacks for Probe {
     }
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         let result = (|| -> Result<()> {
+            if request().mode == "binding-inspect" {
+                return bindings::publish(tcx);
+            }
             if request().mode == "module-inspect" {
                 return modules::publish(tcx);
             }
