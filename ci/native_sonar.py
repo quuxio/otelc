@@ -160,7 +160,7 @@ def generate(root: Path = ROOT) -> None:
     checked_artifact(gate['lcov'], Path(gate['lcov']['path']))
     native_records.update(lcov_records(Path(gate['lcov']['path']).read_text(), {root / PRODUCTION[4]}))
     document = ET.Element('coverage', version='1')
-    databases = []
+    databases: dict[Path, set[Path]] = {}
     for relative, record in zip(PRODUCTION, (llvm, native, native, launch, gate, lifetimes, native, objects,
                                             resources, resource_pass), strict=True):
         source = root / relative
@@ -168,8 +168,11 @@ def generate(root: Path = ROOT) -> None:
         database = Path(record['compilation_database']['path'])
         checked_artifact(record['lcov'], lcov, full_identity=relative == PRODUCTION[8])
         checked_artifact(record['compilation_database'], database, full_identity=relative == PRODUCTION[8])
-        if database not in databases:
-            databases.append(database)
+        # A linked plugin also compiles shared units. Import each source from
+        # the same component that produced its coverage, never a sibling build.
+        databases.setdefault(database, set()).add(source)
+        if relative in CONTROL_PRODUCTION:
+            databases[database].update(root / path for path in TESTS)
         file = ET.SubElement(document, 'file', path=relative)
         single = relative in (PRODUCTION[0], PRODUCTION[5], PRODUCTION[7], PRODUCTION[8], PRODUCTION[9])
         summary = record['line_coverage'] if single else record['line_coverage'][str(source)]
@@ -178,7 +181,9 @@ def generate(root: Path = ROOT) -> None:
             ET.SubElement(file, 'lineToCover', lineNumber=str(number), covered=str(covered).lower())
     ET.ElementTree(document).write(output / 'native-sonar-coverage.xml', encoding='utf-8', xml_declaration=True)
     if os.environ.get('OTELC_CPP_ANALYSIS') == '1':
-        entries = compilation_database(databases, {root / path for path in (*PRODUCTION, *TESTS)})
+        entries = [entry for database, sources in databases.items()
+                   for entry in compilation_database([database], sources)]
+        entries.sort(key=lambda row: str(Path(row['directory']) / row['file']))
         (output / 'native-compile-commands.json').write_text(json.dumps(entries, indent=2) + '\n')
 
 
