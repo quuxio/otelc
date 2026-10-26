@@ -50,18 +50,7 @@ func TestTelemetrySnapshotsOverrideClearAndDoNotRetainApplicationContext(t *test
 	if baggage.FromContext(bridge.ContextWithImplicitTelemetry(background)).Len() != 0 {
 		t.Fatal("invented baggage before capture")
 	}
-	type key struct{}
-	application, cancel := context.WithDeadline(context.WithValue(background, key{}, "application"), time.Now().Add(time.Hour))
-	application = withBaggage(application, "tenant=parent,task=one")
-	otelcCaptureTelemetry(parent, application)
-	cancel()
-	snapshot := tc.sw.telemetry
-	if snapshot.Err() != nil || snapshot.Done() != nil || snapshot.Value(key{}) != nil {
-		t.Fatal("retained application cancellation or values")
-	}
-	if _, ok := snapshot.Deadline(); ok {
-		t.Fatal("retained an application deadline")
-	}
+	assertApplicationSnapshot(t, tc, parent, background)
 	value := bridge.ContextWithImplicitTelemetry(background)
 	if !api.SpanContextFromContext(value).Equal(parent.SpanContext()) || baggage.FromContext(value).Member("tenant").Value() != "parent" {
 		t.Fatal("lost the matching telemetry snapshot")
@@ -93,5 +82,21 @@ func TestTelemetrySnapshotsOverrideClearAndDoNotRetainApplicationContext(t *test
 	previous.ended.Store(true)
 	if bridge.ContextWithImplicitTelemetry(background) != background {
 		t.Fatal("ended parent leaked telemetry")
+	}
+}
+
+func assertApplicationSnapshot(t *testing.T, tc *traceContext, parent api.Span, background context.Context) {
+	t.Helper()
+	type key struct{}
+	application, cancel := context.WithDeadline(context.WithValue(background, key{}, "application"), time.Now().Add(time.Hour))
+	application = withBaggage(application, "tenant=parent,task=one")
+	otelcCaptureTelemetry(parent, application)
+	cancel()
+	snapshot := tc.sw.telemetry
+	if snapshot.Err() != nil || snapshot.Done() != nil || snapshot.Value(key{}) != nil {
+		t.Fatal("retained application cancellation or values")
+	}
+	if _, ok := snapshot.Deadline(); ok {
+		t.Fatal("retained an application deadline")
 	}
 }
