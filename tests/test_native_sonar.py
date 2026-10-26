@@ -166,6 +166,45 @@ class NativeSonarTests(unittest.TestCase):
             self.assertIn('ctime_ns', row)
         sonar.generate(self.root)
 
+    def test_analysis_uses_each_coverage_producers_own_compilation_context(self) -> None:
+        database = Path(self.resource_pass['compilation_database']['path'])
+        own = self.entry(self.root / sonar.PRODUCTION[9])
+        shared = self.entry(self.root / sonar.PRODUCTION[0])
+        shared['arguments'].append('-DOTELC_RESOURCE_WITH_FUNCTIONS_V1=1')
+        original = json.dumps([shared, own]).encode()
+        database.write_bytes(original)
+        self.resource_pass['compilation_database'] = llvm_backend.identity(database)
+        self.write_records()
+        with patch.dict(os.environ, {'OTELC_CPP_ANALYSIS': '1'}), \
+                patch('subprocess.run', side_effect=AssertionError('must not execute metadata')):
+            sonar.generate(self.root)
+        entries = json.loads((self.output / 'native-compile-commands.json').read_bytes())
+        self.assertEqual(len(entries), len(self.sources))
+        self.assertEqual({Path(row['file']) for row in entries}, self.sources)
+        by_source = {Path(row['file']): row for row in entries}
+        self.assertEqual(by_source[self.root / sonar.PRODUCTION[0]],
+                         self.entry(self.root / sonar.PRODUCTION[0]))
+        self.assertEqual(by_source[self.root / sonar.PRODUCTION[9]], own)
+        self.assertEqual(database.read_bytes(), original)
+        # A different component cannot supply a missing owning compilation unit.
+        primary = Path(self.llvm['compilation_database']['path'])
+        primary.write_text('[]')
+        self.llvm['compilation_database'] = llvm_backend.identity(primary)
+        self.write_records()
+        with patch.dict(os.environ, {'OTELC_CPP_ANALYSIS': '1'}), \
+                self.assertRaisesRegex(ValueError, 'cover every exact translation unit'):
+            sonar.generate(self.root)
+
+    def test_analysis_still_refuses_duplicate_units_in_the_owning_component(self) -> None:
+        database = Path(self.resource_pass['compilation_database']['path'])
+        own = self.entry(self.root / sonar.PRODUCTION[9])
+        database.write_text(json.dumps([own, own]))
+        self.resource_pass['compilation_database'] = llvm_backend.identity(database)
+        self.write_records()
+        with patch.dict(os.environ, {'OTELC_CPP_ANALYSIS': '1'}), \
+                self.assertRaisesRegex(ValueError, 'unit is duplicated'):
+            sonar.generate(self.root)
+
     def test_resource_file_facts_cannot_be_changed_or_downgraded_to_hash_only(self) -> None:
         original = copy.deepcopy(self.resources)
         for group in ('source', 'lcov', 'compilation_database'):
