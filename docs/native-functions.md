@@ -34,6 +34,8 @@ Attachments are bounded separately from function calls: `FunctionLimits.contexts
 
 `ContextStatus` separately reports admitted, released, active, lost and invalid attachments. Invalid contexts and ambient-mode attachment attempts are refused. Capacity and closing-admission failures remain visible as losses. `Close()` stops new calls and attachments, and cannot report the engine closed while either an admitted function or attachment is active. Existing attachments can still detach after closing begins. The tooling owner must retain the engine until all those scopes have left.
 
+Detachment restores the previous parent under the bookkeeping lock, then releases the old trace-state reference outside it. Active accounting includes that cleanup until its deleter returns. A deleter can query current context and status without deadlocking; recursive instrumentation admission is refused and `Close()` remains incomplete during cleanup. The actual SDK regression gives the final trace-state owner a re-entrant deleter, and checks both observer access and guarded mutation.
+
 This is a runtime component. Public C/C++ launches still reject `context.tasks` and `context.http`; automatic pthread/standard-library thread hooks, scheduling queues, service transports, public health negotiation and downstream qualification are not connected yet. Developers are not expected to call these methods or edit application code. These component tests use local real-SDK exporters, not Collector or OTLP receipt. No automatic propagation or performance claim follows from this API alone.
 
 ## Checks

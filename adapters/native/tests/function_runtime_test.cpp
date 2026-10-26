@@ -412,6 +412,36 @@ void OwnedContextRefusalsAndSDKReentryKeepErrnoAndTheValidLease() {
   assert(status.admitted == 1 && status.released == 1 && status.invalid == 5 && !status.lost);
 }
 
+void OwnedContextFinalTraceStateReleaseRunsWithoutTheRuntimeLock() {
+  World world;
+  auto engine = world.Engine({4096, 512, native::FunctionContext::owned}); Register(*engine);
+  std::uint64_t lease = 0;
+  unsigned destroyed = 0;
+  auto original = RemoteContext();
+  {
+    std::shared_ptr<trace::TraceState> observed(trace::TraceState::GetDefault().get(), [&](trace::TraceState *) {
+      std::fputs("native owned context: final-reference deleter entered\n", stderr);
+      ++destroyed;
+      auto status = engine->ContextStatus();
+      assert(status.active == 1 && status.released == 0 && !status.closed);
+      assert(!engine->CurrentContext().IsValid());
+      errno = ERANGE;
+      assert(!engine->AttachContext(original) && !engine->DetachContext(lease));
+      assert(!engine->Enter(&inner_address) && errno == ERANGE);
+      assert(!engine->Close());
+    });
+    auto parent = trace::SpanContext(original.trace_id(), original.span_id(), original.trace_flags(),
+                                     true, observed);
+    lease = engine->AttachContext(parent);
+    assert(lease && !destroyed);
+  }
+  errno = EDOM;
+  assert(engine->DetachContext(lease) && destroyed == 1 && errno == EDOM);
+  auto status = engine->ContextStatus();
+  assert(status.admitted == 1 && status.released == 1 && !status.active && status.invalid == 2);
+  assert(!status.lost && engine->Status().lost == 1 && !engine->Status().active && engine->Close());
+}
+
 void AllLiveStatesAndEntryExitWindows() {
   for (bool collection : {false, true}) for (bool emission : {false, true}) {
     World world(collection, emission);
@@ -672,7 +702,8 @@ int main() {
   ConcurrentOwnedContextsKeepEachThreadsParentAndCloseWaitsForAllLeases();
   OwnedContextPreservesRemoteSamplingTraceStateAndMetricsOnlyParents();
   OwnedContextRefusalsAndSDKReentryKeepErrnoAndTheValidLease();
-  std::puts("native owned context: 5 SDK groups passed");
+  OwnedContextFinalTraceStateReleaseRunsWithoutTheRuntimeLock();
+  std::puts("native owned context: 6 SDK groups passed");
   AllLiveStatesAndEntryExitWindows();
   ThreadOwnershipCapacityAndIncompleteClose();
   RegistrationIsBoundedAtomicAndOwnsNames();

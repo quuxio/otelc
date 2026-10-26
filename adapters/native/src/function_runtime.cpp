@@ -346,17 +346,27 @@ bool FunctionRuntime::DetachContext(std::uint64_t token) noexcept {
   const SavedErrno saved;
   if (!token) return true;
   if (inside_runtime) { ++impl_->context_invalid; return false; }
+  ProbeGuard probe;
+  auto released = trace::SpanContext::GetInvalid();
   try {
-    std::lock_guard<std::mutex> guard(impl_->mutex);
-    auto thread = std::this_thread::get_id();
-    auto *parent = impl_->TopParent(thread);
-    auto *frame = impl_->Top(thread);
-    if (!parent || parent->token != token || (frame && frame->token > token)) {
-      ++impl_->context_invalid;
-      return false;
+    {
+      std::lock_guard<std::mutex> guard(impl_->mutex);
+      auto thread = std::this_thread::get_id();
+      auto *parent = impl_->TopParent(thread);
+      auto *frame = impl_->Top(thread);
+      if (!parent || parent->token != token || (frame && frame->token > token)) {
+        ++impl_->context_invalid;
+        return false;
+      }
+      released = std::move(parent->context);
+      parent->context = trace::SpanContext::GetInvalid();
+      parent->token = 0;
     }
-    parent->context = trace::SpanContext::GetInvalid();
-    parent->token = 0;
+    // The final TraceState owner may invoke a deleter or selected deallocation.
+    // Observers must be able to re-enter; admission stays guarded, and this
+    // cleanup remains active until that release has completed outside the lock.
+    released = trace::SpanContext::GetInvalid();
+    std::lock_guard<std::mutex> guard(impl_->mutex);
     --impl_->context_active;
     ++impl_->context_released;
     return true;
