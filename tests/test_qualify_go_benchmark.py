@@ -179,10 +179,10 @@ class GoBenchmarkQualificationTests(unittest.TestCase):
             value.__enter__ = Mock(return_value=value)
             value.__exit__ = Mock(return_value=False)
             return value
-        with patch.object(qualifier.urllib.request, 'urlopen', side_effect=response) as opened:
+        with patch.object(qualifier.downstream, 'open_local', side_effect=response) as opened:
             qualifier.ready()
         self.assertEqual(opened.call_count, 3)
-        with patch.object(qualifier.urllib.request, 'urlopen', side_effect=OSError('offline')), \
+        with patch.object(qualifier.downstream, 'open_local', side_effect=OSError('offline')), \
                 patch.object(qualifier.time, 'monotonic', side_effect=[0., 61.]), self.assertRaises(OSError):
             qualifier.ready()
 

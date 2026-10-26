@@ -115,11 +115,11 @@ def ready() -> None:
     while True:
         try:
             for url in ('http://127.0.0.1:9091/-/ready', 'http://127.0.0.1:3001/api/health'):
-                with urllib.request.urlopen(url, timeout=2) as response:
+                with downstream.open_local(url, timeout=2) as response:
                     receipt.require(response.status == 200, 'benchmark stack is not ready')
             request = urllib.request.Request('http://127.0.0.1:4320/v1/metrics', data=b'',
                                             headers={'Content-Type': 'application/x-protobuf'})
-            with urllib.request.urlopen(request, timeout=2) as response:
+            with downstream.open_local(request, timeout=2) as response:
                 receipt.require(response.status == 200, 'benchmark Collector is not ready')
             return
         except (OSError, ValueError):

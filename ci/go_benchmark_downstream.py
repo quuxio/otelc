@@ -13,6 +13,7 @@ import time
 from typing import Any
 import urllib.parse
 import urllib.request
+import urllib.error
 
 from ci import go_benchmark_receipt as receipt
 
@@ -20,9 +21,35 @@ ROOT = Path(__file__).resolve().parents[1]
 LIMIT = 2 * 1024 * 1024
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A different service is not the declared local stack, even after HTTP 302."""
+
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        return None
+
+
+def open_local(value: str | urllib.request.Request, *, timeout: float):
+    """Use only literal loopback HTTP, without environment proxies or redirects."""
+    url = value.full_url if isinstance(value, urllib.request.Request) else value
+    receipt.require(type(url) is str and not any(ord(char) <= 32 for char in url),
+                    'benchmark stack requires a literal loopback HTTP URL')
+    parsed = urllib.parse.urlsplit(url)
+    receipt.require(parsed.scheme == 'http' and parsed.hostname == '127.0.0.1'
+                    and parsed.username is None and parsed.password is None
+                    and not parsed.fragment and parsed.port is not None
+                    and 1 <= parsed.port <= 65535,
+                    'benchmark stack requires a literal loopback HTTP URL')
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        return opener.open(value, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise
+
+
 def request(url: str) -> tuple[dict[str, Any], bytes]:
     """Use the declared loopback stack and bound each actual JSON response."""
-    with urllib.request.urlopen(url, timeout=3) as response:
+    with open_local(url, timeout=3) as response:
         raw = response.read(LIMIT + 1)
     receipt.require(len(raw) <= LIMIT, 'benchmark downstream response exceeds 2 MiB')
     value = json.loads(raw)
