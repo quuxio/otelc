@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -43,7 +44,24 @@ def catalogue(root: Path, expected: str) -> dict:
                     and not git(root, 'status', '--porcelain', '--untracked-files=no'),
                     'benchmark tools must be the declared clean source revision')
     names = git(root, 'ls-files', '-z').decode().split('\0')[:-1]
-    return {name: file_inputs.identity(root / name) for name in names}
+    return {name: source_file(root / name) for name in names}
+
+
+def physical(value: os.stat_result) -> list[int]:
+    """Access time can change on reads; preserve identity and all write facts."""
+    return [value.st_dev, value.st_ino, value.st_mode, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns, value.st_uid, value.st_gid,
+            value.st_nlink]
+
+
+def source_file(path: Path) -> dict:
+    """A replacement or changed/restored original is not the held source file."""
+    before = path.lstat()
+    receipt.require(stat.S_ISREG(before.st_mode), 'qualification source must be an ordinary file')
+    value, _ = file_inputs.checked_file(path, nofollow=True)
+    after = path.lstat()
+    receipt.require(physical(before) == physical(after), 'qualification source changed while being read')
+    return value | {'physical_facts': physical(after)}
 
 
 def execute(arguments: list[str], output: Path, label: str) -> None:

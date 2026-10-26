@@ -57,8 +57,26 @@ class GoBenchmarkQualificationTests(unittest.TestCase):
             qualifier.unchanged(self.capture, 'a' * 40, before)
             source.write_text('changed')
             with self.assertRaises(ValueError): qualifier.unchanged(self.capture, 'a' * 40, before)
+            replacement = self.capture / 'restored.py'
+            replacement.write_text('original')
+            replacement.replace(source)
+            with self.assertRaises(ValueError):
+                qualifier.unchanged(self.capture, 'a' * 40, before)
         with patch.object(qualifier, 'git', return_value=b'wrong'), self.assertRaises(ValueError):
             qualifier.catalogue(self.capture, 'a' * 40)
+        alias = self.capture / 'alias.py'
+        alias.symlink_to(source)
+        with self.assertRaises(ValueError): qualifier.source_file(alias)
+        checked = qualifier.file_inputs.checked_file
+        def replaced_during_read(path, **kwargs):
+            value = checked(path, **kwargs)
+            replacement = self.capture / 'replacement.py'
+            replacement.write_text('original')
+            replacement.replace(path)
+            return value
+        with patch.object(qualifier.file_inputs, 'checked_file', side_effect=replaced_during_read), \
+                self.assertRaisesRegex(ValueError, 'changed while being read'):
+            qualifier.source_file(source)
 
     def test_new_external_or_fixed_build_outputs_preserve_source_boundaries(self) -> None:
         sdk = self.base / 'sdk'
