@@ -48,6 +48,9 @@ class SpoofingError(CountingError):
     def __class__(self):
         reads['instance'] += 1
         return CancelledError
+class UnencodableError(CountingError):
+    pass
+UnencodableError.__qualname__ = 'bad' + chr(0xD800) + 'name'
 class CancelSubclass(CancelledError, metaclass=HostileMeta):
     @property
     def __class__(self):
@@ -62,7 +65,7 @@ def workload(error):
     raise error
 identities = []
 for error in (CountingError(), RaisingError(), SpoofingError(), CancelledError(),
-              CancelSubclass(), GeneratorExit(), ExitSubclass()):
+              CancelSubclass(), GeneratorExit(), ExitSubclass(), UnencodableError()):
     try:
         workload(error)
     except BaseException as caught:
@@ -147,7 +150,7 @@ class PythonCancellationTests(unittest.TestCase):
         self.entry.write_text(SOURCE)
 
     def test_public_cli_preserves_exception_identity_and_marks_only_real_cancellation(self) -> None:
-        expected = {'reads': {'instance': 0, 'type': 0, 'format': 0}, 'identities': [True]*7,
+        expected = {'reads': {'instance': 0, 'type': 0, 'format': 0}, 'identities': [True]*8,
                     'cancelled': True, 'closed': [True], 'yielded': 7}
         source_hash = hashlib.sha256(self.entry.read_bytes()).hexdigest()
         for name, metrics, traces in (('metrics', True, False), ('traces', False, True), ('combined', True, True)):
@@ -191,7 +194,13 @@ shutdown_timeout_ms = 5000
             if lane == 'instrumented':
                 final = json.loads((runtime / 'sdk/python-sdk-status.json').read_text())
                 self.assertEqual(final['phase'], 'closed')
-                self.assertEqual(final['producer']['function_completions'], 9)
+                self.assertEqual(final['producer']['function_completions'], 10)
+                self.assertEqual(final['producer']['active_functions'], 0)
+                losses = final['producer']['runtime_losses']
+                self.assertTrue(all(count == 0 for count in losses.values()), losses)
+                span_counts = final['producer']['span_observation']
+                self.assertEqual(span_counts['sampled_started'], 10 if traces else 0)
+                self.assertEqual(span_counts['sampled_ended'], 10 if traces else 0)
                 self.assertNotEqual(final['pid'], final['sdk_pid'])
             results.append((result.returncode, result.stdout, result.stderr))
             self.assertEqual(hashlib.sha256(self.entry.read_bytes()).hexdigest(), source_hash)
@@ -199,7 +208,7 @@ shutdown_timeout_ms = 5000
         self.assertEqual(results[0], results[1])
         spans = [span for message in capture.traces for resource in message.resource_spans
                  for scope in resource.scope_spans for span in scope.spans]
-        self.assertEqual(len(spans), 9 if traces else 0)
+        self.assertEqual(len(spans), 10 if traces else 0)
         for span in spans:
             self.assertEqual(span.status.code, 2)
             attrs = {attribute.key: attribute.value for attribute in span.attributes}
@@ -211,18 +220,23 @@ shutdown_timeout_ms = 5000
             if cancelled:
                 self.assertIs(attrs['otelc.cancelled'].bool_value, True)
                 self.assertEqual(span.status.message, 'cancelled')
+        if traces:
+            fallback = [span for span in spans if any(
+                attribute.key == 'exception.type' and attribute.value.string_value == 'BaseException'
+                for event in span.events for attribute in event.attributes if event.name == 'exception')]
+            self.assertEqual(len(fallback), 1)
         calls = capture.points('otelc.function.calls')
         if metrics:
             by_function = {}
             for point in calls:
                 function = next(attr.value.string_value for attr in point.attributes if attr.key == 'function')
                 by_function[function] = max(by_function.get(function, 0), point.as_int)
-            self.assertEqual(sum(by_function.values()), 9)
+            self.assertEqual(sum(by_function.values()), 10)
             exceptions = capture.points('otelc.function.exceptions')
             by_function = {}
             for point in exceptions:
                 function = next(attr.value.string_value for attr in point.attributes if attr.key == 'function')
                 by_function[function] = max(by_function.get(function, 0), point.as_int)
-            self.assertEqual(sum(by_function.values()), 9)
+            self.assertEqual(sum(by_function.values()), 10)
         else:
             self.assertEqual(calls, [])
