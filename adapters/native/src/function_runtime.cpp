@@ -23,6 +23,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 constexpr std::uint32_t MaxFunctions = 4096;
 constexpr std::uint32_t MaxActive = 512;
+constexpr std::uint32_t MaxContexts = 512;
 constexpr std::size_t MaxName = 4096;
 struct SavedErrno {
   SavedErrno() = default;
@@ -80,6 +81,11 @@ struct FunctionRuntime::Impl {
     opentelemetry::nostd::shared_ptr<trace::Span> span;
     std::unique_ptr<trace::Scope> scope;
   };
+  struct Parent {
+    std::uint64_t token = 0;
+    std::thread::id thread;
+    trace::SpanContext context = trace::SpanContext::GetInvalid();
+  };
 
   std::shared_ptr<MetricState> state;
   opentelemetry::nostd::shared_ptr<trace::Tracer> tracer;
@@ -89,8 +95,11 @@ struct FunctionRuntime::Impl {
   mutable std::mutex mutex;
   std::map<const void *, std::string> functions;
   std::array<Frame, MaxActive> frames;
+  std::array<Parent, MaxContexts> parents;
   std::atomic<std::uint64_t> lost{0}, invalid{0};
+  std::atomic<std::uint64_t> context_lost{0}, context_invalid{0};
   std::uint64_t next = 1, started = 0, ended = 0, active = 0;
+  std::uint64_t context_admitted = 0, context_released = 0, context_active = 0;
   bool closing = false;
 
   Impl(std::shared_ptr<MetricState> selected_state,
@@ -99,6 +108,7 @@ struct FunctionRuntime::Impl {
       : state(std::move(selected_state)), tracer(std::move(selected_tracer)), limits(selected_limits) {
     if (!state || !meter || state->Status().closing || limits.functions == 0
         || limits.functions > MaxFunctions || limits.active == 0 || limits.active > MaxActive
+        || limits.contexts == 0 || limits.contexts > MaxContexts
         || (limits.context != FunctionContext::ambient && limits.context != FunctionContext::owned))
       throw std::invalid_argument("native function engine requires open SDK inputs and bounded limits");
     calls = meter->CreateUInt64Counter("otelc.function.calls", "Completed selected calls", "{call}");
@@ -113,6 +123,25 @@ struct FunctionRuntime::Impl {
           && (!result || frame.token > result->token)) result = &frame;
     }
     return result;
+  }
+
+  Parent *TopParent(std::thread::id thread) {
+    if (!context_active) return nullptr;
+    Parent *result = nullptr;
+    for (auto &parent : parents) {
+      if (parent.token && parent.thread == thread
+          && (!result || parent.token > result->token)) result = &parent;
+    }
+    return result;
+  }
+
+  trace::SpanContext Current(std::thread::id thread) {
+    auto *frame = Top(thread);
+    auto *parent = TopParent(thread);
+    if (parent && (!frame || parent->token > frame->token)) return parent->context;
+    if (frame && frame->span) return frame->span->GetContext();
+    if (parent) return parent->context;
+    return trace::SpanContext::GetInvalid();
   }
 };
 
@@ -176,7 +205,7 @@ std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
   }
   ProbeGuard probe;
   Impl::Frame *slot = nullptr;
-  opentelemetry::nostd::shared_ptr<trace::Span> parent;
+  auto parent = trace::SpanContext::GetInvalid();
   try {
     {
       std::lock_guard<std::mutex> guard(impl_->mutex);
@@ -187,8 +216,7 @@ std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
         return 0;
       }
       if (impl_->limits.context == FunctionContext::owned) {
-        auto *top = impl_->Top(std::this_thread::get_id());
-        if (top) parent = top->span;
+        parent = impl_->Current(std::this_thread::get_id());
       }
       for (auto &frame : impl_->frames) if (frame.phase == Impl::Phase::free) { slot = &frame; break; }
       slot->phase = Impl::Phase::entering;
@@ -207,7 +235,7 @@ std::uint64_t FunctionRuntime::Enter(const void *address) noexcept {
         trace::StartSpanOptions options;
         // An invalid SpanContext alone falls back to ambient context in the SDK.
         options.parent = opentelemetry::context::Context{}.SetValue(trace::kIsRootSpanKey, true);
-        if (parent && parent->GetContext().IsValid()) options.parent = parent->GetContext();
+        if (parent.IsValid()) options.parent = parent;
         slot->span = impl_->tracer->StartSpan(*slot->name, {{"function", *slot->name}}, options);
       } else {
         slot->span = impl_->tracer->StartSpan(*slot->name, {{"function", *slot->name}});
@@ -240,9 +268,11 @@ bool FunctionRuntime::Leave(std::uint64_t token, std::int32_t unwinding) noexcep
   Impl::Frame *slot;
   {
     std::lock_guard<std::mutex> guard(impl_->mutex);
-    slot = impl_->Top(std::this_thread::get_id());
+    auto thread = std::this_thread::get_id();
+    slot = impl_->Top(thread);
+    auto *parent = impl_->TopParent(thread);
     if (!slot || slot->token != token || slot->phase != Impl::Phase::active
-        || (unwinding != 0 && unwinding != 1)) {
+        || (unwinding != 0 && unwinding != 1) || (parent && parent->token > token)) {
       ++impl_->invalid;
       return false;
     }
@@ -274,21 +304,78 @@ bool FunctionRuntime::Leave(std::uint64_t token, std::int32_t unwinding) noexcep
 FunctionStatus FunctionRuntime::Status() const {
   std::lock_guard<std::mutex> guard(impl_->mutex);
   return {impl_->functions.size(), impl_->started, impl_->ended, impl_->active,
-          impl_->lost.load(), impl_->invalid.load(), impl_->closing, impl_->closing && !impl_->active};
+          impl_->lost.load(), impl_->invalid.load(), impl_->closing,
+          impl_->closing && !impl_->active && !impl_->context_active};
 }
 
 trace::SpanContext FunctionRuntime::CurrentContext() const noexcept {
+  const SavedErrno saved;
   try {
     std::lock_guard<std::mutex> guard(impl_->mutex);
-    auto *frame = impl_->Top(std::this_thread::get_id());
-    if (frame && frame->span) return frame->span->GetContext();
+    return impl_->Current(std::this_thread::get_id());
   } catch (...) {}
   return trace::SpanContext::GetInvalid();
+}
+
+std::uint64_t FunctionRuntime::AttachContext(const trace::SpanContext &parent) noexcept {
+  const SavedErrno saved;
+  if (inside_runtime || impl_->limits.context != FunctionContext::owned || !parent.IsValid()) {
+    ++impl_->context_invalid;
+    return 0;
+  }
+  try {
+    std::lock_guard<std::mutex> guard(impl_->mutex);
+    if (impl_->closing || impl_->context_active >= impl_->limits.contexts || !impl_->next) {
+      ++impl_->context_lost;
+      return 0;
+    }
+    for (auto &slot : impl_->parents) if (!slot.token) {
+      slot.context = parent;
+      slot.thread = std::this_thread::get_id();
+      slot.token = impl_->next++;
+      ++impl_->context_admitted;
+      ++impl_->context_active;
+      return slot.token;
+    }
+  } catch (...) {}
+  ++impl_->context_lost;
+  return 0;
+}
+
+bool FunctionRuntime::DetachContext(std::uint64_t token) noexcept {
+  const SavedErrno saved;
+  if (!token) return true;
+  if (inside_runtime) { ++impl_->context_invalid; return false; }
+  try {
+    std::lock_guard<std::mutex> guard(impl_->mutex);
+    auto thread = std::this_thread::get_id();
+    auto *parent = impl_->TopParent(thread);
+    auto *frame = impl_->Top(thread);
+    if (!parent || parent->token != token || (frame && frame->token > token)) {
+      ++impl_->context_invalid;
+      return false;
+    }
+    parent->context = trace::SpanContext::GetInvalid();
+    parent->token = 0;
+    --impl_->context_active;
+    ++impl_->context_released;
+    return true;
+  } catch (...) {
+    ++impl_->context_invalid;
+    return false;
+  }
+}
+
+FunctionContextStatus FunctionRuntime::ContextStatus() const {
+  std::lock_guard<std::mutex> guard(impl_->mutex);
+  return {impl_->context_admitted, impl_->context_released, impl_->context_active,
+          impl_->context_lost.load(), impl_->context_invalid.load(), impl_->closing,
+          impl_->closing && !impl_->active && !impl_->context_active};
 }
 
 bool FunctionRuntime::Close() {
   std::lock_guard<std::mutex> guard(impl_->mutex);
   impl_->closing = true;
-  return !impl_->active;
+  return !impl_->active && !impl_->context_active;
 }
 }  // namespace otelc::native

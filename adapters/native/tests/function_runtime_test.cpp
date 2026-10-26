@@ -17,6 +17,8 @@
 
 #include "opentelemetry/sdk/metrics/metric_reader.h"
 #include "opentelemetry/sdk/trace/simple_processor.h"
+#include "opentelemetry/sdk/trace/samplers/always_on.h"
+#include "opentelemetry/sdk/trace/samplers/parent.h"
 #include "opentelemetry/sdk/trace/span_data.h"
 #include "opentelemetry/sdk/trace/tracer_provider.h"
 #include "opentelemetry/trace/context.h"
@@ -127,11 +129,13 @@ struct World {
   native::GatedMetricExporter exporter;
   SpanSink *span_sink;
   std::shared_ptr<traces::TracerProvider> traces;
-  explicit World(bool collection = true, bool emission = true, bool configure = true)
+  explicit World(bool collection = true, bool emission = true, bool configure = true,
+                 std::unique_ptr<traces::Sampler> sampler = std::make_unique<traces::AlwaysOnSampler>())
       : state(std::make_shared<native::MetricState>(collection, emission)), controller(meters, state),
         metric_sink(new MetricSink), exporter(std::unique_ptr<MetricSink>(metric_sink), state),
         span_sink(new SpanSink), traces(std::make_shared<traces::TracerProvider>(
-            std::make_unique<traces::SimpleSpanProcessor>(std::unique_ptr<SpanSink>(span_sink)))) {
+            std::make_unique<traces::SimpleSpanProcessor>(std::unique_ptr<SpanSink>(span_sink)),
+            opentelemetry::sdk::resource::Resource::GetDefault(), std::move(sampler))) {
     if (configure) native::ConfigureFunctionMetrics(*meters);
     meters->AddMetricReader(reader, controller.Filter());
   }
@@ -213,6 +217,199 @@ void OwnedParentsDoNotReadOrChangeAmbientSDKScopes() {
   assert(inner.GetTraceId() == outer.GetTraceId() && outer.GetTraceId() != application->GetContext().trace_id());
   assert(!outer.GetParentSpanId().IsValid());
   assert(engine->Close());
+}
+
+trace::SpanContext RemoteContext(bool sampled = true) {
+  std::uint8_t trace_bytes[16] = {1};
+  std::uint8_t span_bytes[8] = {2};
+  return {trace::TraceId(trace_bytes), trace::SpanId(span_bytes),
+          trace::TraceFlags(sampled ? 1 : 0), true, trace::TraceState::FromHeader("quux=task")};
+}
+
+void OwnedContextTransfersToAReusedWorkerWithoutAmbientMutation() {
+  for (bool collection : {false, true}) for (bool emission : {false, true}) {
+    World world(collection, emission);
+    auto engine = world.Engine({4096, 512, native::FunctionContext::owned}); Register(*engine);
+    auto parent = engine->Enter(&outer_address);
+    auto captured = engine->CurrentContext();
+    assert(captured.IsValid() && engine->Leave(parent, 0));
+    assert(!engine->CurrentContext().IsValid());
+    auto child_context = trace::SpanContext::GetInvalid();
+    auto nested_context = trace::SpanContext::GetInvalid();
+    auto fresh_context = trace::SpanContext::GetInvalid();
+    std::thread worker([&] {
+      auto ambient = world.traces->GetTracer("application")->StartSpan("unrelated-worker");
+      {
+        trace::Scope scope(ambient);
+        errno = EDOM;
+        auto lease = engine->AttachContext(captured);
+        assert(lease && errno == EDOM && engine->CurrentContext() == captured);
+        assert(errno == EDOM);
+        auto child = engine->Enter(&inner_address);
+        child_context = engine->CurrentContext();
+        auto nested = engine->Enter(&outer_address);
+        nested_context = engine->CurrentContext();
+        assert(child && nested && engine->Leave(nested, 0) && engine->Leave(child, 0));
+        assert(engine->CurrentContext() == captured && engine->DetachContext(lease));
+        assert(!engine->CurrentContext().IsValid());
+        auto fresh = engine->Enter(&inner_address);
+        fresh_context = engine->CurrentContext();
+        assert(fresh && engine->Leave(fresh, 0));
+        assert(trace::GetSpan(opentelemetry::context::RuntimeContext::GetCurrent())->GetContext()
+               == ambient->GetContext() && ambient->IsRecording());
+      }
+      ambient->End();
+    });
+    worker.join();
+    assert(world.span_sink->spans.size() == 5);
+    auto find = [&](const trace::SpanContext &context) -> const traces::SpanData & {
+      auto row = std::find_if(world.span_sink->spans.begin(), world.span_sink->spans.end(),
+          [&](const auto &span) { return span->GetSpanId() == context.span_id(); });
+      assert(row != world.span_sink->spans.end());
+      return **row;
+    };
+    assert(find(child_context).GetParentSpanId() == captured.span_id());
+    assert(find(nested_context).GetParentSpanId() == child_context.span_id());
+    assert(child_context.trace_id() == captured.trace_id() && nested_context.trace_id() == captured.trace_id());
+    assert(!find(fresh_context).GetParentSpanId().IsValid() && fresh_context.trace_id() != captured.trace_id());
+    auto status = engine->ContextStatus();
+    assert(status.admitted == 1 && status.released == 1 && !status.active && !status.lost && !status.invalid);
+    auto values = world.Collect();
+    assert(collection ? values.at("otelc.function.calls") == 4 : values.empty());
+    assert(world.metric_sink->exports == unsigned(collection && emission));
+    assert(engine->Close() && engine->ContextStatus().closed);
+  }
+}
+
+void OwnedContextOrderingCapacityAndIncompleteClose() {
+  World world;
+  auto engine = world.Engine({4096, 512, native::FunctionContext::owned, 2}); Register(*engine);
+  auto outer = engine->Enter(&outer_address);
+  auto original = engine->CurrentContext();
+  auto remote = RemoteContext();
+  auto first = engine->AttachContext(remote);
+  assert(first && engine->CurrentContext() == remote && !engine->Leave(outer, 0));
+  auto inner = engine->Enter(&inner_address);
+  assert(inner && !engine->DetachContext(first) && engine->Leave(inner, 0));
+  auto second = engine->AttachContext(original);
+  assert(second && engine->CurrentContext() == original);
+  assert(!engine->AttachContext(remote) && !engine->DetachContext(first));
+  std::thread foreign([&] {
+    errno = ECHILD;
+    assert(!engine->DetachContext(second) && errno == ECHILD);
+    assert(!engine->CurrentContext().IsValid());
+  });
+  foreign.join();
+  assert(!engine->Close() && !engine->Status().closed && !engine->ContextStatus().closed);
+  assert(engine->DetachContext(second) && engine->CurrentContext() == remote);
+  assert(!engine->AttachContext(remote));
+  assert(!engine->DetachContext(second));
+  assert(engine->DetachContext(first) && engine->CurrentContext() == original);
+  assert(engine->Leave(outer, 0) && engine->Close());
+  auto status = engine->ContextStatus();
+  assert(status.admitted == 2 && status.released == 2 && !status.active);
+  assert(status.lost == 2 && status.invalid == 4 && status.closing && status.closed);
+  assert(engine->Status().invalid == 1 && !engine->Status().lost);
+  errno = ERANGE;
+  assert(engine->DetachContext(0) && errno == ERANGE);
+}
+
+void ConcurrentOwnedContextsKeepEachThreadsParentAndCloseWaitsForAllLeases() {
+  World world;
+  auto engine = world.Engine({4096, 512, native::FunctionContext::owned}); Register(*engine);
+  std::vector<trace::SpanContext> parents(8, trace::SpanContext::GetInvalid());
+  std::vector<trace::SpanContext> children(8, trace::SpanContext::GetInvalid());
+  for (auto &parent : parents) {
+    auto call = engine->Enter(&outer_address);
+    parent = engine->CurrentContext();
+    assert(call && engine->Leave(call, 0));
+  }
+  std::vector<std::promise<void>> ready(parents.size());
+  std::promise<void> release;
+  auto released = release.get_future().share();
+  std::vector<std::thread> workers;
+  for (std::size_t index = 0; index < parents.size(); ++index) workers.emplace_back([&, index] {
+    auto lease = engine->AttachContext(parents[index]);
+    auto call = engine->Enter(&inner_address);
+    children[index] = engine->CurrentContext();
+    assert(lease && call && children[index].trace_id() == parents[index].trace_id());
+    ready[index].set_value();
+    assert(released.wait_for(5s) == std::future_status::ready);
+    assert(engine->Leave(call, 0) && engine->DetachContext(lease));
+    assert(!engine->CurrentContext().IsValid());
+  });
+  for (auto &item : ready) assert(item.get_future().wait_for(5s) == std::future_status::ready);
+  assert(engine->Status().active == 8 && engine->ContextStatus().active == 8);
+  assert(!engine->CurrentContext().IsValid() && !engine->Close());
+  release.set_value();
+  for (auto &worker : workers) worker.join();
+  assert(world.span_sink->spans.size() == 16 && engine->Close());
+  for (std::size_t index = 0; index < children.size(); ++index) {
+    auto child = std::find_if(world.span_sink->spans.begin(), world.span_sink->spans.end(),
+        [&](const auto &span) { return span->GetSpanId() == children[index].span_id(); });
+    assert(child != world.span_sink->spans.end() && (*child)->GetParentSpanId() == parents[index].span_id());
+  }
+  auto status = engine->ContextStatus();
+  assert(status.admitted == 8 && status.released == 8 && !status.active && !status.lost && !status.invalid);
+}
+
+void OwnedContextPreservesRemoteSamplingTraceStateAndMetricsOnlyParents() {
+  for (bool sampled : {false, true}) {
+    World world(true, true, true,
+        std::make_unique<traces::ParentBasedSampler>(std::make_shared<traces::AlwaysOnSampler>()));
+    auto engine = world.Engine({4096, 512, native::FunctionContext::owned}); Register(*engine);
+    auto parent = RemoteContext(sampled);
+    auto lease = engine->AttachContext(parent);
+    auto captured = engine->CurrentContext();
+    assert(lease && captured == parent && captured.IsRemote());
+    assert(captured.trace_state()->ToHeader() == "quux=task");
+    auto call = engine->Enter(&inner_address);
+    auto child = engine->CurrentContext();
+    assert(call && child.IsValid() && child.trace_id() == parent.trace_id());
+    assert(child.IsSampled() == sampled && child.trace_state()->ToHeader() == "quux=task");
+    assert(engine->Leave(call, 0) && engine->DetachContext(lease));
+    assert(world.span_sink->spans.size() == unsigned(sampled));
+    if (sampled) assert(world.span_sink->spans[0]->GetParentSpanId() == parent.span_id());
+    assert(world.Collect().at("otelc.function.calls") == 1 && engine->Close());
+  }
+  World world;
+  auto engine = world.Engine({4096, 512, native::FunctionContext::owned}, false); Register(*engine);
+  auto parent = RemoteContext(false);
+  auto lease = engine->AttachContext(parent);
+  auto call = engine->Enter(&inner_address);
+  assert(lease && call && engine->CurrentContext() == parent);
+  assert(engine->Leave(call, 0) && engine->DetachContext(lease) && engine->Close());
+  assert(world.span_sink->spans.empty() && world.Collect().at("otelc.function.calls") == 1);
+}
+
+void OwnedContextRefusalsAndSDKReentryKeepErrnoAndTheValidLease() {
+  World world;
+  auto ambient = world.Engine();
+  auto parent = RemoteContext();
+  assert(!ambient->AttachContext(parent) && ambient->ContextStatus().invalid == 1 && ambient->Close());
+  auto engine = world.Engine({4096, 512, native::FunctionContext::owned}); Register(*engine);
+  assert(!engine->AttachContext(trace::SpanContext::GetInvalid()));
+  auto lease = engine->AttachContext(parent);
+  auto expected = parent;
+  auto callback = [&] {
+    errno = EOVERFLOW;
+    assert(!engine->AttachContext(parent) && !engine->DetachContext(lease));
+    assert(engine->CurrentContext() == expected && errno == EOVERFLOW);
+    assert(engine->ContextStatus().active == 1);
+  };
+  world.span_sink->create_callback = callback;
+  errno = EINTR;
+  auto call = engine->Enter(&inner_address);
+  assert(call && errno == EINTR);
+  expected = engine->CurrentContext();
+  world.span_sink->create_callback = {};
+  world.span_sink->callback = callback;
+  errno = ECHILD;
+  assert(engine->Leave(call, 0) && errno == ECHILD);
+  world.span_sink->callback = {};
+  assert(engine->DetachContext(lease) && engine->Close());
+  auto status = engine->ContextStatus();
+  assert(status.admitted == 1 && status.released == 1 && status.invalid == 5 && !status.lost);
 }
 
 void AllLiveStatesAndEntryExitWindows() {
@@ -324,7 +521,8 @@ void InvalidInputs() {
     catch (const std::invalid_argument &) { refused = true; }
     assert(refused);
   }
-  for (native::FunctionLimits limits : {native::FunctionLimits{0, 1}, {4097, 1}, {1, 0}, {1, 513}}) {
+  for (native::FunctionLimits limits : {native::FunctionLimits{0, 1}, {4097, 1}, {1, 0}, {1, 513},
+      {1, 1, native::FunctionContext::owned, 0}, {1, 1, native::FunctionContext::owned, 513}}) {
     bool refused = false;
     try { auto engine = world.Engine(limits); } catch (const std::invalid_argument &) { refused = true; }
     assert(refused);
@@ -469,6 +667,12 @@ int main() {
   using namespace engine_test;
   BalancedScopesErrorsAndApplicationParents();
   OwnedParentsDoNotReadOrChangeAmbientSDKScopes();
+  OwnedContextTransfersToAReusedWorkerWithoutAmbientMutation();
+  OwnedContextOrderingCapacityAndIncompleteClose();
+  ConcurrentOwnedContextsKeepEachThreadsParentAndCloseWaitsForAllLeases();
+  OwnedContextPreservesRemoteSamplingTraceStateAndMetricsOnlyParents();
+  OwnedContextRefusalsAndSDKReentryKeepErrnoAndTheValidLease();
+  std::puts("native owned context: 5 SDK groups passed");
   AllLiveStatesAndEntryExitWindows();
   ThreadOwnershipCapacityAndIncompleteClose();
   RegistrationIsBoundedAtomicAndOwnsNames();

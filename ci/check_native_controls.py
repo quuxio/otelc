@@ -202,6 +202,7 @@ def check() -> None:
         run([cmake, '--build', str(work), '--target', 'otelc_native_controls_test',
              'otelc_native_functions_test', 'otelc_native_objects_test', '--parallel', '2'])
         run([str(ctest), '--test-dir', str(work), '--output-on-failure'])
+        shutil.copyfile(work / 'Testing/Temporary/LastTest.log', output / 'native-sdk-tests.log')
         object_refusals(work, inventory, object_manifest, binaries, environment)
         object_storage(work, object_manifest, binaries, environment)
         profiles = sorted(path for path in work.glob('*.profraw')

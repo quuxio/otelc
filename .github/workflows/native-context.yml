@@ -1,0 +1,86 @@
+name: Native owned context
+on:
+  pull_request:
+    paths:
+      - 'adapters/native/**'
+      - 'native/llvm/**'
+      - 'ci/check_native_controls.py'
+      - 'tests/test_native_controls_coverage.py'
+      - '.github/workflows/native-context.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-context-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  context:
+    name: Owned native context and SDK (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install matched native tools
+        run: |
+          if [[ '${{ matrix.os }}' == ubuntu-24.04 ]]; then
+            bash ci/install_llvm22.sh
+            printf 'CC=/usr/lib/llvm-22/bin/clang\nCXX=/usr/lib/llvm-22/bin/clang++\nOTELC_LLVM_BIN=/usr/lib/llvm-22/bin\n' >> "$GITHUB_ENV"
+          else
+            brew install llvm@22 cmake ninja
+            printf 'CC=/opt/homebrew/opt/llvm@22/bin/clang\nCXX=/opt/homebrew/opt/llvm@22/bin/clang++\nOTELC_LLVM_BIN=/opt/homebrew/opt/llvm@22/bin\n' >> "$GITHUB_ENV"
+          fi
+      - name: Install locked Python checks
+        run: |
+          mkdir -p build/native-context
+          git rev-parse HEAD > build/native-context/head.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+      - name: Run actual SDK and compiler-linked checks with per-component floors
+        run: |
+          make native-check PYTHON=.venv/bin/python 2>&1 | tee build/native-context/tests.log
+          .venv/bin/python -c 'from pathlib import Path; assert Path("build/native-sdk-tests.log").read_text().count("native owned context: 5 SDK groups passed") == 1'
+          .venv/bin/python -m coverage json --data-file=build/native-tooling.coverage -o build/native-context/python-coverage.json
+      - name: Retain exact source
+        if: always()
+        run: |
+          mkdir -p build/native-context
+          git archive --format=tar --output build/native-context/source.tar HEAD
+          git status --porcelain --untracked-files=no > build/native-context/source-status.txt
+          test ! -s build/native-context/source-status.txt
+      - name: Retain compact SDK records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-context-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/native-context/
+            build/native-control-coverage.json
+            build/native-control.lcov
+            build/native-sdk-compile-commands.json
+            build/native-sdk-tests.log
+            build/native-control-test
+            build/native-function-test
+            build/native-object-test
+            build/native-control.profdata
+            build/native-object-pass-coverage.json
+            build/native-object-pass.lcov
+            build/native-object-pass-compile-commands.json
+            build/native-object-plugin.*
