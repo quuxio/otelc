@@ -4,13 +4,15 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
-from otelc import benchmark, benchmark_process, native_benchmark as adapter, native_benchmark_launch as launch
+from otelc import benchmark, benchmark_process, control, native_benchmark as adapter, native_benchmark_launch as launch
 from otelc import native_gate, native_launch
 from otelc.config import Policy
 from test_java_integration import Capture
@@ -121,8 +123,11 @@ class NativeBenchmarkAccountingTests(unittest.TestCase):
 class NativeBenchmarkIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if shutil.disk_usage(ROOT).free < 8 * 1024**3:
+            raise ValueError('Native benchmark checks require at least 8 GiB free')
         (ROOT / 'build').mkdir(exist_ok=True)
-        cls.keep = os.environ.get('OTELC_CPP_ANALYSIS') == '1'
+        cls.capture_diagnostics = os.environ.get('OTELC_NATIVE_BENCHMARK_CAPTURE') == '1'
+        cls.keep = os.environ.get('OTELC_CPP_ANALYSIS') == '1' or cls.capture_diagnostics
         cls.temporary = tempfile.TemporaryDirectory(prefix='native-benchmark-tests-',
             dir=ROOT / 'build', delete=not cls.keep)
         cls.base = Path(cls.temporary.name).resolve()
@@ -136,15 +141,37 @@ class NativeBenchmarkIntegrationTests(unittest.TestCase):
         else: cls.temporary.cleanup()
 
     def setUp(self):
-        self.capture = Capture(); self.addCleanup(self.capture.close)
+        directory = self.base / (self._testMethodName + '-otlp') if self.capture_diagnostics else None
+        self.capture = Capture(record_directory=directory); self.addCleanup(self.capture.close)
         self.data = copy.deepcopy(policy().data)
         self.data['export']['endpoint'] = f'http://127.0.0.1:{self.capture.server.server_port}'
 
     def run_benchmark(self, language, *, lifetimes=True, publish=True):
         self.data['lifetimes']['enabled'] = lifetimes
         output = self.base / (self._testMethodName + '-' + language)
-        report = adapter.run(Policy.parse(self.data), output, language=language,
-            sdk_directory=self.sdk, comparison_id='shared-native-smoke', publish=publish)
+        original_request = control.request
+
+        def request(endpoint: Path, command: str) -> dict:
+            try:
+                return original_request(endpoint, command)
+            except Exception as failure:
+                if self.capture_diagnostics and command == 'flush':
+                    try:
+                        diagnostic = {'command': command, 'recorded_at_unix_ns': time.time_ns()}
+                        try:
+                            diagnostic['health'] = original_request(endpoint, 'health')
+                        except Exception as error:
+                            diagnostic['health_error_type'] = type(error).__name__
+                        path = output / 'failed-flush.json'
+                        path.write_text(json.dumps(diagnostic, indent=2) + '\n')
+                        path.chmod(0o600)
+                    except Exception as error:
+                        failure.add_note('Native benchmark diagnostic capture failed: ' + type(error).__name__)
+                raise
+
+        with patch.object(control, 'request', side_effect=request):
+            report = adapter.run(Policy.parse(self.data), output, language=language,
+                sdk_directory=self.sdk, comparison_id='shared-native-smoke', publish=publish)
         return output, report
 
     def test_actual_c_and_cpp_match_the_shared_workload_and_all_four_metric_states(self):

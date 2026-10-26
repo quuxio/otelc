@@ -534,9 +534,9 @@ void LimitsInvalidInputsAndExporterReentryAreVisible() {
 void ObjectAndResourceProbesPreserveErrnoIncludingCensoredShutdown() {
   for (auto boundary : {native::LifetimeBoundary::destructor_entry, native::LifetimeBoundary::free_entry,
                         native::LifetimeBoundary::drop_entry}) {
-    for (int unwinding : {0, 1}) {
+    for (bool collection : {false, true}) for (bool emission : {false, true}) for (int unwinding : {0, 1}) {
       if (boundary == native::LifetimeBoundary::free_entry && unwinding) continue;
-      World world;
+      World world(collection, emission);
       native::ObjectLimits limits;
       limits.boundary = boundary;
       auto engine = world.Engine(limits);
@@ -565,6 +565,7 @@ void ObjectAndResourceProbesPreserveErrnoIncludingCensoredShutdown() {
       errno = EBUSY;
       assert(!engine->Destroyed(token, 0) && errno == EBUSY);
       assert(!engine->Admit(nullptr, "usr:Item", "Item") && errno == EBUSY);
+      assert(engine->Destroyed(0, 0) && errno == EBUSY);
       assert(engine->Admit(&second, "usr:Item", "Item") && errno == EBUSY);
       errno = E2BIG;
       assert(engine->Close() && errno == E2BIG);
