@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 from ci.rust_compiler_cases import APPLICATION, WORK
+from ci.rust_prepared_cases import RustPreparedCases
 from otelc import control, health, native_benchmark, native_build, native_gate, native_launch
 from otelc import rust_build, rust_compiler, rust_launch, rust_benchmark
 from otelc import rust_owned_build
@@ -266,7 +267,7 @@ class RustBoundaryTests(unittest.TestCase):
                 rust_build.verify(rust_build.Build(directory, encoded), policy())
 
 
-class RustPublicExecutionTests(unittest.TestCase):
+class RustPublicExecutionTests(RustPreparedCases, unittest.TestCase):
     """Use genuine products; an explicit retained fixture avoids rebuilding locally."""
     @classmethod
     def setUpClass(cls) -> None:
