@@ -83,6 +83,8 @@ The pass also honours LLVM's `noprofile` function attribute. Clang emits it for 
 
 ## Evidence and remaining work
 
+Native Sonar analysis uses each source's compilation entry from the component that produced its coverage. Linked plugins can also compile shared function-pass sources; those sibling entries do not replace the owning component's context. The importer retains the original database identities and refuses missing or duplicate units within the owning component.
+
 `make llvm-check` runs the matched real compiler and enforces at least 80% line coverage independently for the Python component and each native pass variant. The registered variant repeats the base compiler corpus and additionally checks selected address/name agreement, UTF-8 and demangled C++ names, exclusions, ordinary pre-main initialisers, empty selection and incompatible registration declarations. The full `make check` also discovers these tests and enforces the floors. Default artifacts use `build/llvm-pass*`; registered artifacts use `build/llvm-pass-registry*` and a separately retained plugin. Python component coverage is under `build/llvm-python.coverage`. C++ Sonar uses the source-aware compilation context, which includes the base, registration and source-selection implementations.
 
 The source-aware group checks duplicate file-local function names, standard-library exclusion, physical project boundaries including external symlink targets, Unicode/path-glob agreement, missing debug metadata, original exceptions and annotation exclusion. Its artifacts use `build/llvm-pass-source*`.

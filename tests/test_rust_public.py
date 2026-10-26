@@ -78,6 +78,33 @@ class RustInputTests(unittest.TestCase):
                 mock.patch.object(rust_compiler, 'read', side_effect=AssertionError('must refuse before SDK read')):
             rust_build.verify(built, current or policy())
 
+    def test_public_compilation_pins_loader_to_the_verified_rust_sysroot(self) -> None:
+        class InspectionReached(Exception):
+            pass
+
+        sysroot = self.base / 'selected-sysroot'
+        tool_record = {'sysroot': str(sysroot), 'tools': [{'path': '/fixed/rustc'}],
+                       'products': [{'path': '/fixed/driver'}]}
+        tools = rust_compiler.Tools(self.base, json.dumps(tool_record))
+
+        def execute(arguments, output, label, env, *, cwd):
+            if label == 'discover':
+                (output / 'original.d').write_text('original: app.rs\n')
+                return b''
+            self.assertEqual(label, 'inspect')
+            self.assertEqual(env.get('LD_LIBRARY_PATH'), str(sysroot / 'lib'))
+            raise InspectionReached
+
+        with mock.patch.object(rust_compiler, 'read', return_value=tools), \
+                mock.patch.object(native_build, 'sdk', return_value={}), \
+                mock.patch.object(rust_compiler, 'execute', side_effect=execute), \
+                mock.patch.object(rust_compiler.sys, 'platform', 'linux'), \
+                mock.patch.dict(os.environ, {'LD_LIBRARY_PATH': '/foreign/libraries'}):
+            with self.assertRaises(InspectionReached):
+                rust_build.build(policy(), self.root, Path('app.rs'), self.base / 'build',
+                                 tools_directory=self.base, sdk_directory=self.base)
+            self.assertEqual(os.environ['LD_LIBRARY_PATH'], '/foreign/libraries')
+
     def test_dependency_escapes_preserve_spaces_unicode_dollars_hashes_and_backslashes(self) -> None:
         names = ['app.rs', 'folder name/λ.rs', 'hash#cash$.rs', 'back\\slash.rs']
         for name in names[1:]:

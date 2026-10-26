@@ -33,11 +33,16 @@ def sources() -> list[Path]:
             *sorted(root.rglob('Cargo.lock')), Path(__file__).resolve()]
 
 
-def environment() -> dict[str, str]:
+def environment(sysroot: Path | None = None) -> dict[str, str]:
     """Use explicit compiler inputs, without inherited Rust or telemetry hooks."""
-    return {key: value for key, value in os.environ.items()
+    result = {key: value for key, value in os.environ.items()
             if key in ('RUSTUP_HOME', 'CARGO_HOME')
             or not key.startswith(('RUST', 'CARGO_', 'OTEL', 'LLVM_PROFILE'))}
+    if sys.platform == 'linux' and sysroot is not None:
+        # ELF RUNPATH does not cover the rustc driver's indirect LLVM dependency.
+        # Callers obtain this sysroot from their verified compiler-tool record.
+        result['LD_LIBRARY_PATH'] = str(sysroot / 'lib')
+    return result
 
 
 def physical_within(path: Path, root: Path) -> bool:
