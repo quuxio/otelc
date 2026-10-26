@@ -123,8 +123,10 @@ rust-tools:
 .PHONY: rust-public-check rust-owned-check rust-prepared-check rust-receipt-check
 rust-receipt-check:
 	mkdir -p build
-	PYTHONPATH="$(CURDIR)/tests$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m coverage run --data-file=build/rust-receipt.coverage --source=ci.rust_telemetry -m unittest test_rust_telemetry test_rust_capture_records -v
+	PYTHONPATH="$(CURDIR)/tests$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -m coverage run --data-file=build/rust-receipt.coverage --source=ci.rust_telemetry,ci.histogram_observation -m unittest test_rust_telemetry test_rust_capture_records test_rust_histogram_observation -v
 	$(PYTHON) -m coverage report --data-file=build/rust-receipt.coverage --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-receipt.coverage --include='*/ci/rust_telemetry.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-receipt.coverage --include='*/ci/histogram_observation.py' --fail-under=80
 
 rust-prepared-check:
 	mkdir -p build
@@ -139,8 +141,9 @@ rust-owned-check:
 
 rust-public-check:
 	mkdir -p build
-	$(PYTHON) -m coverage run --data-file=build/rust-public.coverage --source=otelc.rust_compiler,otelc.rust_build,otelc.rust_owned_build,otelc.rust_launch,otelc.rust_benchmark,otelc.benchmark_cleanup,otelc.prepared_rust,otelc.rust_supervisor,ci.rust_telemetry -m unittest discover -s tests -p 'test_rust_*.py' -v
+	$(PYTHON) -m coverage run --data-file=build/rust-public.coverage --source=otelc.rust_compiler,otelc.rust_build,otelc.rust_owned_build,otelc.rust_launch,otelc.rust_benchmark,otelc.benchmark_cleanup,otelc.prepared_rust,otelc.rust_supervisor,ci.rust_telemetry,ci.histogram_observation -m unittest discover -s tests -p 'test_rust_*.py' -v
 	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/ci/rust_telemetry.py' --fail-under=80
+	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/ci/histogram_observation.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_compiler.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_build.py' --fail-under=80
 	$(PYTHON) -m coverage report --data-file=build/rust-public.coverage --include='*/otelc/rust_owned_build.py' --fail-under=80
@@ -226,6 +229,7 @@ test: java-build node-observer node-http native-check native-launch-check
 	$(PYTHON) -m coverage report --include='*/otelc/prepared_rust.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/rust_supervisor.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/ci/rust_telemetry.py' --fail-under=80
+	$(PYTHON) -m coverage report --include='*/ci/histogram_observation.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/rust_launch.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/rust_benchmark.py' --fail-under=80
 	$(PYTHON) -m coverage report --include='*/otelc/benchmark_cleanup.py' --fail-under=80
