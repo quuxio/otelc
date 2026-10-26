@@ -24,7 +24,7 @@ Native launch also retains the selected interpreter's pre-site executable identi
 
 The [native input observer](docs/python-input-journal.md#evidence-and-failure-boundary) also retains ordinary raw `FileIO` loader reads, including older CPython sourceless imports. Its tests compare original output, errors, file lifetimes, nested/concurrent reads and profiling metadata. This remains input evidence; compiler-origin and complete-source qualification are separate work.
 
-The [Go compiler/runtime foundation](docs/go-source.md) reuses the pinned official compile-time weaver and SDK, with private context hooks, configured function and weak lifetime probes, owned OTLP pipelines, health accounting and independent live metric controls. Public common-policy build/launch, benchmark and HTTP adapter delivery remain separate work. This foundation does not promote Go to a delivered language.
+The [Go source candidate](docs/go-source.md) supplies public policy-driven stock/instrumented builds and compiler-free owned launch, reusing the official weaver and SDK foundation. It adds function selection, weak GC/resource observations, task/baggage and [HTTP context](docs/go-http.md), with independent live metric controls and retained health. [Paired benchmarks](docs/benchmarks.md) compare the stock binary and four live metric states, retaining separate application/supervisor CPU and RSS without double-counting the embedded SDK. Fresh delivery checks, broader source/dependency profiles and independent language qualification remain work; `plan` keeps Go in `remaining`.
 
 The [LLVM compiler component](docs/llvm-backend.md) is a candidate for original C/C++ compilation and a separate ordinary IR example. It preserves tested exception cleanup and applies common function selection. Its explicit registered profile supplies selected function addresses and UTF-8 names before ordinary application initialisers. The [native function SDK engine](docs/native-functions.md) now connects compiler-inserted calls in unedited C/C++ fixtures to actual SDK spans and call/error/duration metrics, with SDK context restoration and independent metric gates. The native launch candidate below adds generated bootstrap and OTLP export; native task/service propagation remains work. The [public C++ lifetime candidate](docs/native-public-lifetimes.md) supplies the supported automatic construction/destruction profile.
 
@@ -37,6 +37,8 @@ The [native prepared-launch candidate](docs/native-prepared.md) exposes versione
 The [C++ lifetime semantics component](docs/native-lifetimes.md) uses official Clang AST/type/USR APIs to inventory construction and variable materialisation without source edits. The [object probe component](docs/native-object-probes.md) connects selected non-trivial construction/destruction to actual SDK lifetime spans and metrics in unchanged internal fixtures. The [public lifetime candidate](docs/native-public-lifetimes.md) connects those probes and the [launcher SDK bridge](docs/native-object-sdk.md) to common-policy build/preparation, actual OTLP export, live gates and object health. Broader boundaries, performance/dashboard evidence and independent language qualification remain work.
 
 The explicit [native build-3 context](docs/native-build-context.md) adds per-unit compiler flags/directories, private VFS inputs, main-symbol rename and an uninstrumented observation driver. It reuses the common policy and owned launch controls. Automatic build discovery and generated-provider qualification remain work.
+
+The [native paired benchmark candidate](docs/native-benchmarks.md) compares equivalent C/C++ applications against direct stock baselines and all four live metric states. It retains actual CPU/RSS, owned shutdown and SDK loss/export checks, using the shared report and Grafana format. C++ lifetime cost can be compared under a separate common policy; C resource lifetimes and independent benchmark qualification remain work.
 
 ## Java example and Grafana
 
@@ -59,7 +61,7 @@ Run the paired benchmark and open [Grafana comparison](http://localhost:3001/d/o
 make benchmark
 ```
 
-The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript and Python runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
+The benchmark uses [one policy](examples/otelc.toml), validates checksums, retains plain and four live-state samples, and exports driver measurements with the official Python SDK. Java also retains actual JVM CPU/RSS windows, including its embedded SDK, using the shared report format. Raw reports are under `build/benchmarks/`. Failed runs retain available evidence and report the first error, followed by any cleanup failures. The [benchmark guide](docs/benchmarks.md) shows how to group Java, JavaScript, Microsoft TypeScript, Python, C and C++ runs under one Grafana comparison ID. Other languages follow as their adapters are implemented; missing languages are not fabricated.
 
 ## Collection, emission and lifetimes
 
@@ -109,6 +111,8 @@ The separate [private-handle compiler component](docs/java-handle-witness.md) bi
 ```sh
 make check
 ```
+
+CI runs for pull requests against any base branch, including stacked language work. Linux, macOS and Sonar check out the same exact PR head; a manually dispatched branch run remains separate from PR-specific analysis. The protected main checks and component coverage floors still apply before merge.
 
 The full check also requires LLVM 22, CMake, Ninja, Protobuf with its compiler, and libcurl development headers/libraries. CI installs these dependencies. It builds and exercises the native HTTP runtime, rejects skipped launcher tests and enforces the component coverage floors; see [native launch checks](docs/native-launch.md#focused-checks).
 

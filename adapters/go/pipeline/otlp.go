@@ -37,21 +37,36 @@ func (o HTTPOptions) validate() error {
 		u.Fragment != "" || u.Opaque != "" || o.Timeout <= 0 {
 		return errors.New("invalid resolved OTLP HTTP endpoint or timeout")
 	}
+	return validateHeaders(o.Headers)
+}
+
+func headerName(name string) bool {
+	if name == "" || strings.ContainsAny(name, " ()<>@,;:\\\"/[]?={}\t\r\n") {
+		return false
+	}
+	for _, character := range []byte(name) {
+		if character < 33 || character > 126 {
+			return false
+		}
+	}
+	return true
+}
+
+func headerValue(value string) bool {
+	for _, character := range []byte(value) {
+		if character < 32 && character != '\t' || character == 127 {
+			return false
+		}
+	}
+	return true
+}
+
+func validateHeaders(headers map[string]string) error {
 	size := 0
-	for name, value := range o.Headers {
+	for name, value := range headers {
 		size += len(name) + len(value)
-		if name == "" || strings.ContainsAny(name, " ()<>@,;:\\\"/[]?={}\t\r\n") {
+		if !headerName(name) || !headerValue(value) {
 			return errors.New("invalid resolved OTLP HTTP header")
-		}
-		for _, character := range []byte(name) {
-			if character < 33 || character > 126 {
-				return errors.New("invalid resolved OTLP HTTP header")
-			}
-		}
-		for _, character := range []byte(value) {
-			if character < 32 && character != '\t' || character == 127 {
-				return errors.New("invalid resolved OTLP HTTP header")
-			}
 		}
 	}
 	if size > 8192 {

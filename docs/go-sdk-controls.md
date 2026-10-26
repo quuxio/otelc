@@ -1,6 +1,6 @@
 # Go SDK metric controls
 
-This component wraps the pinned official OpenTelemetry Go metric API/SDK 1.47.0. It supplies separate live collection and emission switches for an isolated otelc-owned push pipeline. It does not yet supply a public Go launch/control command or a source-free application adapter. `plan` continues to list Go as remaining.
+This component wraps the pinned official OpenTelemetry Go metric API/SDK 1.47.0. It supplies separate live collection and emission switches for an isolated otelc-owned push pipeline. The [source candidate](go-source.md) connects it to public application builds/launch, function and lifetime observations and common controls. `plan` lists Go as a candidate and keeps it in `remaining` pending complete language qualification.
 
 ## Runtime candidate dependencies
 
@@ -38,6 +38,10 @@ make go-check
 The target checks formatting and `go vet`, runs real SDK tests with the race detector and locked module requirements, and requires at least 80% statement coverage overall and for each production file. This foundation checks the control/pipeline/probe/runtime packages. It writes `build/go-coverage.out` and repository-relative `build/go-sonar-coverage.out` for [Sonar's Go coverage importer](https://docs.sonarsource.com/sonarqube-server/analyzing-source-code/test-coverage/go-test-coverage). `make check` includes these components. The general source inspector and public HTTP adapter have separate delivery work.
 
 Tests cover all four initial states, cached synchronous instruments, constructor and registered observable callbacks, callback metadata/errors/unregistration, disabling during a callback, real periodic-reader retention, application-provider isolation, export cancellation/barriers, exporter errors/shutdown and trace continuity. A delta-temporality negative control loses the paused counter observations; cumulative mode must preserve them.
+
+The focused `Go owned foundation` workflow runs these same race and per-file coverage gates on Linux and macOS, plus the common-policy health/context/configuration record tests. It checks the 8 GiB storage floor before SDK compilation, uses explicit Bash pipeline failure handling and retains only small dependency/test/coverage records for 14 days. Compiler caches and binaries are excluded. This supplements the full repository and Sonar gates; it does not qualify public weaving, benchmarks or the whole language.
+
+The detach-helper and telemetry fixtures retain their own `go.sum` files without changing their existing `go.mod` requirements. The workflow downloads and verifies each complete module graph, reads it in readonly mode and refuses any checksum or module-file changes. These dependency checks do not compile the generated fixture helpers or qualify instrumentation; those remain separate compiler/runtime checks.
 
 ## Remaining Go integration
 

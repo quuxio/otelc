@@ -12,7 +12,7 @@ timeout_ms = 1000
 shutdown_timeout_ms = 10000
 
 [sources]
-include = ["examples/**"]
+include = ["examples/**", "**/*.go"]
 exclude = ["**/generated/**"]
 
 [functions]
@@ -36,7 +36,7 @@ http = false
 enabled = true
 include = ["*WorkItem", "*work_item"]
 exclude = []
-release_methods = ["close"]
+release_methods = ["close", "Close"]
 max_live = 1000000
 
 [benchmark]

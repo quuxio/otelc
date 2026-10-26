@@ -53,17 +53,7 @@ func (s *receiver) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.metricRequests++
-		for _, res := range request.ResourceMetrics {
-			for _, scope := range res.ScopeMetrics {
-				for _, m := range scope.Metrics {
-					if m.Name == "otelc.function.calls" {
-						for _, p := range m.GetSum().DataPoints {
-							s.calls = p.GetAsInt()
-						}
-					}
-				}
-			}
-		}
+		s.receiveMetrics(&request)
 	case "/v1/traces":
 		var request traceproto.ExportTraceServiceRequest
 		if proto.Unmarshal(data, &request) != nil {
@@ -80,6 +70,20 @@ func (s *receiver) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-protobuf")
+}
+
+func (s *receiver) receiveMetrics(request *metricproto.ExportMetricsServiceRequest) {
+	for _, res := range request.ResourceMetrics {
+		for _, scope := range res.ScopeMetrics {
+			for _, m := range scope.Metrics {
+				if m.Name == "otelc.function.calls" {
+					for _, p := range m.GetSum().DataPoints {
+						s.calls = p.GetAsInt()
+					}
+				}
+			}
+		}
+	}
 }
 
 func (s *receiver) snapshot() (int, int, int64) {
@@ -134,32 +138,10 @@ func TestRuntimeStartupOffAndEveryLiveStateWithIndependentTraces(t *testing.T) {
 			cfg.Collection, cfg.Emission = initial, initial
 			globalMeter, globalTracer := otel.GetMeterProvider(), otel.GetTracerProvider()
 			r := startRuntime(t, cfg)
-			for _, step := range []struct {
-				command              string
-				collection, emission bool
-			}{
+			for _, step := range []runtimeMetricStep{
 				{"on", true, true}, {"emission off", true, false}, {"collection off", false, false}, {"emission on", false, true}, {"collection on", true, true}, {"off", false, false},
 			} {
-				state := command(t, r, step.command)
-				if state["collection"] != step.collection || state["emission"] != step.emission || state["pid"] != float64(os.Getpid()) {
-					t.Fatal("wrong live state or PID")
-				}
-				metricsBefore, tracesBefore, callsBefore := sink.snapshot()
-				invoke(r)
-				if response := command(t, r, "flush"); response["error"] != nil {
-					t.Fatal("flush refused")
-				}
-				metricsAfter, tracesAfter, callsAfter := sink.snapshot()
-				if tracesAfter != tracesBefore+1 {
-					t.Fatal("metric state suppressed traces")
-				}
-				if step.collection && step.emission {
-					if metricsAfter != metricsBefore+1 || callsAfter <= callsBefore {
-						t.Fatal("enabled metrics missing")
-					}
-				} else if metricsAfter != metricsBefore {
-					t.Fatal("disabled metrics transmitted cached snapshot")
-				}
+				assertRuntimeMetricStep(t, r, sink, step)
 			}
 			health := command(t, r, "health")
 			if health["schema_version"] != float64(4) || health["source_complete"] != false || health["downstream_receipt"] != "unavailable" {
@@ -171,24 +153,58 @@ func TestRuntimeStartupOffAndEveryLiveStateWithIndependentTraces(t *testing.T) {
 			if otel.GetMeterProvider() != globalMeter || otel.GetTracerProvider() != globalTracer {
 				t.Fatal("changed global providers")
 			}
-			if err := r.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if err := r.Close(); err != nil {
-				t.Fatal(err)
-			}
-			var final map[string]any
-			data, err := os.ReadFile(filepath.Join(r.directory, "health.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if json.Unmarshal(data, &final) != nil || final["phase"] != "final" {
-				t.Fatal("missing final checkpoint")
-			}
-			if info, _ := os.Stat(filepath.Join(r.directory, "health.json")); info.Mode().Perm() != 0600 {
-				t.Fatal("public health permissions")
-			}
+			assertClosedRuntime(t, r)
 		})
+	}
+}
+
+func assertClosedRuntime(t *testing.T, r *Runtime) {
+	t.Helper()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var final map[string]any
+	data, err := os.ReadFile(filepath.Join(r.directory, "health.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if json.Unmarshal(data, &final) != nil || final["phase"] != "final" {
+		t.Fatal("missing final checkpoint")
+	}
+	if info, _ := os.Stat(filepath.Join(r.directory, "health.json")); info.Mode().Perm() != 0600 {
+		t.Fatal("public health permissions")
+	}
+}
+
+type runtimeMetricStep struct {
+	command              string
+	collection, emission bool
+}
+
+func assertRuntimeMetricStep(t *testing.T, r *Runtime, sink *receiver, step runtimeMetricStep) {
+	t.Helper()
+	state := command(t, r, step.command)
+	if state["collection"] != step.collection || state["emission"] != step.emission || state["pid"] != float64(os.Getpid()) {
+		t.Fatal("wrong live state or PID")
+	}
+	metricsBefore, tracesBefore, callsBefore := sink.snapshot()
+	invoke(r)
+	if response := command(t, r, "flush"); response["error"] != nil {
+		t.Fatal("flush refused")
+	}
+	metricsAfter, tracesAfter, callsAfter := sink.snapshot()
+	if tracesAfter != tracesBefore+1 {
+		t.Fatal("metric state suppressed traces")
+	}
+	if step.collection && step.emission {
+		if metricsAfter != metricsBefore+1 || callsAfter <= callsBefore {
+			t.Fatal("enabled metrics missing")
+		}
+	} else if metricsAfter != metricsBefore {
+		t.Fatal("disabled metrics transmitted cached snapshot")
 	}
 }
 
@@ -264,6 +280,58 @@ func TestRuntimeCloseWithIncompleteClientAndCancelledCommand(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatal("incomplete client stalled shutdown")
+	}
+}
+
+func TestControlCloseCancelsAnInFlightExporter(t *testing.T) {
+	seen, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if _, err := io.Copy(io.Discard, request.Body); err != nil {
+			t.Error(err)
+			return
+		}
+		select {
+		case seen <- struct{}{}:
+		default:
+		}
+		select {
+		case <-request.Context().Done():
+			select {
+			case cancelled <- struct{}{}:
+			default:
+			}
+		case <-release:
+		}
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
+	cfg := configuration(server.URL)
+	cfg.TracesEnabled = false
+	cfg.TimeoutMS = 5000
+	r := startRuntime(t, cfg)
+	invoke(r)
+	client, err := net.DialTimeout("tcp4", r.server.listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := json.NewEncoder(client).Encode(map[string]string{"token": r.server.token, "command": "flush"}); err != nil {
+		t.Fatal(err)
+	}
+	awaitControlSignal(t, seen, "flush never reached the exporter")
+	stopped := make(chan struct{})
+	go func() { r.server.close(); close(stopped) }()
+	awaitControlSignal(t, stopped, "control shutdown did not cancel the active command")
+	awaitControlSignal(t, cancelled, "control cancellation did not reach the HTTP exporter")
+}
+
+func awaitControlSignal(t *testing.T, signal <-chan struct{}, failure string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal(failure)
 	}
 }
 
