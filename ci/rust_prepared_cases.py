@@ -15,7 +15,7 @@ from otelc.config import Policy
 
 APPLICATION = r'''use std::io::{self,BufRead};
 #[used]
-#[cfg_attr(target_os="macos", unsafe(link_section="__DATA,__mod_init_func"))]
+#[cfg_attr(target_os="macos", unsafe(link_section="__DATA,__mod_init_func,mod_init_funcs"))]
 #[cfg_attr(not(target_os="macos"), unsafe(link_section=".init_array"))]
 static INITIALIZER: extern "C" fn() = initialize;
 extern "C" fn initialize(){if let Ok(path)=std::env::var("CTOR_MARKER"){
