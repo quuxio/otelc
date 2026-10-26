@@ -27,6 +27,7 @@ struct FunctionLimits {
   std::uint32_t active = 512;
   // Owned mode uses explicit probe parentage without SDK thread-local scopes.
   FunctionContext context = FunctionContext::ambient;
+  std::uint32_t contexts = 512;
 };
 
 struct FunctionStatus {
@@ -40,8 +41,18 @@ struct FunctionStatus {
   bool closed;
 };
 
+struct FunctionContextStatus {
+  std::uint64_t admitted;
+  std::uint64_t released;
+  std::uint64_t active;
+  std::uint64_t lost;
+  std::uint64_t invalid;
+  bool closing;
+  bool closed;
+};
+
 // Tooling owns this engine and its providers. Keep it alive until Close succeeds;
-// SDK scopes must be detached by the thread that entered their function.
+// SDK scopes and owned context leases must leave on their admitting threads.
 class FunctionRuntime {
  public:
   FunctionRuntime(std::shared_ptr<MetricState> state,
@@ -62,8 +73,14 @@ class FunctionRuntime {
   FunctionStatus Status() const;
   // Snapshot the selected function's explicit context without reading SDK TLS.
   opentelemetry::trace::SpanContext CurrentContext() const noexcept;
-  // Stop admission immediately. Existing calls can still leave on their owner
-  // threads; false means the caller must retain the engine and try again later.
+  // Tooling-only hand-off for owned mode. Copy immutable trace identity, never
+  // an application Span or SDK TLS scope. Tokens belong to this engine and must
+  // be detached on their attaching thread, after nested calls/contexts leave.
+  std::uint64_t AttachContext(const opentelemetry::trace::SpanContext &parent) noexcept;
+  bool DetachContext(std::uint64_t token) noexcept;
+  FunctionContextStatus ContextStatus() const;
+  // Stop admission immediately. Existing calls and contexts can still leave on
+  // their owner threads; false means the caller must retain the engine.
   bool Close();
 
  private:

@@ -1,0 +1,111 @@
+name: Native benchmark diagnostics
+on:
+  pull_request:
+    paths:
+      - 'adapters/native/**'
+      - 'native/llvm/**'
+      - 'otelc/native*.py'
+      - 'otelc/prepared_native.py'
+      - 'otelc/benchmark*.py'
+      - 'otelc/control.py'
+      - 'otelc/config.py'
+      - 'examples/c/BenchmarkApp.c'
+      - 'examples/cpp/BenchmarkApp.cpp'
+      - 'examples/otelc.toml'
+      - 'tests/test_native_benchmark.py'
+      - 'tests/test_java_integration.py'
+      - 'tests/test_capture_records.py'
+      - '.github/workflows/native-benchmarks.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-benchmarks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  native-benchmarks:
+    name: Native benchmark diagnostics (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      OTELC_NATIVE_BENCHMARK_CAPTURE: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: .:tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Install matched native tools
+        run: |
+          if [[ '${{ matrix.os }}' == ubuntu-24.04 ]]; then
+            bash ci/install_llvm22.sh
+            printf 'CC=/usr/lib/llvm-22/bin/clang\nCXX=/usr/lib/llvm-22/bin/clang++\nOTELC_LLVM_BIN=/usr/lib/llvm-22/bin\n' >> "$GITHUB_ENV"
+          else
+            brew install llvm@22 cmake ninja protobuf curl
+            printf 'CC=/opt/homebrew/opt/llvm@22/bin/clang\nCXX=/opt/homebrew/opt/llvm@22/bin/clang++\nOTELC_LLVM_BIN=/opt/homebrew/opt/llvm@22/bin\n' >> "$GITHUB_ENV"
+          fi
+      - name: Install locked Python checks
+        run: |
+          mkdir -p build/native-benchmark-diagnostics
+          git rev-parse HEAD > build/native-benchmark-diagnostics/head.txt
+          python3 -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required"'
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt -r requirements.txt
+      - name: Check capture and run actual stock and instrumented benchmarks
+        run: |
+          .venv/bin/python -m unittest test_capture_records.CaptureRecordTests test_capture_records.BenchmarkFailureCaptureTests -v
+          make native-benchmark-check PYTHON=.venv/bin/python 2>&1 | tee build/native-benchmark-diagnostics/tests.log
+          .venv/bin/python -m coverage json --data-file=build/native-benchmark.coverage -o build/native-benchmark-diagnostics/coverage.json
+          .venv/bin/python - <<'PY'
+          import json, re, unittest
+          from pathlib import Path
+          selected = unittest.defaultTestLoader.loadTestsFromName('test_native_benchmark').countTestCases()
+          text = Path('build/native-benchmark-diagnostics/tests.log').read_text()
+          matches = re.findall(r'Ran (\d+) tests in', text)
+          assert selected >= 10 and matches == [str(selected)] and '\nOK\n' in text and 'skipped=' not in text
+          Path('build/native-benchmark-diagnostics/tests-result.json').write_text(json.dumps({
+              'selected': selected, 'tests_run': int(matches[0]), 'skipped': 0, 'successful': True}) + '\n')
+          PY
+      - name: Retain exact source archive
+        if: always()
+        run: |
+          mkdir -p build/native-benchmark-diagnostics
+          git archive --format=tar --output build/native-benchmark-diagnostics/source.tar HEAD
+          git status --porcelain --untracked-files=no > build/native-benchmark-diagnostics/source-status.txt
+          test ! -s build/native-benchmark-diagnostics/source-status.txt
+      - name: Retain compact benchmark diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-benchmarks-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            build/native-benchmark-diagnostics/
+            build/native-benchmark-tests-*/**/otlp-*
+            build/native-benchmark-tests-*/**/failed-flush.json
+            build/native-benchmark-tests-*/**/agent.log
+            build/native-benchmark-tests-*/**/health.json
+            build/native-benchmark-tests-*/**/stderr.log
+            build/native-benchmark-tests-*/**/responses.jsonl
+            build/native-benchmark-tests-*/**/raw.jsonl
+            build/native-benchmark-tests-*/**/report.json
+            build/native-benchmark-tests-*/**/metric-finalization.json
+            build/native-benchmark-tests-*/**/native-execution.json
+            build/native-benchmark-tests-*/**/native-benchmark-execution.json
+            build/native-benchmark-tests-*/**/compiled/plain
+            build/native-benchmark-tests-*/**/compiled/instrumented
+            build/native-benchmark-tests-*/sdk/native-sdk-build.json
+            build/native-benchmark-tests-*/sdk/libotelc_native_runtime.so
+            build/native-benchmark-tests-*/sdk/libotelc_native_runtime.dylib
