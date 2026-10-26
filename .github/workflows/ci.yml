@@ -48,7 +48,7 @@ jobs:
           if-no-files-found: warn
           path: |
             build/native-benchmark-diagnostics/
-            build/native-benchmark-tests-*/**/otlp-*
+            build/native-benchmark-tests-*/*-otlp/otlp-*
             build/native-benchmark-tests-*/**/failed-flush.json
             build/native-benchmark-tests-*/**/agent.log
             build/native-benchmark-tests-*/**/health.json
@@ -104,7 +104,7 @@ jobs:
           if-no-files-found: warn
           path: |
             build/native-benchmark-diagnostics/
-            build/native-benchmark-tests-*/**/otlp-*
+            build/native-benchmark-tests-*/*-otlp/otlp-*
             build/native-benchmark-tests-*/**/failed-flush.json
             build/native-benchmark-tests-*/**/agent.log
             build/native-benchmark-tests-*/**/health.json
