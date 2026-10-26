@@ -1,4 +1,4 @@
-"""Retain bounded OTLP entities and preserve benchmark control failures."""
+"""Retain bounded original HTTP entities before content/protobuf decoding."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
