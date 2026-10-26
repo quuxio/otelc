@@ -83,6 +83,9 @@ jobs:
             build/rust-runtime/tools-case/tools/*.json
             build/rust-runtime/tools-case/tools/*.stderr
             build/rust-runtime/public-case/*.json
+            build/rust-runtime/public-case/test_owned_build_wraps_both_genuine_profiles_without_changing_originals/**/rust-owned-build.json
+            build/rust-runtime/public-case/test_owned_build_wraps_both_genuine_profiles_without_changing_originals/**/gate/*.json
+            build/rust-runtime/public-case/test_owned_build_wraps_both_genuine_profiles_without_changing_originals/**/gate/otelc-exec-gate
             build/rust-runtime/public-case/decoded-*.protobuf
             build/rust-runtime/public-case/application/*.rs
             build/rust-runtime/public-case/lifetime-application/*.rs

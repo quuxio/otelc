@@ -20,6 +20,7 @@ from unittest import mock
 from ci.rust_compiler_cases import APPLICATION, WORK
 from otelc import control, health, native_benchmark, native_build, native_gate, native_launch
 from otelc import rust_build, rust_compiler, rust_launch, rust_benchmark
+from otelc import rust_owned_build
 from otelc.config import Policy
 from test_java_integration import Capture
 
@@ -366,6 +367,18 @@ class RustPublicExecutionTests(unittest.TestCase):
                                     rb'\1(<thread-id>)\2', raw)
         self.assertEqual(count, 2)
         return normalized
+
+    def test_owned_build_wraps_both_genuine_profiles_without_changing_originals(self) -> None:
+        self.runtime.mkdir(mode=0o700)
+        for index, (source, current) in enumerate(((self.built, self.policy), self.lifetime_build())):
+            before = native_gate.identity(source.directory / rust_build.MANIFEST)
+            owned = rust_owned_build.build(current, source, self.runtime / ('profile-' + str(index)))
+            with mock.patch('subprocess.Popen', side_effect=AssertionError('verification cannot compile or launch')):
+                self.assertEqual(rust_owned_build.read(owned.directory, current, source=source), owned)
+                self.assertEqual(rust_owned_build.read(owned.directory, current), owned)
+                self.assertEqual(rust_owned_build.verify(owned, current), owned.manifest())
+            self.assertEqual(native_gate.identity(source.directory / rust_build.MANIFEST), before)
+            self.assertIs(owned.manifest()['source_complete'], False)
 
     def exercise_public_lifetimes(self, built: rust_build.Build, current: Policy,
                                   expected_error: bytes) -> None:
