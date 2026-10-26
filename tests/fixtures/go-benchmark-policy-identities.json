@@ -1,0 +1,83 @@
+{
+  "origin": {
+    "run": 40294616050,
+    "artifact": 12636719963,
+    "zip_sha256": "1ed0744438bf752651ebd3a630992aff05849a1ec2c14ad0dd25015e5fb8e2aa"
+  },
+  "policy": {
+    "benchmark": {
+      "iterations": 10000,
+      "samples": 15,
+      "warmup": 5
+    },
+    "context": {
+      "http": false,
+      "tasks": false
+    },
+    "export": {
+      "endpoint": "http://127.0.0.1:44809",
+      "interval_ms": 1000,
+      "shutdown_timeout_ms": 10000,
+      "timeout_ms": 1000
+    },
+    "functions": {
+      "exclude": [
+        "*excluded*"
+      ],
+      "include": [
+        "*workload*"
+      ]
+    },
+    "languages": [
+      "java",
+      "typescript",
+      "javascript",
+      "python",
+      "go",
+      "c",
+      "cpp",
+      "rust"
+    ],
+    "lifetimes": {
+      "enabled": false,
+      "exclude": [],
+      "include": [],
+      "max_live": 4096,
+      "release_methods": [
+        "close"
+      ]
+    },
+    "metrics": {
+      "collection": false,
+      "emission": false,
+      "histogram_boundaries_seconds": [
+        1e-06,
+        1e-05,
+        0.0001,
+        0.001,
+        0.01,
+        0.1,
+        1.0
+      ]
+    },
+    "resource": {
+      "service_name": "otelc-examples"
+    },
+    "schema_version": 3,
+    "sources": {
+      "exclude": [
+        "**/generated/**"
+      ],
+      "include": [
+        "examples/**",
+        "**/*.go"
+      ]
+    },
+    "traces": {
+      "enabled": true,
+      "sample_ratio": 0.01
+    }
+  },
+  "runtime_policy_sha256": "0f5a7bdda959b3864dc1f32906e09f8b3cdf72da40c54e20f76c53feddcd7352",
+  "report_config_sha256": "2b1ace9baa5c62d3d6bf62f3596b034170da2e68fe1f102c457b11cdba969856"
+}
