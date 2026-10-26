@@ -22,6 +22,7 @@ from otelc import prepared_python as python_adapter
 from otelc import python_benchmark, python_recipe, native_benchmark
 from otelc import native_launch
 from otelc import native_build, prepared_native, rust_compiler, rust_build, rust_launch, rust_benchmark
+from otelc import rust_owned_build, prepared_rust
 from otelc.config import LANGUAGES, Policy
 
 
@@ -93,6 +94,17 @@ def main() -> int:
     native_protocol_parser.add_argument('--build-version', type=int, choices=(2, 3, 4, 5), default=2)
     rust_tools = commands.add_parser('rust-tools', help='build the pinned original-source Rust compiler and private bridge')
     rust_tools.add_argument('--output', type=Path, required=True)
+    rust_protocol_parser = commands.add_parser('rust-protocols', help='describe explicit owned Rust formats without compiling')
+    rust_protocol_parser.add_argument('--source-build-version', type=int, choices=(1, 2), default=1)
+    rust_owned_parser = commands.add_parser('rust-own-build', help='bind an existing Rust build to the fixed exec gate')
+    rust_owned_parser.add_argument('--build', type=Path, required=True)
+    rust_owned_parser.add_argument('--output', type=Path, required=True)
+    rust_prepared_parser = commands.add_parser('rust-prepared-run', help='candidate: prepare or run an owned Rust build')
+    rust_prepared_parser.add_argument('--build', type=Path, required=True)
+    rust_prepared_parser.add_argument('--runtime', type=Path, required=True)
+    rust_prepared_parser.add_argument('--plain', action='store_true')
+    rust_prepared_parser.add_argument('--prepare-only', action='store_true')
+    rust_prepared_parser.add_argument('arguments', nargs=argparse.REMAINDER)
     rust_build_parser = commands.add_parser('rust-build', help='candidate: retain stock and woven original-source Rust applications')
     rust_build_parser.add_argument('--root', type=Path, required=True)
     rust_build_parser.add_argument('--entry', type=Path, required=True)
@@ -152,7 +164,17 @@ def main() -> int:
         if args.command == 'rust-tools':
             print(json.dumps(rust_compiler.build(args.output).manifest(), indent=2))
             return 0
+        if args.command == 'rust-protocols':
+            print(json.dumps(prepared_rust.protocols(source_build_version=args.source_build_version), indent=2))
+            return 0
         policy = Policy.load(args.config)
+        if args.command == 'rust-own-build':
+            source = rust_build.read(args.build, policy)
+            print(json.dumps(rust_owned_build.build(policy, source, args.output).manifest(), indent=2))
+            return 0
+        if args.command == 'rust-prepared-run':
+            return prepared_rust.run(policy, args.runtime, build_directory=args.build, plain=args.plain,
+                prepare_only=args.prepare_only, arguments=application_arguments(args.arguments))
         if args.command == 'rust-build':
             value = rust_build.build(policy, args.root, args.entry, args.output,
                 tools_directory=args.tools, sdk_directory=args.sdk_build, optimisation=args.optimisation)

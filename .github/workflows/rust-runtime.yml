@@ -5,6 +5,8 @@ on:
       - 'native/rust/**'
       - 'adapters/native/**'
       - 'otelc/rust*.py'
+      - 'otelc/prepared_rust.py'
+      - 'ci/rust_prepared_cases.py'
       - 'otelc/health.py'
       - 'otelc/native_benchmark.py'
       - 'otelc/benchmark_cleanup.py'
@@ -83,6 +85,21 @@ jobs:
             build/rust-runtime/tools-case/tools/*.json
             build/rust-runtime/tools-case/tools/*.stderr
             build/rust-runtime/public-case/*.json
+            build/rust-runtime/public-case/prepared-original/*.rs
+            build/rust-runtime/public-case/prepared-compiled/*.json
+            build/rust-runtime/public-case/prepared-compiled/*.stderr
+            build/rust-runtime/public-case/prepared-owned/*.json
+            build/rust-runtime/public-case/prepared-owned/gate/*.json
+            build/rust-runtime/public-case/prepared-owned/gate/otelc-exec-gate
+            build/rust-runtime/public-case/prepared-drop-owned/*.json
+            build/rust-runtime/public-case/prepared-drop-owned/gate/*.json
+            build/rust-runtime/public-case/prepared-drop-owned/gate/otelc-exec-gate
+            build/rust-runtime/public-case/prepared-cli-owned/*.json
+            build/rust-runtime/public-case/prepared-cli-owned/gate/*.json
+            build/rust-runtime/public-case/prepared-cli-owned/gate/otelc-exec-gate
+            build/rust-runtime/public-case/prepared-cli.ctor
+            build/rust-runtime/public-case/test_prepared*/*/rust-*.json
+            build/rust-runtime/public-case/test_prepared*/*.ctor
             build/rust-runtime/public-case/test_owned_build_wraps_both_genuine_profiles_without_changing_originals/**/rust-owned-build.json
             build/rust-runtime/public-case/test_owned_build_wraps_both_genuine_profiles_without_changing_originals/**/gate/*.json
             build/rust-runtime/public-case/test_owned_build_wraps_both_genuine_profiles_without_changing_originals/**/gate/otelc-exec-gate

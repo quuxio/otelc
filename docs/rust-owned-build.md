@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This component binds an existing standalone Rust source build to the fixed native pre-exec gate. It is the build boundary for the planned owned Rust launcher. It does not yet supply preparation, a supervisor, host release or an execution record. The existing direct `rust-run` command is unchanged. No application source changes are required.
+This component binds an existing standalone Rust source build to the fixed native pre-exec gate. It is the build boundary for the separate [prepared Rust execution candidate](rust-prepared.md), which supplies preparation, a supervisor, host release and an execution record. The existing direct `rust-run` command is unchanged. No application source changes are required.
 
 The separate `rust-owned-build.json` envelope has schema1, kind `otelc.rust.owned-build` and profile `rust1981-owned-standalone-v1`. It retains the original `rust-source-build.json` identity and source profile: sync-v1/source-build1 or drop-v2/source-build2. Original source, compiler, bridge, SDK, inventory and product records remain in their existing locations. The envelope does not copy or rewrite them, and `source_complete=false` remains explicit.
 
@@ -24,4 +24,4 @@ Reading or verifying an envelope starts no compiler or application. Pass the cal
 
 `make rust-owned-check` runs bounded literal envelope/refusal tests without compiling applications. `make rust-public-check` also runs a genuine compiler/SDK test for both original source profiles. Each target has a separate 80% component coverage floor. The genuine test builds the gate, then prohibits process creation while reading and verifying it. Hosted records retain the envelopes, gate records and small gate images. Literal tests alone do not establish a genuine build or execution capability.
 
-The prepared supervisor, actual pre-exec OS ownership, host release, final health, raw downstream telemetry and independent oteleq execution qualification remain required. Cargo/build scripts/dependencies, general ownership/async, complete compiler/sysroot closure and shipping equivalence remain separate open requirements.
+The separate prepared candidate still requires genuine runtime checks, raw downstream telemetry and independent oteleq execution qualification. Cargo/build scripts/dependencies, general ownership/async, complete compiler/sysroot closure and shipping equivalence remain separate open requirements.

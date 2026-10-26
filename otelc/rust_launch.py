@@ -6,9 +6,9 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
-from typing import Any
+from typing import Any, Callable
 
-from otelc import health, native_launch, rust_build, rust_compiler
+from otelc import health, native_gate, native_launch, rust_build, rust_compiler
 from otelc.config import Policy
 from otelc import python_launch_files as files
 
@@ -16,6 +16,27 @@ from otelc import python_launch_files as files
 def start(built: rust_build.Build, policy: Policy, runtime: Path, *, plain: bool = False,
           arguments: tuple[str, ...] = (), **streams: Any) -> subprocess.Popen[bytes]:
     """Run either fixed executable with literal arguments and independent live gates."""
+    return _start(built, policy, runtime, plain, arguments, subprocess.Popen, streams)
+
+
+def start_waiting(built: rust_build.Build, policy: Policy, runtime: Path, gate: native_gate.Product, *,
+                  plain: bool = False, arguments: tuple[str, ...] = (),
+                  wait_ms: int = 30000, **streams: Any) -> native_gate.Waiting:
+    """Start the fixed pre-exec gate; the host must release the image separately."""
+    if type(wait_ms) is not int or not 1 <= wait_ms <= 300000:
+        raise ValueError('invalid Rust gate wait budget')
+
+    def spawn(command: list[str], *, cwd: str, env: dict[str, str],
+              pass_fds: tuple[int, ...] = (), **channels: Any) -> native_gate.Waiting:
+        return native_gate.start(gate, tuple(command), cwd=Path(cwd), environment=env,
+                                 pass_fds=pass_fds, wait_ms=wait_ms, **channels)
+
+    return _start(built, policy, runtime, plain, arguments, spawn, streams)
+
+
+def _start(built: rust_build.Build, policy: Policy, runtime: Path, plain: bool,
+           arguments: tuple[str, ...], spawn: Callable[..., Any], streams: dict[str, Any]) -> Any:
+    """Share both fixed invocations and translated SDK plans with the direct API."""
     metadata = rust_build.verify(built, policy)
     if (type(plain) is not bool or type(arguments) is not tuple or len(arguments) > 4096
             or any(type(arg) is not str or '\0' in arg for arg in arguments)
@@ -30,7 +51,7 @@ def start(built: rust_build.Build, policy: Policy, runtime: Path, *, plain: bool
                    if not key.startswith(('OTEL_', 'OTELC_'))}
     command = [str(built.directory / ('plain' if plain else 'instrumented')), *arguments]
     if plain:
-        return subprocess.Popen(command, cwd=metadata['root'], env=environment, **streams)
+        return spawn(command, cwd=metadata['root'], env=environment, **streams)
     data = policy.data
     settings = dict(data['export']) | {'service_name': data['resource']['service_name'],
         'endpoint': data['export']['endpoint'].rstrip('/'),
@@ -47,8 +68,7 @@ def start(built: rust_build.Build, policy: Policy, runtime: Path, *, plain: bool
         with os.fdopen(descriptor, 'wb', closefd=False) as stream:
             stream.write(json.dumps(plan).encode())
         environment['OTELC_NATIVE_PLAN_FD'] = str(descriptor)
-        return subprocess.Popen(command, cwd=metadata['root'], env=environment,
-                                pass_fds=(descriptor,), **streams)
+        return spawn(command, cwd=metadata['root'], env=environment, pass_fds=(descriptor,), **streams)
     finally:
         os.close(descriptor)
 
