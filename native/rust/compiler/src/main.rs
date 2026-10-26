@@ -15,6 +15,7 @@ mod drops;
 mod hooks;
 mod instrument;
 mod lifetimes;
+mod modules;
 mod request;
 
 use anyhow::{Context, Result, bail};
@@ -206,6 +207,9 @@ impl Callbacks for Probe {
     }
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         let result = (|| -> Result<()> {
+            if request().mode == "module-inspect" {
+                return modules::publish(tcx);
+            }
             if request().mode == "lifetime-inspect" {
                 return lifetimes::publish(tcx);
             }

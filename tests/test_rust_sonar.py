@@ -25,7 +25,8 @@ class RustAnalysisTests(unittest.TestCase):
                      'ci/rust_compiler_cases.py', 'ci/check_rust_compiler.py', 'ci/rust_sonar.py',
                      'otelc/health.py', 'tests/test_rust_drop_health.py', 'ci/rust_lifetime_cases.py',
                      'ci/rust_drop_cases.py',
-                     'otelc/rust_lifetimes.py', 'tests/test_rust_lifetimes.py'):
+                     'otelc/rust_lifetimes.py', 'tests/test_rust_lifetimes.py',
+                     'ci/rust_module_cases.py', 'otelc/rust_modules.py', 'tests/test_rust_modules.py'):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('// original source\n' * 10)

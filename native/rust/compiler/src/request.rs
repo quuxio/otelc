@@ -48,8 +48,10 @@ impl Request {
 
     fn profile(&self) -> bool {
         if self.schema_version == 1 {
-            return matches!(self.mode.as_str(), "inspect" | "weave" | "lifetime-inspect")
-                && self.lifetimes.is_none()
+            return matches!(
+                self.mode.as_str(),
+                "inspect" | "weave" | "lifetime-inspect" | "module-inspect"
+            ) && self.lifetimes.is_none()
                 && self.lifetime_bodies.is_none();
         }
         let Some(bodies) = &self.lifetimes else {
