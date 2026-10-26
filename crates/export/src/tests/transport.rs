@@ -117,3 +117,18 @@ fn trace_acknowledgements_retries_and_partial_rejection_are_signal_specific() {
     .is_err());
     assert_eq!(handle.join().unwrap(), 1);
 }
+
+#[test]
+fn transport_keeps_verification_and_removes_compromised_emsign_root() {
+    let agent = transport_agent(Duration::from_secs(1));
+    let tls = agent.config().tls_config();
+    assert!(!tls.disable_verification());
+    assert!(matches!(tls.root_certs(), ureq::tls::RootCerts::WebPki));
+    let roots = webpki_roots::TLS_SERVER_ROOTS;
+    let includes = |name: &[u8]| roots.iter().any(|root| {
+        root.subject.as_ref().windows(name.len()).any(|value| value == name)
+    });
+    assert!(roots.len() > 100, "do not empty the trust store to remove one compromised chain");
+    assert!(includes(b"emSign Root CA - G1"));
+    assert!(!includes(b"emSign ECC Root CA - G3"));
+}

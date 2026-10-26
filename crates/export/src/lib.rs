@@ -265,6 +265,15 @@ pub fn send_traces(
 ) -> Result<()> {
     send_signal(endpoint, headers, payload, timeout, true)
 }
+fn transport_agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build()
+        .into()
+}
+
 fn send_signal(
     endpoint: &str,
     headers: &BTreeMap<String, String>,
@@ -278,12 +287,7 @@ fn send_signal(
         if remaining.is_zero() {
             bail!("OTLP retry deadline exceeded");
         }
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(remaining))
-            .http_status_as_error(false)
-            .max_redirects(0)
-            .build()
-            .into();
+        let agent = transport_agent(remaining);
         let mut request = agent
             .post(endpoint)
             .header("Content-Type", "application/x-protobuf");

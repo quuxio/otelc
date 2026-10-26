@@ -14,3 +14,6 @@ httpdate = "1"
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+webpki-roots = "1"

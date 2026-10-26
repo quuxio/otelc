@@ -754,6 +754,7 @@ dependencies = [
  "quux-otelc-config",
  "serde_json",
  "ureq",
+ "webpki-roots",
 ]
 
 [[package]]
