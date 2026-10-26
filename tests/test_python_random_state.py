@@ -179,7 +179,7 @@ shutdown_timeout_ms=5000
                 report = json.loads((runtime / 'sdk/python-sdk-status.json').read_text())
                 self.assertEqual((report['phase'], report['sdk_phase']), ('closed', 'closed'))
                 self.assertEqual(report['producer']['function_completions'], 3)
-                self.assertEqual(report['producer']['runtime_losses'], {})
+                self.assertEqual(report['producer']['runtime_losses'], {'incomplete': 0})
                 self.assertEqual(report['span_accounting']['sdk_exported'], 3 if traces else 0)
                 self.assertEqual(report['span_accounting']['queue_dropped'], 0)
                 self.assertEqual(hashlib.sha256(self.source.read_bytes()).hexdigest(), original)

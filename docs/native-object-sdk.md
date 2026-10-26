@@ -10,6 +10,8 @@ Developers add no imports, probes or bootstrap code. The integration test compil
 
 Successful constructor probes admit observations with the active selected function context. Destructor entry ends the lifetime interval; destructor exit separately records whether an exception escaped. Destruction on another thread does not require a matching thread-local function frame. The engine keeps metadata, not strong application object references.
 
+Object admission, destructor entry/exit, censored engine shutdown and the exported object probe ABI preserve the calling thread's `errno`. The outer ABI guard also covers SDK context lookup before engine admission. Component regressions deliberately change `errno` during span creation and export, including recursive refusals and unwinding, with each metric gate enabled and disabled independently.
+
 Shutdown first stops control requests and waits for function frames. It then closes the object engine before flushing and shutting down SDK exporters. Objects that remain live become `shutdown_censored` observations, with incomplete counters. They are never reported as destroyed. If a drain cannot finish within its deadline, health continues to report that boundary; provider storage remains alive for the draining thread.
 
 An enabled bridge adds `object_accounting` to native runtime health: `types`, `admitted`, `completed`, `live`, `destroying`, `ending`, `censored`, `lost`, `duplicates` and `invalid` are decimal counters; `closing` and `closed` are booleans. The reader checks the complete field set and permits it only for C++. Existing function-only launches retain their previous health fields.
