@@ -101,6 +101,11 @@ go-check:
 	awk 'NR>1 {split($$1, p, ":"); total[p[1]]+=$$2; if ($$3>0) hit[p[1]]+=$$2} END {for (file in total) {files++; percent=100*hit[file]/total[file]; printf "%s: %.2f%% statements\n", file, percent; if (percent<80) failed=1} if (files!=3 || failed) exit 1}' build/go-coverage.out
 	sed 's|^io\.quux\.otelc/go/|adapters/go/|' build/go-coverage.out > build/go-sonar-coverage.out
 
+.PHONY: python-random-state-check
+python-random-state-check:
+	$(PYTHON) -c 'import shutil; assert shutil.disk_usage(".").free >= 8 * 1024**3, "at least 8 GiB required for native public-launch checks"'
+	PYTHONPATH="$(CURDIR)/tests$${PYTHONPATH:+:$${PYTHONPATH}}" $(PYTHON) -B -m unittest test_python_random_state -v
+
 java-build:
 	$(MAVEN) -q -f adapters/java/pom.xml -DskipTests package
 
