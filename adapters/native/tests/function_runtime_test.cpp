@@ -659,9 +659,10 @@ void InvalidInputs() {
 }
 
 void EntryAndCompletionPreserveApplicationErrno() {
-  for (bool named : {false, true}) for (int unwinding : {0, 1}) {
+  for (bool named : {false, true}) for (bool collection : {false, true})
+      for (bool emission : {false, true}) for (int unwinding : {0, 1}) {
     bool created = false, exported = false;
-    World world;
+    World world(collection, emission);
     auto engine = world.Engine(); Register(*engine);
     world.span_sink->create_callback = [&] { created = true; errno = ERANGE; };
     world.span_sink->callback = [&] {
@@ -669,6 +670,8 @@ void EntryAndCompletionPreserveApplicationErrno() {
       errno = EOVERFLOW;
       // Refused recursive probes must preserve the callback's own error too.
       assert(engine->EnterNamed("exporter-reentry") == 0 && errno == EOVERFLOW);
+      assert(!engine->Enter(&inner_address) && errno == EOVERFLOW);
+      assert(!engine->Leave(42, 0) && errno == EOVERFLOW);
     };
     errno = EINTR;
     auto token = named ? engine->EnterNamed("errno.rs::workload") : engine->Enter(&outer_address);
@@ -678,6 +681,8 @@ void EntryAndCompletionPreserveApplicationErrno() {
     errno = ECHILD;
     assert(!engine->Leave(token, unwinding) && errno == ECHILD);
     assert(!engine->EnterNamed("") && errno == ECHILD);
+    assert(!engine->Enter(nullptr) && errno == ECHILD);
+    assert(engine->Leave(0, 0) && errno == ECHILD);
     assert(!engine->Status().active && engine->Close());
   }
 }
@@ -773,34 +778,6 @@ bool WideSelectionKeepsEachSeriesAndSecondBuckets() {
       labels["otelc.function.duration"].size(), overflow, buckets);
   return !overflow && buckets && labels.size() == 3
       && std::all_of(labels.begin(), labels.end(), [&](const auto &row) { return row.second.size() == addresses.size(); });
-}
-
-void EntryAndCompletionPreserveApplicationErrno() {
-  for (bool collection : {false, true}) for (bool emission : {false, true}) {
-    for (int unwinding : {0, 1}) {
-      bool created = false, exported = false;
-      World world(collection, emission);
-      auto engine = world.Engine(); Register(*engine);
-      world.span_sink->create_callback = [&] { created = true; errno = ERANGE; };
-      world.span_sink->callback = [&] {
-        exported = true;
-        errno = EOVERFLOW;
-        // Refused recursive probes must preserve the callback's own error too.
-        assert(!engine->Enter(&inner_address) && errno == EOVERFLOW);
-        assert(!engine->Leave(42, 0) && errno == EOVERFLOW);
-      };
-      errno = EINTR;
-      auto token = engine->Enter(&outer_address);
-      assert(token && created && errno == EINTR);
-      errno = EDOM;
-      assert(engine->Leave(token, unwinding) && exported && errno == EDOM);
-      errno = ECHILD;
-      assert(!engine->Leave(token, unwinding) && errno == ECHILD);
-      assert(!engine->Enter(nullptr) && errno == ECHILD);
-      assert(engine->Leave(0, 0) && errno == ECHILD);
-      assert(!engine->Status().active && engine->Close());
-    }
-  }
 }
 
 }  // namespace engine_test
