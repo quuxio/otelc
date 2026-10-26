@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from asyncio.exceptions import CancelledError
 import os
 import threading
 import time
@@ -15,7 +16,7 @@ from opentelemetry.context import Context
 
 from otelc.config import Policy
 from otelc.python_sdk_process import SdkChannel
-from otelc import python_tracing
+from otelc import python_objects, python_tracing
 from otelc.python_lifetimes import Lifetimes
 
 MAX_ACTIVE = 65536
@@ -34,7 +35,32 @@ class Invocation:
 def exception_type(error: BaseException) -> str:
     """Read the raw type name without str/repr or application attribute hooks."""
     name = type.__dict__['__qualname__'].__get__(type(error))
-    return name if type(name) is str and len(name.encode()) <= 1024 else 'BaseException'
+    if type(name) is not str or len(name) > 1024:
+        return 'BaseException'
+    try:
+        size = len(name.encode())
+    except UnicodeEncodeError:
+        return 'BaseException'
+    return name if size <= 1024 else 'BaseException'
+
+
+def cancelled(error: BaseException) -> bool:
+    """Classify actual cancellation types without instance or metaclass hooks."""
+    return any(base is GeneratorExit or base is CancelledError
+               for base in python_objects.hierarchy(type(error)))
+
+
+def end_span(span: trace.Span, error: BaseException | None) -> None:
+    """Finish a function span without invoking application exception hooks."""
+    if error is not None:
+        kind = exception_type(error)
+        if cancelled(error):
+            span.set_attribute('otelc.cancelled', True)
+            span.set_status(trace.StatusCode.ERROR, 'cancelled')
+        else:
+            span.set_status(trace.StatusCode.ERROR)
+        span.add_event('exception', {'exception.type': kind})
+    span.end()
 
 
 class PythonRuntime:
@@ -125,11 +151,7 @@ class PythonRuntime:
             self._detach(call)
             self.completed += 1
             if call.span is not None:
-                if error is not None:
-                    kind = exception_type(error)
-                    call.span.set_status(trace.StatusCode.ERROR)
-                    call.span.add_event('exception', {'exception.type': kind})
-                call.span.end()
+                end_span(call.span, error)
             if call.collect and self.collection:
                 attributes: dict[str, str | int] = {'function': call.name}
                 if call.code_id is not None:
