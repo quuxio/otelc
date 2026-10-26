@@ -548,6 +548,8 @@ def main() -> int:
     suite.addTests(unittest.defaultTestLoader.loadTestsFromName('test_rust_drop_health'))
     suite.addTests(unittest.defaultTestLoader.loadTestsFromName('ci.rust_lifetime_cases.RustLifetimeCases'))
     suite.addTests(unittest.defaultTestLoader.loadTestsFromName('test_rust_lifetimes'))
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromName('ci.rust_module_cases.RustModuleCases'))
+    suite.addTests(unittest.defaultTestLoader.loadTestsFromName('test_rust_modules'))
     selected = suite.countTestCases()
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     value = {'selected': selected, 'tests_run': result.testsRun, 'skipped': len(result.skipped),

@@ -6,6 +6,9 @@ on:
       - 'otelc/rust_lifetimes.py'
       - 'ci/rust_lifetime_cases.py'
       - 'tests/test_rust_lifetimes.py'
+      - 'otelc/rust_modules.py'
+      - 'ci/rust_module_cases.py'
+      - 'tests/test_rust_modules.py'
       - '.github/workflows/rust-lifetimes.yml'
       - 'Makefile'
   workflow_dispatch:
@@ -56,7 +59,9 @@ jobs:
           export OTELC_RUST_COMPILER="$PWD/build/rust-discovery/compiler/debug/otelc-rust-compiler"
           export OTELC_RUST_COMPONENT_OUTPUT="$PWD/build/rust-discovery/profiles"
           make rust-lifetime-check PYTHON=.venv/bin/python
+          make rust-module-check PYTHON=.venv/bin/python
           .venv/bin/python -m coverage json --data-file=build/rust-lifetime.coverage -o build/rust-discovery/python-coverage.json
+          .venv/bin/python -m coverage json --data-file=build/rust-module.coverage -o build/rust-discovery/module-python-coverage.json
       - name: Require measured lifetime module coverage
         run: |
           task_sysroot="$(rustup run 1.98.1 rustc --print sysroot)"
@@ -70,6 +75,19 @@ jobs:
           from ci.check_native_controls import summaries
           path = Path('native/rust/compiler/src/lifetimes.rs').resolve()
           print(json.dumps(summaries(json.loads(Path('build/rust-discovery/rust-coverage.json').read_bytes()), {path})))
+          PY
+      - name: Require measured original module-map coverage
+        run: |
+          task_sysroot="$(rustup run 1.98.1 rustc --print sysroot)"
+          task_host="$(rustup run 1.98.1 rustc -vV | sed -n 's/^host: //p')"
+          task_tools="$task_sysroot/lib/rustlib/$task_host/bin"
+          "$task_tools/llvm-cov" export build/rust-discovery/compiler/debug/otelc-rust-compiler -instr-profile=build/rust-discovery/lifetimes.profdata "$PWD/native/rust/compiler/src/modules.rs" > build/rust-discovery/module-rust-coverage.json
+          .venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          from ci.check_native_controls import summaries
+          path = Path('native/rust/compiler/src/modules.rs').resolve()
+          print(json.dumps(summaries(json.loads(Path('build/rust-discovery/module-rust-coverage.json').read_bytes()), {path})))
           PY
       - name: Retain focused evidence and executable coverage mapping
         if: always()
